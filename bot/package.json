@@ -1,0 +1,28 @@
+{
+  "name": "pons-scan-bot",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js",
+    "bot": "node dist/index.js bot",
+    "backfill": "node dist/index.js backfill",
+    "index": "node dist/index.js index",
+    "recheck": "node dist/index.js recheck",
+    "verify": "node dist/index.js verify",
+    "scan": "node dist/index.js scan",
+    "dev": "tsc -p tsconfig.json && node dist/index.js",
+    "decode": "node dist/index.js decode"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.7.0",
+    "grammy": "^1.30.0",
+    "viem": "^2.55.19"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.11",
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.2"
+  }
+}
