@@ -8,6 +8,11 @@ export interface Flag {
   label: string;
   state: FlagState;
   detail: string;
+  /**
+   * Short phrasing for the compact card, which has room for two flag lines.
+   * Reads as a standalone fragment without the label prefix.
+   */
+  compactDetail: string;
   /** Ranking weight used only to pick the single worst flag for the summary. */
   severity: number;
 }
@@ -67,6 +72,7 @@ export function computeFlags(opts: {
       label: 'Snipe-tax exemptions',
       state: 'unknown',
       detail: 'creation transaction could not be decoded — not confirmed clean',
+      compactDetail: 'creation tx not decoded — exemptions unconfirmed',
       severity: 60,
     });
   } else if (exCount > 0) {
@@ -78,6 +84,9 @@ export function computeFlags(opts: {
       detail:
         `${exCount} wallet${exCount === 1 ? '' : 's'} pre-exempted from the opening tax` +
         (viaBuy ? ', alongside a creator buy in the same transaction' : ''),
+      compactDetail:
+        `${exCount} wallet${exCount === 1 ? '' : 's'} pre-exempted from the opening tax` +
+        (viaBuy ? ' + creator buy same tx' : ''),
       severity: 100 + exCount,
     });
   } else {
@@ -86,6 +95,7 @@ export function computeFlags(opts: {
       label: 'Snipe-tax exemptions',
       state: 'clean',
       detail: 'none — no wallets pre-exempted at creation',
+      compactDetail: 'no pre-exempted wallets',
       severity: 0,
     });
   }
@@ -96,13 +106,14 @@ export function computeFlags(opts: {
     .all() as { t: number }[];
   const taxMedian = medianOf(taxRows.map((r) => r.t));
   if (taxMedian === null) {
-    flags.push({ key: 'creator_tax', label: 'Creator tax', state: 'unknown', detail: 'no indexed baseline yet', severity: 10 });
+    flags.push({ key: 'creator_tax', label: 'Creator tax', state: 'unknown', detail: 'no indexed baseline yet', compactDetail: 'no creator-tax baseline yet', severity: 10 });
   } else if (opts.creatorTaxBps > taxMedian) {
     flags.push({
       key: 'creator_tax',
       label: 'Creator tax',
       state: 'raised',
       detail: `${opts.creatorTaxBps} bps vs ${taxMedian} bps median across ${taxRows.length} indexed launches`,
+      compactDetail: `creator tax ${opts.creatorTaxBps} bps vs ${taxMedian} bps median`,
       severity: 40 + Math.min(40, opts.creatorTaxBps - taxMedian),
     });
   } else {
@@ -111,6 +122,7 @@ export function computeFlags(opts: {
       label: 'Creator tax',
       state: 'clean',
       detail: `${opts.creatorTaxBps} bps, at or below the ${taxMedian} bps median`,
+      compactDetail: `creator tax ${opts.creatorTaxBps} bps, at or below median`,
       severity: 0,
     });
   }
@@ -126,6 +138,7 @@ export function computeFlags(opts: {
       label: 'Deployer launch rate',
       state: 'raised',
       detail: `${launches7d} other launches by this deployer in the last 7 days`,
+      compactDetail: `deployer launched ${launches7d} other tokens in 7d`,
       severity: 50 + Math.min(40, launches7d),
     });
   } else {
@@ -134,6 +147,7 @@ export function computeFlags(opts: {
       label: 'Deployer launch rate',
       state: 'clean',
       detail: launches7d === 0 ? 'no other launches in the last 7 days' : `${launches7d} other launch${launches7d === 1 ? '' : 'es'} in the last 7 days`,
+      compactDetail: launches7d === 0 ? 'no other launches by deployer in 7d' : `deployer launched ${launches7d} other in 7d`,
       severity: 0,
     });
   }
@@ -159,6 +173,7 @@ export function computeFlags(opts: {
         priorPeaks.length === 0
           ? 'no prior launches with recorded outcomes yet'
           : `only ${priorPeaks.length} prior launch with outcome data — too few to judge`,
+      compactDetail: 'no prior outcomes for this deployer yet',
       severity: 5,
     });
   } else if (deployerMedianPeak < globalMedianPeak) {
@@ -167,6 +182,7 @@ export function computeFlags(opts: {
       label: 'Deployer prior peaks',
       state: 'raised',
       detail: `median peak mcap ${deployerMedianPeak.toFixed(3)} across ${priorPeaks.length} priors, below the ${globalMedianPeak.toFixed(3)} median of all tracked tokens`,
+      compactDetail: `deployer's ${priorPeaks.length} prior tokens peaked below median`,
       severity: 45,
     });
   } else {
@@ -175,6 +191,7 @@ export function computeFlags(opts: {
       label: 'Deployer prior peaks',
       state: 'clean',
       detail: `median peak mcap ${deployerMedianPeak.toFixed(3)} across ${priorPeaks.length} priors, at or above the tracked median`,
+      compactDetail: `deployer's priors peaked at or above median`,
       severity: 0,
     });
   }
@@ -199,6 +216,7 @@ export function computeFlags(opts: {
         withData.length === 0
           ? 'no prior launches rechecked at +24h yet'
           : `only ${withData.length} prior with +24h data — too few to judge`,
+      compactDetail: 'no +24h history for this deployer yet',
       severity: 5,
     });
   } else if (survival < 0.5) {
@@ -207,6 +225,7 @@ export function computeFlags(opts: {
       label: 'Deployer prior survival',
       state: 'raised',
       detail: `${(survival * 100).toFixed(0)}% of ${withData.length} prior launches were still trading at +24h`,
+      compactDetail: `only ${(survival * 100).toFixed(0)}% of deployer's priors alive at +24h`,
       severity: 55,
     });
   } else {
@@ -215,6 +234,7 @@ export function computeFlags(opts: {
       label: 'Deployer prior survival',
       state: 'clean',
       detail: `${(survival * 100).toFixed(0)}% of ${withData.length} prior launches were still trading at +24h`,
+      compactDetail: `${(survival * 100).toFixed(0)}% of deployer's priors alive at +24h`,
       severity: 0,
     });
   }
@@ -243,6 +263,7 @@ export function computeFlags(opts: {
       label: 'Name/ticker collision',
       state: 'raised',
       detail: `matches ${collisionCount} existing pons token${collisionCount === 1 ? '' : 's'}${ex ? ` (${ex})` : ''} after homoglyph normalisation`,
+      compactDetail: `name collides with ${collisionCount} token${collisionCount === 1 ? '' : 's'} after homoglyph normalisation`,
       severity: 70,
     });
   } else {
@@ -251,6 +272,7 @@ export function computeFlags(opts: {
       label: 'Name/ticker collision',
       state: 'clean',
       detail: 'no match against indexed pons tokens',
+      compactDetail: 'no name or ticker collision',
       severity: 0,
     });
   }
@@ -263,6 +285,9 @@ export function computeFlags(opts: {
     state: custom ? 'raised' : 'clean',
     detail: custom
       ? `custom pair ${opts.pairSymbol ?? opts.pairToken} — the launch inherits that asset's risk`
+      : 'native ETH pair',
+    compactDetail: custom
+      ? `custom pair ${opts.pairSymbol ?? 'token'} — inherits that asset's risk`
       : 'native ETH pair',
     severity: custom ? 35 : 0,
   });

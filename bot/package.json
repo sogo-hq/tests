@@ -13,7 +13,8 @@
     "verify": "node dist/index.js verify",
     "scan": "node dist/index.js scan",
     "dev": "tsc -p tsconfig.json && node dist/index.js",
-    "decode": "node dist/index.js decode"
+    "decode": "node dist/index.js decode",
+    "test": "node --test test/*.test.mjs"
   },
   "dependencies": {
     "better-sqlite3": "^11.7.0",

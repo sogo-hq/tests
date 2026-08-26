@@ -150,6 +150,28 @@ CREATE TABLE IF NOT EXISTS token_peaks (
   peak_at   INTEGER NOT NULL
 );
 
+-- ---------------------------------------------------------------------------
+-- Usage telemetry: one row per user-facing scan request, including cache hits
+-- and rejections. Deliberately separate from the scans table, which holds one
+-- row per distinct observation and must not be padded with duplicates.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS scan_events (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts           INTEGER NOT NULL,
+  source       TEXT NOT NULL CHECK (source IN ('dm','group','inline','cli')),
+  chat_id      INTEGER,
+  user_id      INTEGER,
+  token        TEXT,
+  cache_hit    INTEGER NOT NULL DEFAULT 0,
+  duration_ms  INTEGER NOT NULL,
+  outcome      TEXT NOT NULL,
+  scan_id      INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_events_ts     ON scan_events(ts);
+CREATE INDEX IF NOT EXISTS idx_events_source ON scan_events(source, ts);
+CREATE INDEX IF NOT EXISTS idx_events_user   ON scan_events(user_id, ts);
+CREATE INDEX IF NOT EXISTS idx_events_token  ON scan_events(token);
+
 -- Indexer cursors, so restarts resume rather than re-scan.
 CREATE TABLE IF NOT EXISTS cursors (
   name         TEXT PRIMARY KEY,

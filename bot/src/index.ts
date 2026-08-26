@@ -2,7 +2,7 @@ import { getAddress, isAddress } from 'viem';
 import { printVerify } from './verify.js';
 import { backfill, indexNew, decodePending, startDecodeLoop } from './indexer/launches.js';
 import { scanToken } from './scan.js';
-import { renderCardText } from './card.js';
+import { renderCardText, renderCompactText } from './card.js';
 import { runDueRechecks, startRecheckLoop } from './recheck.js';
 import { startBot } from './bot.js';
 import { db } from './db.js';
@@ -102,7 +102,8 @@ async function main(): Promise<void> {
         console.error(`${addr} is not a pons v2 launch — the factory has no record of it.`);
         process.exit(1);
       }
-      console.log(renderCardText(result));
+      const compact = rest.includes('--compact');
+      console.log(compact ? renderCompactText(result, 'vitalscheck_bot') : renderCardText(result));
       console.log(`\n[scan ${Date.now() - t0}ms · stored as scan #${result.scanId} · rechecks queued at +1h/+6h/+24h/+7d]`);
       break;
     }
@@ -133,6 +134,16 @@ async function main(): Promise<void> {
       if (entry.length) {
         console.log('\nlaunch entry points:');
         for (const e of entry) console.log(`  ${String(e.entry_point).padEnd(16)} ${e.n}`);
+      }
+      const ev = db.prepare('SELECT source, COUNT(*) n, SUM(cache_hit) hits, AVG(duration_ms) ms FROM scan_events GROUP BY source ORDER BY n DESC').all() as any[];
+      if (ev.length) {
+        console.log('\nscan requests by source:');
+        for (const e of ev) console.log(`  ${String(e.source).padEnd(8)} ${String(e.n).padStart(5)}  ${e.hits} cached  ${Math.round(e.ms)}ms mean`);
+      }
+      const oc = db.prepare('SELECT outcome, COUNT(*) n FROM scan_events GROUP BY outcome ORDER BY n DESC').all() as any[];
+      if (oc.length) {
+        console.log('\nscan outcomes:');
+        for (const o of oc) console.log(`  ${String(o.outcome).padEnd(22)} ${o.n}`);
       }
       const hist = db.prepare('SELECT snipe_exemption_count c, COUNT(*) n FROM launches WHERE snipe_exemption_count IS NOT NULL GROUP BY c ORDER BY c').all() as any[];
       if (hist.length) {

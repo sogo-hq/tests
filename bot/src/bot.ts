@@ -1,125 +1,350 @@
 import { Bot, type Context } from 'grammy';
-import { isAddress, getAddress } from 'viem';
-import { scanToken } from './scan.js';
-import { renderCard } from './card.js';
+import type { InlineQueryResult } from 'grammy/types';
+import { performScan, normaliseToken, type ScanSource, type ScanOutcome } from './service.js';
+import { scanCache, startCacheReporter } from './cache.js';
+import { userQuota, scanSemaphore, startQuotaSweeper } from './quota.js';
+import { inlineDescription, COMPACT_DISCLAIMER } from './card.js';
 import { db } from './db.js';
-import { TELEGRAM_BOT_TOKEN, DISCLAIMER, EXPLORER_URL } from './config.js';
+import { TELEGRAM_BOT_TOKEN, DISCLAIMER } from './config.js';
+
+/** Inline answers are dropped by Telegram after ~15s; bail well before that. */
+const INLINE_DEADLINE_MS = 10_000;
+
+const EXAMPLE = '0x147Bbaa458Ab7Cd11E1E478B87f08FE5A42A9E67';
 
 const HELP = [
-  '<b>pons v2 launch scanner</b> — Robinhood Chain',
+  '<b>VITALS</b> — pons v2 launch scanner, Robinhood Chain',
   '',
-  'Send <code>/scan &lt;token address&gt;</code> to get a traction and flag card',
-  'for any token launched on the pons v2 launchpad.',
+  `Send <code>/scan &lt;token address&gt;</code> for a traction and flag card.`,
+  '',
+  'Works three ways:',
+  '  • <b>DM</b> — full card',
+  '  • <b>Groups</b> — <code>/scan &lt;address&gt;</code>, compact card',
+  `  • <b>Inline</b> — type <code>@BOTNAME &lt;address&gt;</code> in any chat`,
   '',
   'The card reports what the chain shows: how many distinct wallets bought in',
-  'the opening window, whether buying outpaced selling, how far the curve filled,',
-  'and a set of structural flags — the most useful of which is the number of',
-  'wallets the creator pre-exempted from the opening snipe tax, which is readable',
-  'only from the launch transaction itself.',
-  '',
-  'Every scan is stored and rechecked at +1h, +6h, +24h and +7d, so the early',
-  'signal can be compared against what actually happened.',
+  'the opening window, whether buying outpaced selling, how far the curve',
+  'filled, and structural flags — the most useful being the number of wallets',
+  'the creator pre-exempted from the opening snipe tax, which is readable only',
+  'from the launch transaction itself.',
   '',
   `<i>${DISCLAIMER}</i>`,
 ].join('\n');
 
-function extractAddress(text: string): string | null {
-  const m = text.match(/0x[a-fA-F0-9]{40}/);
-  if (!m) return null;
-  return isAddress(m[0]) ? getAddress(m[0]) : null;
+/**
+ * The bot's own username, taken from the context rather than module state.
+ *
+ * grammY populates ctx.me on every update, so this is always correct even when
+ * the bot is constructed without going through startBot() -- which module-level
+ * state was not, silently dropping the "via @bot" attribution the compact card
+ * footer is specified to carry.
+ */
+function usernameOf(ctx: Context): string | undefined {
+  return ctx.me?.username;
 }
 
+function sourceOf(ctx: Context): ScanSource {
+  const type = ctx.chat?.type;
+  if (type === 'group' || type === 'supergroup') return 'group';
+  return 'dm';
+}
+
+// ---------------------------------------------------------------------------
+// DM and group scanning
+// ---------------------------------------------------------------------------
+
 async function handleScan(ctx: Context, raw: string): Promise<void> {
-  const addr = extractAddress(raw);
-  if (!addr) {
+  const source = sourceOf(ctx);
+  const isGroup = source === 'group';
+  const replyOpts = isGroup && ctx.msg
+    ? { reply_parameters: { message_id: ctx.msg.message_id, allow_sending_without_reply: true } as const }
+    : {};
+
+  const token = normaliseToken(raw);
+  if (!token) {
     await ctx.reply(
-      'Send a token address, e.g.\n<code>/scan 0x147Bbaa458Ab7Cd11E1E478B87f08FE5A42A9E67</code>',
-      { parse_mode: 'HTML' },
+      `Send a pons v2 token address:\n<code>/scan ${EXAMPLE}</code>`,
+      { parse_mode: 'HTML', ...replyOpts },
     );
     return;
   }
 
-  const notice = await ctx.reply(`Scanning <code>${addr}</code>…`, { parse_mode: 'HTML' });
-  try {
-    const result = await scanToken(addr, ctx.from?.id);
-    if (!result) {
-      await ctx.api.editMessageText(
-        notice.chat.id,
-        notice.message_id,
-        `<code>${addr}</code> is not a pons v2 launch on this chain — the factory has no record of it.\n\n<i>${DISCLAIMER}</i>`,
-        { parse_mode: 'HTML' },
-      );
-      return;
-    }
-    await ctx.api.editMessageText(notice.chat.id, notice.message_id, renderCard(result), {
-      parse_mode: 'HTML',
-      link_preview_options: { is_disabled: true },
-    });
-  } catch (err: any) {
-    console.error('[scan] failed:', err);
-    await ctx.api.editMessageText(
-      notice.chat.id,
-      notice.message_id,
-      `Scan failed: ${String(err?.shortMessage ?? err?.message ?? err).slice(0, 200)}`,
-    );
+  // A cached answer arrives instantly, so the "Scanning..." notice would only
+  // flicker. Groups never get the notice at all -- an extra message per scan is
+  // exactly the kind of noise that gets a bot removed from a group.
+  const cached = scanCache.peek(token);
+  let notice: { chat: { id: number }; message_id: number } | null = null;
+  if (!cached && !isGroup) {
+    notice = await ctx.reply(`Scanning <code>${token}</code>…`, { parse_mode: 'HTML', ...replyOpts });
+  }
+
+  const outcome = await performScan({
+    token,
+    source,
+    userId: ctx.from?.id,
+    chatId: ctx.chat?.id,
+    botUsername: usernameOf(ctx),
+  });
+
+  const text = messageFor(outcome, isGroup);
+  const opts = { parse_mode: 'HTML' as const, link_preview_options: { is_disabled: true } };
+
+  if (notice) {
+    await ctx.api.editMessageText(notice.chat.id, notice.message_id, text, opts);
+  } else {
+    await ctx.reply(text, { ...opts, ...replyOpts });
   }
 }
+
+/** Render an outcome for a chat message. Groups get the compact card. */
+function messageFor(outcome: ScanOutcome, compact: boolean): string {
+  switch (outcome.kind) {
+    case 'ok':
+    case 'not_found':
+      return compact ? outcome.compact : outcome.card;
+    case 'rate_limited':
+      return `⏳ ${outcome.message}`;
+    case 'busy':
+      return `⏳ ${outcome.message}`;
+    case 'error':
+      return `Scan failed: ${outcome.message}`;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Inline mode
+// ---------------------------------------------------------------------------
+
+function article(id: string, title: string, description: string, text: string): InlineQueryResult {
+  return {
+    type: 'article',
+    id,
+    title,
+    description,
+    input_message_content: {
+      message_text: text,
+      parse_mode: 'HTML',
+      link_preview_options: { is_disabled: true },
+    },
+  };
+}
+
+async function handleInline(ctx: Context): Promise<void> {
+  const q = (ctx.inlineQuery?.query ?? '').trim();
+  const answer = (results: InlineQueryResult[]) =>
+    ctx.answerInlineQuery(results, { cache_time: 60, is_personal: false });
+
+  // Empty query — tell the user what to paste rather than returning nothing.
+  if (!q) {
+    await answer([
+      article(
+        'empty',
+        'Paste a pons token address',
+        'VITALS scans pons v2 launches on Robinhood Chain',
+        [
+          '<b>VITALS</b> — pons v2 launch scanner',
+          `Paste a token address after <code>@${usernameOf(ctx) ?? 'the bot'}</code> to scan it.`,
+          `<i>${COMPACT_DISCLAIMER}</i>`,
+        ].join('\n'),
+      ),
+    ]);
+    return;
+  }
+
+  const token = normaliseToken(q);
+  if (!token) {
+    // Not an error — an explanation. An empty inline result list just shows a
+    // spinner that never resolves, which reads as the bot being broken.
+    await answer([
+      article(
+        'invalid',
+        'Not a token address',
+        'Expected 0x followed by 40 hex characters',
+        [
+          '<b>VITALS</b> — pons v2 launch scanner',
+          'That is not a token address. Expected <code>0x</code> followed by 40 hex characters, e.g.',
+          `<code>${EXAMPLE}</code>`,
+          `<i>${COMPACT_DISCLAIMER}</i>`,
+        ].join('\n'),
+      ),
+    ]);
+    return;
+  }
+
+  const outcome = await performScan({
+    token,
+    source: 'inline',
+    userId: ctx.from?.id,
+    chatId: undefined,
+    deadlineMs: INLINE_DEADLINE_MS,
+    botUsername: usernameOf(ctx),
+  });
+
+  const short = `${token.slice(0, 6)}…${token.slice(-4)}`;
+
+  switch (outcome.kind) {
+    case 'ok':
+      // A symbol-less token must not render as "$0X147B...9E67" -- no dollar
+      // prefix and no upper-casing of hex.
+      const label = outcome.meta.symbol
+        ? `$${outcome.meta.symbol.toUpperCase()}`
+        : short;
+      await answer([
+        article(token, `VITALS — ${label}`, inlineDescription(outcome.meta), outcome.compact),
+      ]);
+      return;
+    case 'not_found':
+      await answer([
+        article(`nf:${token}`, `VITALS — ${short}`, 'not a pons v2 launch on this chain', outcome.compact),
+      ]);
+      return;
+    case 'rate_limited':
+      await answer([
+        article(
+          `rl:${token}:${outcome.retryAfterSec}`,
+          'Rate limited',
+          outcome.message,
+          `<b>VITALS</b>\n⏳ ${outcome.message}\n<i>${COMPACT_DISCLAIMER}</i>`,
+        ),
+      ]);
+      return;
+    case 'busy':
+      await answer([
+        article(
+          `busy:${token}`,
+          'Still indexing',
+          outcome.message,
+          `<b>VITALS</b>\n⏳ ${outcome.message}\n<i>${COMPACT_DISCLAIMER}</i>`,
+        ),
+      ]);
+      return;
+    case 'error':
+      await answer([
+        article(
+          `err:${token}`,
+          'Scan failed',
+          outcome.message.slice(0, 100),
+          `<b>VITALS</b>\nScan failed.\n<i>${COMPACT_DISCLAIMER}</i>`,
+        ),
+      ]);
+      return;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Bot
+// ---------------------------------------------------------------------------
 
 export function createBot(token = TELEGRAM_BOT_TOKEN): Bot {
   if (!token) throw new Error('TELEGRAM_BOT_TOKEN is not set');
   const bot = new Bot(token);
 
   bot.command(['start', 'help'], (ctx) =>
-    ctx.reply(HELP, { parse_mode: 'HTML', link_preview_options: { is_disabled: true } }),
+    ctx.reply(HELP.replace(/BOTNAME/g, usernameOf(ctx) ?? 'bot'), {
+      parse_mode: 'HTML',
+      link_preview_options: { is_disabled: true },
+    }),
   );
 
+  // Works in private, group and supergroup. grammY strips the @botname suffix,
+  // so /scan and /scan@vitalscheck_bot both land here.
   bot.command('scan', (ctx) => handleScan(ctx, ctx.match || ''));
 
   bot.command('stats', async (ctx) => {
-    const launches = (db.prepare('SELECT COUNT(*) n FROM launches').get() as any).n;
-    const scans = (db.prepare('SELECT COUNT(*) n FROM scans').get() as any).n;
-    const trades = (db.prepare('SELECT COUNT(*) n FROM trades').get() as any).n;
-    const pending = (db.prepare('SELECT COUNT(*) n FROM rechecks WHERE completed_at IS NULL').get() as any).n;
-    const done = (db.prepare('SELECT COUNT(*) n FROM rechecks WHERE completed_at IS NOT NULL').get() as any).n;
-    const withEx = (db.prepare('SELECT COUNT(*) n FROM launches WHERE snipe_exemption_count > 0').get() as any).n;
-    const known = (db.prepare('SELECT COUNT(*) n FROM launches WHERE snipe_exemption_count IS NOT NULL').get() as any).n;
-    await ctx.reply(
-      [
-        '<b>index</b>',
-        `  launches indexed: ${launches}`,
-        `  creation tx decoded: ${known}${launches ? ` (${((known / launches) * 100).toFixed(1)}%)` : ''}`,
-        `  with snipe-tax exemptions: ${withEx}`,
-        `  curve trades: ${trades}`,
-        '<b>scans</b>',
-        `  scans recorded: ${scans}`,
-        `  rechecks done: ${done}, pending: ${pending}`,
-        '',
-        `<i>${DISCLAIMER}</i>`,
-      ].join('\n'),
-      { parse_mode: 'HTML' },
-    );
+    await ctx.reply(statsText(), { parse_mode: 'HTML' });
   });
 
-  // A bare token address, with no command, is treated as a scan.
-  bot.on('message:text', async (ctx) => {
+  bot.on('inline_query', handleInline);
+
+  /**
+   * A bare address is treated as a scan in DMs only.
+   *
+   * Groups are deliberately excluded: auto-scanning every address someone posts
+   * turns the bot into an unsolicited spammer, and it is the behaviour that most
+   * often gets a bot banned from a group. In a group the bot acts only when
+   * explicitly addressed with /scan.
+   */
+  bot.chatType('private').on('message:text', async (ctx) => {
     const text = ctx.message.text.trim();
     if (text.startsWith('/')) return;
-    if (extractAddress(text)) await handleScan(ctx, text);
+    if (normaliseToken(text)) await handleScan(ctx, text);
   });
 
   bot.catch((err) => console.error('[bot] error:', err));
   return bot;
 }
 
+function statsText(): string {
+  const q = (sql: string, ...a: any[]) => (db.prepare(sql).get(...a) as any).n;
+  const c = scanCache.stats();
+  const sem = scanSemaphore.stats();
+  const uq = userQuota.stats();
+  const day = Math.floor(Date.now() / 1000) - 86400;
+
+  const bySource = db
+    .prepare('SELECT source, COUNT(*) n, SUM(cache_hit) hits FROM scan_events WHERE ts >= ? GROUP BY source ORDER BY n DESC')
+    .all(day) as { source: string; n: number; hits: number }[];
+
+  const med = db
+    .prepare("SELECT AVG(duration_ms) n FROM scan_events WHERE ts >= ? AND cache_hit = 0 AND outcome = 'ok'")
+    .get(day) as { n: number | null };
+
+  const L = [
+    '<b>index</b>',
+    `  launches: ${q('SELECT COUNT(*) n FROM launches')}`,
+    `  decoded: ${q('SELECT COUNT(*) n FROM launches WHERE snipe_exemption_count IS NOT NULL')}`,
+    `  trades: ${q('SELECT COUNT(*) n FROM trades')}`,
+    `  scans recorded: ${q('SELECT COUNT(*) n FROM scans')}`,
+    '<b>cache</b>',
+    `  hit rate ${(c.hitRate * 100).toFixed(1)}% (${c.hits}/${c.requests})`,
+    `  ${c.size}/${c.maxEntries} entries · ${c.evictions} evicted`,
+    '<b>limits</b>',
+    `  ${uq.perMinute}/min, ${uq.perHour}/hour per user · ${uq.trackedUsers} users tracked`,
+    `  concurrency ${sem.active}/${sem.limit} · ${sem.queued} queued · peak ${sem.peakQueue}`,
+  ];
+  if (bySource.length) {
+    L.push('<b>requests, last 24h</b>');
+    for (const s of bySource) {
+      L.push(`  ${s.source}: ${s.n} (${s.hits} cached)`);
+    }
+  }
+  if (med.n) L.push(`  mean uncached scan: ${Math.round(med.n)}ms`);
+  L.push('', `<i>${DISCLAIMER}</i>`);
+  return L.join('\n');
+}
+
 export async function startBot(): Promise<void> {
   const bot = createBot();
+  const me = await bot.api.getMe();
+
   await bot.api.setMyCommands([
     { command: 'scan', description: 'Score a pons v2 token launch' },
-    { command: 'stats', description: 'Index and scan statistics' },
+    { command: 'stats', description: 'Index, cache and usage statistics' },
     { command: 'help', description: 'What this bot reports' },
   ]);
-  const me = await bot.api.getMe();
+
   console.log(`[bot] running as @${me.username}`);
-  console.log(`[bot] explorer ${EXPLORER_URL}`);
-  await bot.start();
+
+  // Privacy mode and inline mode are BotFather settings, not API calls, so the
+  // best the bot can do is report what it actually has and say how to fix it.
+  if (me.can_read_all_group_messages) {
+    console.warn(
+      '[bot] WARNING: privacy mode is OFF — this bot can read every group message.\n' +
+      '[bot]          Turn it on: BotFather -> /setprivacy -> Enable.\n' +
+      '[bot]          The bot never acts on unaddressed group messages regardless,\n' +
+      '[bot]          but with privacy off it still receives them.',
+    );
+  } else {
+    console.log('[bot] privacy mode ON — only sees messages addressed to it');
+  }
+  if (me.supports_inline_queries) {
+    console.log('[bot] inline mode enabled');
+  } else {
+    console.warn('[bot] WARNING: inline mode is disabled — BotFather -> /setinline to enable');
+  }
+
+  startCacheReporter();
+  startQuotaSweeper();
+
+  await bot.start({ allowed_updates: ['message', 'inline_query'] });
 }

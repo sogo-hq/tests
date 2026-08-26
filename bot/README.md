@@ -23,7 +23,91 @@ npm run bot                 # Telegram bot + recheck worker
 ```
 
 `npm run scan -- <address>` prints the same card on the command line, no
-Telegram token required.
+Telegram token required (`--compact` for the short one). `npm test` runs the
+unit suite; `node test/integration.mjs` exercises the service layer against the
+live chain.
+
+## Three surfaces
+
+| surface | trigger | card |
+|---|---|---|
+| DM | `/scan <address>`, or a bare address | full |
+| Group / supergroup | `/scan <address>` only | compact, sent as a reply |
+| Inline | `@thebot <address>` in any chat | compact |
+
+All three go through one entry point (`src/service.ts`), so the cache, the
+per-user quota and the concurrency limit apply identically and no surface can
+be used to bypass the others.
+
+**Groups never auto-scan.** A bare address is only treated as a scan in a DM.
+In a group the bot acts solely when addressed with `/scan` — unsolicited
+scanning of every address someone posts is what gets a bot removed from a
+group, so it is deliberately absent.
+
+**Privacy mode stays ON.** It is a BotFather setting rather than an API call,
+so the bot cannot enforce it — instead it reads `getMe().can_read_all_group_messages`
+at startup and warns loudly if privacy mode is off, naming the fix
+(`BotFather -> /setprivacy -> Enable`). It also warns if inline mode is not
+enabled. The bot never acts on unaddressed group messages either way.
+
+## Cache, quota and concurrency
+
+A scan costs about 1.5s and a burst of RPC against a rate-limited node. Inline
+mode makes repeats the normal case, not the exception — Telegram re-issues an
+inline query on nearly every keystroke.
+
+- **Cache**: rendered cards, keyed by token, 60s TTL, capped at 500 entries,
+  oldest evicted. Re-reading a hot token refreshes its position so it is not
+  evicted ahead of a colder entry written later. Hit rate is logged every five
+  minutes and shown in `/stats`. Measured: a hit serves in **0ms** against
+  ~1.5–3s uncached.
+- **Quota**: 10 scans/minute and 100/hour per user, sliding windows. Over the
+  limit the reply is explicit — `rate limited, try again in 60s` — never a
+  silent drop, and the rejection is still logged.
+- **Concurrency**: 5 global scan slots; the rest queue rather than fail.
+
+A cache hit consumes no quota. That is both what "10 scans per minute" literally
+means and a hard requirement for inline mode, where one pasted address can
+produce a dozen query events. It remains sound as abuse protection: hammering
+distinct tokens produces cache misses, which is exactly what the counter sees.
+
+Quota is checked *before* queueing on the semaphore. If a spammer could queue
+first, their requests would occupy slots that legitimate users wait behind, and
+rejecting them at the front of the queue would already have cost the wait.
+
+**Single-flight.** Concurrent requests for the same uncached token share one
+scan rather than each running their own. This does three jobs at once:
+
+- kills the thundering herd — five people pasting the same trending token no
+  longer run five identical scans, or occupy all five global slots with them
+- keeps the concurrency cap honest — the slot is released when the *scan*
+  finishes, not when a caller gives up, so an abandoned scan can no longer be
+  running outside the cap
+- makes the timeout message true (below)
+
+Verified: 8 concurrent requests for one uncached token produce exactly **1**
+scan row and identical cards for all 8.
+
+Inline answers carry a 10s deadline, under Telegram's ~15s cut-off; past it the
+bot returns a "still indexing, try again in a moment" article rather than
+letting the query expire. The deadline abandons the *caller*, never the work:
+the shared scan keeps running and writes to the cache when it finishes, so the
+retry it promises lands instantly.
+
+That last part was a real bug found while testing this. The cache write
+originally sat after the awaited deadline, so a timed-out scan was discarded —
+"try again in a moment" sent the user back to an empty cache to pay full price
+again. A test now asserts the abandoned scan populates the cache and that the
+retry is served from it.
+
+## Storage of usage
+
+`scan_events` records one row per user-facing request — source, chat, user,
+token, cache hit, duration and outcome — including cache hits and rejections.
+It is deliberately separate from `scans`: that table holds one row per distinct
+observation of a token, and padding it with byte-identical duplicates written
+seconds apart would corrupt the very early-signal-to-outcome pairing it exists
+for. So a cache hit logs an event and does not write a scan row.
 
 ## What the card reports
 
@@ -170,6 +254,8 @@ Tables: `launches`, `trades`, `scans`, `rechecks`, `token_peaks`, `cursors`.
 | `npm run recheck [n]` | run due rechecks once (`--loop` to stay running) |
 | `node dist/index.js stats` | index and scan statistics |
 | `npm run bot` | Telegram bot plus recheck worker |
+| `npm test` | unit suite (cache, quota, semaphore, compact card) |
+| `node test/integration.mjs` | end-to-end service check against the live chain |
 
 ## Configuration
 
@@ -180,6 +266,11 @@ Tables: `launches`, `trades`, `scans`, `rechecks`, `token_peaks`, `cursors`.
 | `BACKFILL_DAYS` | `7` | default backfill window |
 | `LOOKBACK_DAYS` | `10` | how far `/scan` hunts for an unindexed launch |
 | `RPC_RATE_PER_SEC` | `10` | client-side pacing |
+| `SCAN_CACHE_TTL_MS` | `60000` | rendered-card cache TTL |
+| `SCAN_CACHE_MAX` | `500` | cache entry cap |
+| `SCANS_PER_MINUTE` | `10` | per-user quota |
+| `SCANS_PER_HOUR` | `100` | per-user quota |
+| `MAX_CONCURRENT_SCANS` | `5` | global scan slots |
 
 The RPC and explorer hosts are hardcoded in `src/config.ts` and are never
 resolved from search results — lookalike RPCs and fake explorers exist for this

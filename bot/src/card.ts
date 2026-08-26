@@ -141,3 +141,125 @@ export function renderCardText(r: ScanResult): string {
     .replace(/&gt;/g, '>')
     .replace(/&amp;/g, '&');
 }
+
+// ---------------------------------------------------------------------------
+// Compact card — for groups and inline results
+// ---------------------------------------------------------------------------
+
+/** Short disclaimer used in the compact footer, where the full one will not fit. */
+export const COMPACT_DISCLAIMER = 'signals only, not financial advice';
+
+export interface CompactMeta {
+  symbol: string | null;
+  traction: string;
+  flagsRaised: number;
+  flagsTotal: number;
+  flagsUnknown: number;
+  /** Compact phrasing of the highest-signal raised flag, or null if none. */
+  topFlag: string | null;
+  notFound: boolean;
+}
+
+function ticker(r: ScanResult): string {
+  const s = r.reads.symbol?.trim();
+  if (s) return `$${s.toUpperCase()}`;
+  return `${r.reads.token.slice(0, 6)}…${r.reads.token.slice(-4)}`;
+}
+
+/**
+ * Compact card: seven lines, sized for a group message or an inline result
+ * where the full DM card would dominate the conversation.
+ *
+ * Only two flag lines fit, so they are the two highest-severity *raised* flags.
+ * Undetermined flags are never promoted into those slots -- they are counted in
+ * the header instead, because "we could not determine this" must never occupy
+ * the space where a reader expects a finding, and must never read as clean.
+ *
+ * Traction and round-trippers are always present: round-trippers is the line
+ * that most often contradicts a healthy-looking buyer count, so dropping it to
+ * save space would make the compact card systematically rosier than the full
+ * one.
+ */
+export function renderCompactCard(r: ScanResult, botUsername?: string): string {
+  const { reads: k, traction: t, flags: f } = r;
+  const L: string[] = [];
+
+  L.push(`<b>VITALS</b>  <b>${esc(ticker(r))}</b>`);
+
+  const mins = num(t.windowMinutes, 0);
+  L.push(
+    `traction ${esc(t.label)} · ${t.uniqueBuyers30m} buyer${t.uniqueBuyers30m === 1 ? '' : 's'}/${mins}m · progress ${num(k.progressPct, 2)}%`,
+  );
+
+  L.push(
+    `flags ${f.raised} of ${f.total}${f.unknown ? ` · ${f.unknown} undetermined` : ''}`,
+  );
+
+  for (const fl of topRaisedFlags(r, 2)) {
+    L.push(`🚩 ${esc(fl.compactDetail)}`);
+  }
+
+  L.push(
+    t.uniqueBuyers30m > 0
+      ? `round-trippers ${t.roundTrippers} of ${t.uniqueBuyers30m} buyer${t.uniqueBuyers30m === 1 ? '' : 's'} also sold`
+      : 'round-trippers — no buyers in the window',
+  );
+
+  const via = botUsername ? `via @${esc(botUsername)} · ` : '';
+  L.push(`<i>${via}${COMPACT_DISCLAIMER}</i>`);
+  return L.join('\n');
+}
+
+/** The N highest-severity raised flags. Undetermined flags are excluded. */
+export function topRaisedFlags(r: ScanResult, n: number) {
+  return r.flags.flags
+    .filter((fl) => fl.state === 'raised')
+    .sort((a, b) => b.severity - a.severity)
+    .slice(0, n);
+}
+
+export function compactMeta(r: ScanResult): CompactMeta {
+  const top = topRaisedFlags(r, 1)[0] ?? null;
+  return {
+    symbol: r.reads.symbol ?? null,
+    traction: r.traction.label,
+    flagsRaised: r.flags.raised,
+    flagsTotal: r.flags.total,
+    flagsUnknown: r.flags.unknown,
+    topFlag: top ? top.compactDetail : null,
+    notFound: false,
+  };
+}
+
+/** One-line summary for an inline result's description field. */
+export function inlineDescription(m: CompactMeta): string {
+  if (m.notFound) return 'not a pons v2 launch on this chain';
+  const parts = [
+    `traction ${m.traction}`,
+    `${m.flagsRaised} flag${m.flagsRaised === 1 ? '' : 's'}`,
+  ];
+  if (m.topFlag) parts.push(m.topFlag);
+  else if (m.flagsUnknown) parts.push(`${m.flagsUnknown} undetermined`);
+  const s = parts.join(' · ');
+  // Telegram truncates long descriptions; keep it inside a sane width.
+  return s.length > 120 ? `${s.slice(0, 117)}…` : s;
+}
+
+/** Compact card for an address that the factory has no record of. */
+export function renderCompactNotFound(token: string, botUsername?: string): string {
+  const via = botUsername ? `via @${esc(botUsername)} · ` : '';
+  return [
+    `<b>VITALS</b>  <code>${esc(token.slice(0, 6))}…${esc(token.slice(-4))}</code>`,
+    'not a pons v2 launch — the factory has no record of this token',
+    `<i>${via}${COMPACT_DISCLAIMER}</i>`,
+  ].join('\n');
+}
+
+/** Plain-text compact card, for tests and CLI. */
+export function renderCompactText(r: ScanResult, botUsername?: string): string {
+  return renderCompactCard(r, botUsername)
+    .replace(/<[^>]+>/g, '')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&amp;/g, '&');
+}
