@@ -339,3 +339,110 @@ test('regression: withDeadline(<=0) does not leave an unhandled rejection', asyn
   process.off('unhandledRejection', onUnhandled);
   assert.equal(unhandled, null, `abandoned promise produced an unhandled rejection: ${unhandled}`);
 });
+
+test('regression: quota keys fall back to the chat when Telegram omits `from`', async () => {
+  // anonymous group admins and some automated posts arrive without `from`;
+  // keying on the user alone let those skip the limiter entirely
+  const { UserQuota } = await import('../dist/quota.js');
+  const q = new UserQuota(2, 10);
+  const CHAT = -100123;
+  assert.equal(q.consume(CHAT).allowed, true);
+  assert.equal(q.consume(CHAT).allowed, true);
+  assert.equal(q.consume(CHAT).allowed, false, 'a chat-keyed caller is still limited');
+  assert.equal(q.consume(555).allowed, true, 'and does not affect real users');
+});
+
+// --------------------------------------- review round 2: hostile metadata
+test('regression: a hostile token symbol cannot blow Telegram message limits', async () => {
+  const { TELEGRAM_MAX_MESSAGE } = await import('../dist/card.js');
+  const { renderCard } = await import('../dist/card.js');
+  const evil = 'A'.repeat(9000);
+  const r = makeScan({ symbol: evil, name: evil });
+  const compact = renderCompactCard(r, 'vitalscheck_bot');
+  const full = renderCard(r);
+  assert.ok(compact.length <= TELEGRAM_MAX_MESSAGE, `compact card was ${compact.length} chars`);
+  assert.ok(full.length <= TELEGRAM_MAX_MESSAGE, `full card was ${full.length} chars`);
+  assert.ok(compact.split('\n')[0].length < 80, 'ticker is clamped, not merely truncated at the end');
+  // clamping must not break the required trailing footer
+  assert.ok(renderCompactText(r, 'b').trim().endsWith(COMPACT_DISCLAIMER));
+});
+
+test('regression: a hostile symbol cannot break out of the inline description', async () => {
+  const r = makeScan({ symbol: 'B'.repeat(500) });
+  const m = compactMeta(r);
+  assert.ok(m.symbol.length <= 24, `meta symbol was ${m.symbol.length} chars`);
+  assert.ok(inlineDescription(m).length <= 120);
+});
+
+test('regression: flood cap counts every request, scan quota counts only scans', async () => {
+  const { UserQuota } = await import('../dist/quota.js');
+  // the scan quota deliberately ignores cache hits; the flood cap must not,
+  // or a single paid scan lets a user replay the cached card without limit
+  const flood = new UserQuota(30, 400);
+  for (let i = 0; i < 30; i++) assert.equal(flood.consume(1).allowed, true);
+  assert.equal(flood.consume(1).allowed, false, 'flooding is capped even when every request is a cache hit');
+});
+
+// -------------------------------- review round 3: truncation must stay safe
+test('regression: an over-long card keeps its disclaimer as the last line', async () => {
+  const { clampMessage, TELEGRAM_MAX_MESSAGE } = await import('../dist/text.js');
+  const body = Array.from({ length: 400 }, (_, i) => `<b>line ${i}</b> ${'x'.repeat(40)}`);
+  const html = [...body, '<i>Signals and flags only. Not financial advice.</i>'].join('\n');
+  assert.ok(html.length > TELEGRAM_MAX_MESSAGE, 'fixture must actually overflow');
+  const out = clampMessage(html);
+  assert.ok(out.length <= TELEGRAM_MAX_MESSAGE, `clamped to ${out.length}`);
+  assert.ok(out.endsWith('<i>Signals and flags only. Not financial advice.</i>'),
+    'the disclaimer must survive truncation — a card without it must never be sent');
+  assert.ok(out.includes('card truncated'), 'truncation is disclosed, not silent');
+});
+
+test('regression: truncation never cuts a card mid-tag', async () => {
+  const { clampMessage } = await import('../dist/text.js');
+  const body = Array.from({ length: 500 }, (_, i) => `<b>row ${i}</b> <code>${'y'.repeat(30)}</code>`);
+  const out = clampMessage([...body, '<i>footer</i>'].join('\n'));
+  for (const tag of ['b', 'i', 'code']) {
+    const open = (out.match(new RegExp(`<${tag}>`, 'g')) || []).length;
+    const close = (out.match(new RegExp(`</${tag}>`, 'g')) || []).length;
+    assert.equal(open, close, `unbalanced <${tag}> after truncation — Telegram would reject the message`);
+  }
+  assert.ok(!/<[a-z]*$/.test(out), 'output does not end mid-tag');
+});
+
+test('regression: a hostile pair symbol cannot blow up the flags section', async () => {
+  const { clamp, MAX_TICKER } = await import('../dist/text.js');
+  assert.ok(clamp('Z'.repeat(9000), MAX_TICKER).length <= MAX_TICKER);
+  assert.equal(clamp('ETH', MAX_TICKER), 'ETH', 'normal symbols pass through untouched');
+});
+
+test('regression: clamp splits on code points, not bytes', async () => {
+  const { clamp } = await import('../dist/text.js');
+  const emoji = '🚩'.repeat(50);
+  const out = clamp(emoji, 10);
+  assert.equal([...out].length, 10, 'counted in code points');
+  assert.ok(!out.includes('�'), 'no broken surrogate pairs');
+});
+
+// ------------------------------------ review round 3: address parsing
+test('regression: a transaction hash is not silently read as an address', async () => {
+  const { normaliseToken, looksLikeTxHash } = await import('../dist/service.js');
+  const tx = '0xa24ead7ec6738ae3a54e5c630a26578c9487367cdca112e754106fdcf26fb4bb';
+  assert.equal(normaliseToken(tx), null, 'the first 40 hex chars of a tx hash are not an address');
+  assert.equal(looksLikeTxHash(tx), true, 'and it is recognised as a tx hash so the user can be told');
+});
+
+test('regression: real addresses still parse, bare and embedded', async () => {
+  const { normaliseToken } = await import('../dist/service.js');
+  const a = '0x147Bbaa458Ab7Cd11E1E478B87f08FE5A42A9E67';
+  assert.equal(normaliseToken(a), a, 'bare');
+  assert.equal(normaliseToken(`please scan ${a} thanks`), a, 'embedded in text');
+  assert.equal(normaliseToken(a.toLowerCase()), a, 'checksummed on the way out');
+  assert.equal(normaliseToken(`/scan ${a}`), a, 'after a command');
+});
+
+test('regression: over-long and truncated hex strings are rejected', async () => {
+  const { normaliseToken } = await import('../dist/service.js');
+  assert.equal(normaliseToken('0x' + 'a'.repeat(41)), null, '41 hex chars is not an address');
+  assert.equal(normaliseToken('0x' + 'a'.repeat(39)), null, '39 hex chars is not an address');
+  assert.equal(normaliseToken('0x' + 'a'.repeat(64)), null, 'a 32-byte value is not an address');
+  assert.equal(normaliseToken('not hex at all'), null);
+});

@@ -1,5 +1,6 @@
 import { db, normaliseKey } from '../db.js';
 import { isNativePair } from '../reads.js';
+import { clamp, MAX_TICKER, MAX_SAMPLE } from '../text.js';
 
 export type FlagState = 'clean' | 'raised' | 'unknown';
 
@@ -257,7 +258,10 @@ export function computeFlags(opts: {
     const samples = db
       .prepare(`SELECT DISTINCT symbol FROM launches WHERE ${where} AND symbol IS NOT NULL LIMIT 25`)
       .all(...args) as { symbol: string }[];
-    const ex = [...new Set(samples.map((c) => c.symbol).filter(Boolean))].slice(0, 3).join(', ');
+    const ex = [...new Set(samples.map((c) => c.symbol).filter(Boolean))]
+      .slice(0, 3)
+      .map((sym) => clamp(sym, MAX_SAMPLE))
+      .join(', ');
     flags.push({
       key: 'collision',
       label: 'Name/ticker collision',
@@ -284,10 +288,10 @@ export function computeFlags(opts: {
     label: 'Pair asset',
     state: custom ? 'raised' : 'clean',
     detail: custom
-      ? `custom pair ${opts.pairSymbol ?? opts.pairToken} — the launch inherits that asset's risk`
+      ? `custom pair ${clamp(opts.pairSymbol ?? opts.pairToken, MAX_TICKER)} — the launch inherits that asset's risk`
       : 'native ETH pair',
     compactDetail: custom
-      ? `custom pair ${opts.pairSymbol ?? 'token'} — inherits that asset's risk`
+      ? `custom pair ${clamp(opts.pairSymbol ?? 'token', MAX_TICKER)} — inherits that asset's risk`
       : 'native ETH pair',
     severity: custom ? 35 : 0,
   });

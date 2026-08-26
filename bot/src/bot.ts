@@ -1,14 +1,29 @@
 import { Bot, type Context } from 'grammy';
 import type { InlineQueryResult } from 'grammy/types';
-import { performScan, normaliseToken, type ScanSource, type ScanOutcome } from './service.js';
+import { performScan, normaliseToken, looksLikeTxHash, type ScanSource, type ScanOutcome } from './service.js';
 import { scanCache, startCacheReporter } from './cache.js';
-import { userQuota, scanSemaphore, startQuotaSweeper } from './quota.js';
+import { userQuota, floodQuota, scanSemaphore, startQuotaSweeper, formatRetry } from './quota.js';
 import { inlineDescription, COMPACT_DISCLAIMER } from './card.js';
 import { db } from './db.js';
 import { TELEGRAM_BOT_TOKEN, DISCLAIMER } from './config.js';
 
 /** Inline answers are dropped by Telegram after ~15s; bail well before that. */
 const INLINE_DEADLINE_MS = 10_000;
+
+/**
+ * Telegram posts every anonymous group admin's message as this single shared
+ * bot account, so keying limits on the sender would put every anonymous admin
+ * across every group into one bucket -- one group's spam would rate-limit an
+ * unrelated group. Those are keyed on the chat instead.
+ */
+const GROUP_ANONYMOUS_BOT_ID = 1087968824;
+
+/** The identity the limiters should key on for this update. */
+function quotaIdentity(ctx: Context): number | undefined {
+  const uid = ctx.from?.id;
+  if (uid === undefined || uid === GROUP_ANONYMOUS_BOT_ID) return ctx.chat?.id ?? uid;
+  return uid;
+}
 
 const EXAMPLE = '0x147Bbaa458Ab7Cd11E1E478B87f08FE5A42A9E67';
 
@@ -62,8 +77,11 @@ async function handleScan(ctx: Context, raw: string): Promise<void> {
 
   const token = normaliseToken(raw);
   if (!token) {
+    const hint = looksLikeTxHash(raw)
+      ? 'That is a transaction hash, not a token address.\n'
+      : '';
     await ctx.reply(
-      `Send a pons v2 token address:\n<code>/scan ${EXAMPLE}</code>`,
+      `${hint}Send a pons v2 token address:\n<code>/scan ${EXAMPLE}</code>`,
       { parse_mode: 'HTML', ...replyOpts },
     );
     return;
@@ -83,6 +101,7 @@ async function handleScan(ctx: Context, raw: string): Promise<void> {
     source,
     userId: ctx.from?.id,
     chatId: ctx.chat?.id,
+    quotaKey: quotaIdentity(ctx),
     botUsername: usernameOf(ctx),
   });
 
@@ -90,7 +109,13 @@ async function handleScan(ctx: Context, raw: string): Promise<void> {
   const opts = { parse_mode: 'HTML' as const, link_preview_options: { is_disabled: true } };
 
   if (notice) {
-    await ctx.api.editMessageText(notice.chat.id, notice.message_id, text, opts);
+    // If the notice was deleted while the scan ran, the edit fails -- fall back
+    // to a fresh message rather than losing a result that already cost a scan.
+    try {
+      await ctx.api.editMessageText(notice.chat.id, notice.message_id, text, opts);
+    } catch {
+      await ctx.reply(text, { ...opts, ...replyOpts });
+    }
   } else {
     await ctx.reply(text, { ...opts, ...replyOpts });
   }
@@ -131,12 +156,26 @@ function article(id: string, title: string, description: string, text: string): 
 
 async function handleInline(ctx: Context): Promise<void> {
   const q = (ctx.inlineQuery?.query ?? '').trim();
-  const answer = (results: InlineQueryResult[]) =>
+
+  /**
+   * A scan result is the same for everybody, so it is cached for 60s and shared
+   * (cache_time 60, is_personal false) exactly as specified.
+   *
+   * A rate-limit, busy or error answer is neither. Answering one of those with
+   * the shared settings hands Telegram a per-user, per-moment result to serve to
+   * every other user asking the same thing for the next minute: one user
+   * exhausting their quota would show "rate limited" to everyone, and a
+   * transient "still indexing" would outlive the indexing. Those are answered
+   * uncached and personal.
+   */
+  const answerShared = (results: InlineQueryResult[]) =>
     ctx.answerInlineQuery(results, { cache_time: 60, is_personal: false });
+  const answerTransient = (results: InlineQueryResult[]) =>
+    ctx.answerInlineQuery(results, { cache_time: 0, is_personal: true });
 
   // Empty query — tell the user what to paste rather than returning nothing.
   if (!q) {
-    await answer([
+    await answerShared([
       article(
         'empty',
         'Paste a pons token address',
@@ -155,14 +194,17 @@ async function handleInline(ctx: Context): Promise<void> {
   if (!token) {
     // Not an error — an explanation. An empty inline result list just shows a
     // spinner that never resolves, which reads as the bot being broken.
-    await answer([
+    const isTx = looksLikeTxHash(q);
+    await answerShared([
       article(
-        'invalid',
-        'Not a token address',
+        isTx ? 'invalid-tx' : 'invalid',
+        isTx ? 'That is a transaction hash' : 'Not a token address',
         'Expected 0x followed by 40 hex characters',
         [
           '<b>VITALS</b> — pons v2 launch scanner',
-          'That is not a token address. Expected <code>0x</code> followed by 40 hex characters, e.g.',
+          isTx
+            ? 'That is a transaction hash, not a token address. Expected <code>0x</code> followed by 40 hex characters, e.g.'
+            : 'That is not a token address. Expected <code>0x</code> followed by 40 hex characters, e.g.',
           `<code>${EXAMPLE}</code>`,
           `<i>${COMPACT_DISCLAIMER}</i>`,
         ].join('\n'),
@@ -176,6 +218,7 @@ async function handleInline(ctx: Context): Promise<void> {
     source: 'inline',
     userId: ctx.from?.id,
     chatId: undefined,
+    quotaKey: quotaIdentity(ctx),
     deadlineMs: INLINE_DEADLINE_MS,
     botUsername: usernameOf(ctx),
   });
@@ -189,17 +232,17 @@ async function handleInline(ctx: Context): Promise<void> {
       const label = outcome.meta.symbol
         ? `$${outcome.meta.symbol.toUpperCase()}`
         : short;
-      await answer([
+      await answerShared([
         article(token, `VITALS — ${label}`, inlineDescription(outcome.meta), outcome.compact),
       ]);
       return;
     case 'not_found':
-      await answer([
+      await answerShared([
         article(`nf:${token}`, `VITALS — ${short}`, 'not a pons v2 launch on this chain', outcome.compact),
       ]);
       return;
     case 'rate_limited':
-      await answer([
+      await answerTransient([
         article(
           `rl:${token}:${outcome.retryAfterSec}`,
           'Rate limited',
@@ -209,7 +252,7 @@ async function handleInline(ctx: Context): Promise<void> {
       ]);
       return;
     case 'busy':
-      await answer([
+      await answerTransient([
         article(
           `busy:${token}`,
           'Still indexing',
@@ -219,7 +262,7 @@ async function handleInline(ctx: Context): Promise<void> {
       ]);
       return;
     case 'error':
-      await answer([
+      await answerTransient([
         article(
           `err:${token}`,
           'Scan failed',
@@ -251,6 +294,17 @@ export function createBot(token = TELEGRAM_BOT_TOKEN): Bot {
   bot.command('scan', (ctx) => handleScan(ctx, ctx.match || ''));
 
   bot.command('stats', async (ctx) => {
+    // /stats runs several COUNT(*) queries against SQLite on the event loop, so
+    // it goes through the same flood cap as everything else rather than being a
+    // free, unmetered way to make the bot work.
+    const key = quotaIdentity(ctx);
+    if (key !== undefined) {
+      const d = floodQuota.consume(key);
+      if (!d.allowed) {
+        await ctx.reply(`⏳ rate limited, try again in ${formatRetry(d.retryAfterSec)}`);
+        return;
+      }
+    }
     await ctx.reply(statsText(), { parse_mode: 'HTML' });
   });
 

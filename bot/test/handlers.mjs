@@ -139,6 +139,27 @@ for (const q of ['', 'garbage', TOKEN, '0x' + '22'.repeat(20)]) {
 }
 ok('every inline path answers with at least one result and a valid id');
 
+// --- inline answer caching must not leak per-user state --------------------
+{
+  await bot.handleUpdate(inline(TOKEN, 8100));
+  const good = drain()[0].payload;
+  assert.equal(good.cache_time, 60, 'a scan result is shared for 60s, per spec');
+  assert.equal(good.is_personal, false);
+
+  // exhaust one user, then check their rate-limit answer is NOT shared
+  const VICTIM = 8200;
+  for (let i = 0; i < 40; i++) {
+    await bot.handleUpdate(inline('0x' + ('b' + i.toString(16).padStart(2, '0')).repeat(13) + 'b', VICTIM));
+    drain();
+  }
+  await bot.handleUpdate(inline('0xfeed' + 'aa'.repeat(18), VICTIM));
+  const limited = drain()[0].payload;
+  assert.match(limited.results[0].title + limited.results[0].description, /[Rr]ate limited/);
+  assert.equal(limited.cache_time, 0, 'a rate-limit answer must not be cached by Telegram');
+  assert.equal(limited.is_personal, true, 'a rate-limit answer must not be served to other users');
+  ok('inline: scan answers shared (60s), rate-limit answers uncached and personal');
+}
+
 // --- rate limiting reaches inline too --------------------------------------
 const SPAMMER = 4242;
 for (let i = 0; i < 12; i++) {
@@ -151,6 +172,30 @@ c = drain();
 const rl = c[0].payload.results[0];
 assert.match(rl.title + rl.description, /[Rr]ate limited/, `expected a rate-limit article, got: ${rl.title} / ${rl.description}`);
 ok(`inline is rate limited too: "${rl.description}"`);
+
+// --- /stats renders and is valid HTML --------------------------------------
+await bot.handleUpdate(msg('private', '/stats', -400));
+c = drain();
+assert.equal(c.length, 1, '/stats replies once');
+const stats = c[0].payload.text;
+for (const tag of ['b', 'i', 'code']) {
+  const open = (stats.match(new RegExp(`<${tag}>`, 'g')) || []).length;
+  const close = (stats.match(new RegExp(`</${tag}>`, 'g')) || []).length;
+  assert.equal(open, close, `/stats has unbalanced <${tag}>`);
+}
+assert.ok(stats.includes('hit rate'), '/stats reports the cache hit rate');
+assert.ok(stats.includes('concurrency'), '/stats reports concurrency');
+assert.ok(/inline|dm|group/.test(stats), '/stats reports request sources');
+assert.ok(stats.includes('Not financial advice'), '/stats carries the disclaimer');
+ok('/stats renders balanced HTML with cache, limits and source breakdown');
+
+// --- /help renders ----------------------------------------------------------
+await bot.handleUpdate(msg('private', '/help', -401));
+c = drain();
+assert.equal(c.length, 1);
+assert.ok(c[0].payload.text.includes('@vitalscheck_bot'), '/help names the bot for inline usage');
+assert.ok(!c[0].payload.text.includes('BOTNAME'), 'BOTNAME placeholder substituted');
+ok('/help renders with the bot username substituted');
 
 console.log('\nAll handler checks passed.');
 process.exit(0);

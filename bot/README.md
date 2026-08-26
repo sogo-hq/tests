@@ -100,6 +100,36 @@ originally sat after the awaited deadline, so a timed-out scan was discarded —
 again. A test now asserts the abandoned scan populates the cache and that the
 retry is served from it.
 
+## Two deliberate deviations from the brief
+
+Both are flagged rather than hidden, because both are places where following the
+instruction literally would have made the bot worse.
+
+**Inline answers are not all cached the same way.** The brief specifies
+`cache_time: 60, is_personal: false` on `answerInlineQuery`. That is right for a
+scan result — a token's card is identical for everyone — and it is used there.
+It is wrong for a rate-limit, busy or error answer: those are per-user and
+momentary, and answering one with shared settings hands Telegram a single user's
+state to serve to *everyone else* asking the same thing for the next minute. One
+user exhausting their quota would show "rate limited" to the whole platform.
+Those three outcomes answer with `cache_time: 0, is_personal: true`.
+
+**The hourly rate-limit message says minutes, not seconds.** The brief's wording
+is "try again in Ns". The per-minute window — the case users actually hit — can
+never exceed 60 seconds and always reads as `try again in 60s`. The hourly window
+can be nearly an hour, and `try again in 3400s` is not usable, so anything above
+90 seconds is rendered as minutes.
+
+## Known limitation
+
+**There is no per-user concurrency cap.** One user pasting ten distinct
+addresses at once can occupy all five global slots and briefly delay everyone
+else. This is bounded — the 10/min quota caps the burst and each scan is a
+second or two — and closing it means a second queueing layer above the global
+semaphore, which buys a couple of seconds of fairness in exchange for real
+deadlock surface. The brief asks for a global limit, and that is what is built.
+Worth revisiting if group traffic ever makes the delay visible.
+
 ## Storage of usage
 
 `scan_events` records one row per user-facing request — source, chat, user,
@@ -214,6 +244,16 @@ concurrent bulk requests. Run as two processes they simply contend at the node,
 and the same scans took 10–25s. So `npm run bot` runs the recheck worker *and*
 the decode backlog in-process rather than expecting them to be started
 separately. Run `npm run decode` on its own only when the bot is not running.
+
+**Attacker-controlled text is clamped where it is rendered.** Token names,
+tickers, pair-token symbols and the symbols of colliding tokens all come from
+launch calldata or another token's own metadata, and nothing on chain caps their
+length. A single 5,000-character ticker would push a card past Telegram's
+4096-character limit, and a rejected inline answer leaves the client spinning
+forever. Each field is clamped at the point of use, and a final guard drops whole
+lines rather than slicing — slicing raw HTML lands mid-tag and Telegram rejects
+the entire message, and truncating from the tail would remove the disclaimer,
+which must never be dropped from a card.
 
 **Holder counts come from the chain, not the explorer.** The explorer's token
 endpoints return 500 for freshly launched tokens. Replaying `Transfer` events and

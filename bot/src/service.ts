@@ -2,7 +2,7 @@ import { isAddress, getAddress } from 'viem';
 import { scanToken, type ScanResult } from './scan.js';
 import { renderCard, renderCompactCard, renderCompactNotFound, compactMeta, type CompactMeta } from './card.js';
 import { scanCache, type CachedScan } from './cache.js';
-import { userQuota, scanSemaphore, SlotTimeout, formatRetry } from './quota.js';
+import { userQuota, floodQuota, scanSemaphore, SlotTimeout, formatRetry } from './quota.js';
 import { db } from './db.js';
 
 export type ScanSource = 'dm' | 'group' | 'inline' | 'cli';
@@ -22,6 +22,19 @@ export interface ScanRequest {
   /** Abandon rather than exceed this budget. Inline mode sets it; DM does not. */
   deadlineMs?: number;
   botUsername?: string;
+  /**
+   * Identity the limiters key on. Callers resolve this because the right answer
+   * is surface-specific -- see quotaIdentity() in bot.ts, where anonymous group
+   * admins have to be keyed on the chat rather than the single shared bot id
+   * Telegram gives them all.
+   */
+  quotaKey?: number;
+  /**
+   * Skip all user limits. Only the local CLI sets this. It is explicit rather
+   * than inferred from a missing user id, so an update that simply arrives
+   * without a sender can never be mistaken for a trusted local caller.
+   */
+  unlimited?: boolean;
 }
 
 const insertEvent = db.prepare(`
@@ -48,10 +61,26 @@ function logEvent(req: ScanRequest, cacheHit: boolean, durationMs: number, outco
   }
 }
 
+/**
+ * A 20-byte address, and only when it stands alone.
+ *
+ * The lookarounds matter: a transaction hash is 0x plus 64 hex characters, and
+ * an unanchored 40-hex match happily takes the first 40 of them and hands back a
+ * plausible-looking address that belongs to nobody. The user would get "not a
+ * pons v2 launch" for a perfectly real transaction, with no hint why.
+ */
+const ADDRESS_RE = /(?<![a-fA-F0-9])0x[a-fA-F0-9]{40}(?![a-fA-F0-9])/;
+const TX_HASH_RE = /(?<![a-fA-F0-9])0x[a-fA-F0-9]{64}(?![a-fA-F0-9])/;
+
 export function normaliseToken(raw: string): string | null {
-  const m = raw.match(/0x[a-fA-F0-9]{40}/);
+  const m = raw.match(ADDRESS_RE);
   if (!m) return null;
   return isAddress(m[0]) ? getAddress(m[0]) : null;
+}
+
+/** Did the user paste a transaction hash instead of a token address? */
+export function looksLikeTxHash(raw: string): boolean {
+  return TX_HASH_RE.test(raw);
 }
 
 function fromCache(hit: CachedScan): { card: string; compact: string; meta: CompactMeta } {
@@ -158,6 +187,34 @@ export async function performScan(req: ScanRequest): Promise<ScanOutcome> {
   const started = Date.now();
   const token = req.token;
 
+  // Quota identity: the user, falling back to the chat. Telegram does not always
+  // supply `from` -- anonymous group admins post as a single shared bot id, and
+  // some automated posts omit it entirely -- so callers pass a resolved key.
+  // A bot-surface request with no identity at all still gets limited, under key
+  // 0; only an explicitly unlimited caller (the CLI) escapes.
+  const quotaKey = req.unlimited ? undefined : (req.quotaKey ?? req.userId ?? req.chatId ?? 0);
+
+  // 0. Flood cap. Applies to EVERY request, cache hits included.
+  //
+  // The scan quota below deliberately exempts cache hits, because they cost no
+  // RPC -- but the bot still emits a message per request, so without this a user
+  // could pay one scan for a token and then have the bot post the cached card
+  // two hundred times into a group inside a minute. This cap is set well above
+  // any legitimate rhythm and only bites on flooding.
+  if (quotaKey !== undefined) {
+    const flood = floodQuota.consume(quotaKey);
+    if (!flood.allowed) {
+      const d = Date.now() - started;
+      logEvent(req, false, d, `flood_limited_${flood.window}`);
+      return {
+        kind: 'rate_limited',
+        retryAfterSec: flood.retryAfterSec,
+        window: flood.window!,
+        message: `rate limited, try again in ${formatRetry(flood.retryAfterSec)}`,
+      };
+    }
+  }
+
   // 1. Cache.
   const hit = scanCache.get(token);
   if (hit) {
@@ -169,9 +226,9 @@ export async function performScan(req: ScanRequest): Promise<ScanOutcome> {
       : { kind: 'ok', ...payload, cacheHit: true, durationMs: d };
   }
 
-  // 2. Per-user quota. Anonymous callers (CLI) are not limited.
-  if (req.userId !== undefined) {
-    const decision = userQuota.consume(req.userId);
+  // 2. Scan quota. Counts real scans only -- a cache hit did no RPC.
+  if (quotaKey !== undefined) {
+    const decision = userQuota.consume(quotaKey);
     if (!decision.allowed) {
       const d = Date.now() - started;
       logEvent(req, false, d, `rate_limited_${decision.window}`);

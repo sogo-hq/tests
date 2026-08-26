@@ -167,10 +167,24 @@ export class Semaphore {
 }
 
 export const userQuota = new UserQuota();
+
+/**
+ * Flood cap covering every request, cache hits included.
+ *
+ * Sits above the scan quota rather than replacing it: the scan quota protects
+ * the RPC node and so ignores cache hits, while this protects the chat from
+ * being filled with the bot's own messages, which a cached card costs nothing
+ * to produce. Set far above any real usage pattern -- it exists to stop
+ * flooding, not to ration normal use.
+ */
+export const floodQuota = new UserQuota(
+  Number(process.env.REQUESTS_PER_MINUTE || 30),
+  Number(process.env.REQUESTS_PER_HOUR || 400),
+);
 export const scanSemaphore = new Semaphore();
 
 export function startQuotaSweeper(intervalMs = 600_000): NodeJS.Timeout {
-  const t = setInterval(() => userQuota.sweep(), intervalMs);
+  const t = setInterval(() => { userQuota.sweep(); floodQuota.sweep(); }, intervalMs);
   t.unref?.();
   return t;
 }

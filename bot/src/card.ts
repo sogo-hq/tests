@@ -2,6 +2,9 @@ import type { ScanResult } from './scan.js';
 import type { TractionMetrics } from './metrics/traction.js';
 import type { FlagResult } from './metrics/flags.js';
 import { DISCLAIMER, EXPLORER_URL } from './config.js';
+import { clamp, clampMessage, MAX_NAME, MAX_TICKER, TELEGRAM_MAX_MESSAGE } from './text.js';
+
+export { TELEGRAM_MAX_MESSAGE };
 
 const esc = (s: string) =>
   s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -83,9 +86,9 @@ function strongestSignal(t: TractionMetrics, quote: string): string {
 
 export function renderCard(r: ScanResult): string {
   const { reads: k, traction: t, flags: f } = r;
-  const quote = k.pairSymbol ?? 'quote';
-  const sym = k.symbol ? esc(k.symbol) : '?';
-  const name = k.name ? esc(k.name) : 'unknown';
+  const quote = clamp(k.pairSymbol ?? 'quote', MAX_TICKER);
+  const sym = k.symbol ? esc(clamp(k.symbol, MAX_TICKER)) : '?';
+  const name = k.name ? esc(clamp(k.name, MAX_NAME)) : 'unknown';
 
   const L: string[] = [];
   L.push(`<b>${sym}</b> — ${name}`);
@@ -129,7 +132,7 @@ export function renderCard(r: ScanResult): string {
   L.push('');
   L.push(`<a href="${EXPLORER_URL}/address/${k.token}">token</a> · <a href="${EXPLORER_URL}/address/${k.curve}">curve</a> · <a href="${EXPLORER_URL}/address/${k.deployer}">deployer</a>`);
   L.push(`<i>${DISCLAIMER}</i>`);
-  return L.join('\n');
+  return clampMessage(L.join('\n'));
 }
 
 /** Plain-text card, for CLI output. */
@@ -162,7 +165,7 @@ export interface CompactMeta {
 
 function ticker(r: ScanResult): string {
   const s = r.reads.symbol?.trim();
-  if (s) return `$${s.toUpperCase()}`;
+  if (s) return `$${clamp(s, MAX_TICKER).toUpperCase()}`;
   return `${r.reads.token.slice(0, 6)}…${r.reads.token.slice(-4)}`;
 }
 
@@ -207,7 +210,7 @@ export function renderCompactCard(r: ScanResult, botUsername?: string): string {
 
   const via = botUsername ? `via @${esc(botUsername)} · ` : '';
   L.push(`<i>${via}${COMPACT_DISCLAIMER}</i>`);
-  return L.join('\n');
+  return clampMessage(L.join('\n'));
 }
 
 /** The N highest-severity raised flags. Undetermined flags are excluded. */
@@ -221,7 +224,7 @@ export function topRaisedFlags(r: ScanResult, n: number) {
 export function compactMeta(r: ScanResult): CompactMeta {
   const top = topRaisedFlags(r, 1)[0] ?? null;
   return {
-    symbol: r.reads.symbol ?? null,
+    symbol: r.reads.symbol ? clamp(r.reads.symbol, MAX_TICKER) : null,
     traction: r.traction.label,
     flagsRaised: r.flags.raised,
     flagsTotal: r.flags.total,
