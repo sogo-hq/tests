@@ -50,7 +50,47 @@ const insertEvent = db.prepare(`
   VALUES (?,?,?,?,?,?,?,?,?)
 `);
 
-function logEvent(req: ScanRequest, cacheHit: boolean, durationMs: number, outcome: string, scanId?: number): void {
+/**
+ * One line per scan request, on stdout.
+ *
+ * Nothing about scans reached the logs before this: whether anyone was using
+ * the bot, from which surface, and where the time went were all invisible
+ * outside the database. key=value so it greps and so a line stays readable when
+ * a field is genuinely unknown -- a rate-limited request has no age and no
+ * early-mode verdict, and printing 0 for those would be a measurement nobody
+ * took.
+ */
+function logScanLine(
+  req: ScanRequest,
+  cacheHit: boolean,
+  durationMs: number,
+  outcome: string,
+  meta?: { ageSeconds: number; early: boolean },
+): void {
+  const parts = [
+    `source=${req.source}`,
+    `token=${req.token}`,
+    meta ? `age=${meta.ageSeconds}s` : 'age=?',
+    `cache=${cacheHit ? 'hit' : 'miss'}`,
+    `duration=${Math.round(durationMs)}ms`,
+    meta ? `early=${meta.early ? 'yes' : 'no'}` : 'early=?',
+    `outcome=${outcome}`,
+  ];
+  console.log(`[scan] ${parts.join(' ')}`);
+}
+
+/** Exposed for tests: the log format is the operator-facing contract. */
+export const logScanLineForTest = logScanLine;
+
+function logEvent(
+  req: ScanRequest,
+  cacheHit: boolean,
+  durationMs: number,
+  outcome: string,
+  scanId?: number,
+  meta?: { ageSeconds: number; early: boolean },
+): void {
+  logScanLine(req, cacheHit, durationMs, outcome, meta);
   try {
     insertEvent.run(
       Math.floor(Date.now() / 1000),
@@ -281,7 +321,8 @@ export async function performScan(req: ScanRequest): Promise<ScanOutcome> {
   if (hit) {
     const d = Date.now() - started;
     const payload = fromCache(hit);
-    logEvent(req, true, d, hit.meta.notFound ? 'not_found' : 'ok');
+    // No age or early verdict for an address that is not a launch at all.
+    logEvent(req, true, d, hit.meta.notFound ? 'not_found' : 'ok', undefined, hit.meta.notFound ? undefined : hit.meta);
     return hit.meta.notFound
       ? { kind: 'not_found', ...payload, cacheHit: true, durationMs: d }
       : { kind: 'ok', ...payload, cacheHit: true, durationMs: d };
@@ -321,7 +362,7 @@ export async function performScan(req: ScanRequest): Promise<ScanOutcome> {
     if (kind === 'not_found' && consumedScanQuota && quotaKey !== undefined) {
       userQuota.refund(quotaKey);
     }
-    logEvent(req, false, d, kind, rendered.scanId);
+    logEvent(req, false, d, kind, rendered.scanId, rendered.meta.notFound ? undefined : rendered.meta);
     return {
       kind,
       card: rendered.card,

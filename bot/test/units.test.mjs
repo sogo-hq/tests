@@ -502,3 +502,41 @@ test('no bare catch survives in the shipped source', async () => {
   }
   assert.deepEqual(offenders, [], `bare catch found:\n${offenders.join('\n')}`);
 });
+
+// ------------------------------------------- scan logging + pair-ticker flag
+test('the scan log line carries every field, and marks unknowns as unknown', async () => {
+  const { logScanLineForTest } = await import('../dist/service.js');
+  const lines = [];
+  const orig = console.log;
+  console.log = (l) => lines.push(l);
+  try {
+    logScanLineForTest({ source: 'dm', token: '0xabc' }, false, 1520.4, 'ok', { ageSeconds: 12, early: true });
+    logScanLineForTest({ source: 'inline', token: '0xdef' }, true, 0, 'ok', { ageSeconds: 900, early: false });
+    logScanLineForTest({ source: 'group', token: '0x111' }, false, 8, 'rate_limited_minute');
+  } finally { console.log = orig; }
+
+  assert.equal(lines[0], '[scan] source=dm token=0xabc age=12s cache=miss duration=1520ms early=yes outcome=ok');
+  assert.equal(lines[1], '[scan] source=inline token=0xdef age=900s cache=hit duration=0ms early=no outcome=ok');
+  // a rejected request has no age and no early verdict; printing 0/no would be
+  // a measurement nobody took
+  assert.equal(lines[2], '[scan] source=group token=0x111 age=? cache=miss duration=8ms early=? outcome=rate_limited_minute');
+});
+
+test('the pair-ticker comparison uses the same normalisation as the collision flag', async () => {
+  const { normaliseKey } = await import('../dist/db.js');
+  const same = (a, b) => normaliseKey(a) === normaliseKey(b);
+  assert.ok(same('NVDA', 'nvda'), 'case folds');
+  assert.ok(same('NVDA', 'NVDА'), 'Cyrillic А folds onto Latin A');
+  assert.ok(same('ETH', 'ЕTH'), 'Cyrillic Е folds onto Latin E');
+  assert.ok(!same('NVDA', 'AAPL'));
+  assert.ok(!same('NVDA', ''), 'an empty symbol never matches');
+});
+
+test('the pair-ticker flag outranks a plain name collision', () => {
+  // colliding with some other launch is common noise; wearing the ticker of the
+  // asset on the other side of your own pool targets the person about to trade
+  const pairTicker = flag('pair_ticker', 'raised', 'ticker matches its pair asset NVDA', 80);
+  const collision = flag('collision', 'raised', 'name collides with 60 tokens', 70);
+  const r = makeScan({ flags: [collision, pairTicker] });
+  assert.equal(topRaisedFlags(r, 1)[0].key, 'pair_ticker');
+});

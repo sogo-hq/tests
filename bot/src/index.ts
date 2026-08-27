@@ -1,6 +1,6 @@
 import { getAddress, isAddress } from 'viem';
 import { printVerify } from './verify.js';
-import { backfill, indexNew, decodePending, startDecodeLoop } from './indexer/launches.js';
+import { backfill, indexNew, decodePending, startDecodeLoop, startIndexLoop } from './indexer/launches.js';
 import { scanToken } from './scan.js';
 import { renderCardText, renderCompactText } from './card.js';
 import { runDueRechecks, startRecheckLoop } from './recheck.js';
@@ -154,9 +154,10 @@ async function main(): Promise<void> {
     }
 
     case 'bot': {
-      // Both background jobs run in this process on purpose: request priority is
+      // All background jobs run in this process on purpose: request priority is
       // per-process, so an interactive /scan only preempts bulk indexing when
       // they share one rate limiter.
+      startIndexLoop();
       startRecheckLoop();
       const pending = (db.prepare('SELECT COUNT(*) n FROM launches WHERE snipe_exemption_count IS NULL').get() as any).n;
       if (pending) {

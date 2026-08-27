@@ -120,6 +120,60 @@ never exceed 60 seconds and always reads as `try again in 60s`. The hourly windo
 can be nearly an hour, and `try again in 3400s` is not usable, so anything above
 90 seconds is rendered as minutes.
 
+## Ticker impersonating the pair asset
+
+A launch can take the ticker of the very asset it is paired against. Live
+example: `0xAa0C1171…` launches as **$NVDA**, name *"No Value Dog Agent"*, paired
+against `0xd0601CE1…` whose symbol is also **NVDA** and whose name is *"NVIDIA •
+Robinhood Token"*. Different contracts, identical ticker. Someone reading "$NVDA"
+in a group cannot tell which one they are looking at, and the pair asset is the
+one with a real price to anchor to.
+
+Compared after the same homoglyph normalisation the collision flag uses, so a
+Cyrillic or mathematical-alphanumeric spelling of the pair's ticker is caught
+too. Ranked **above** a plain name collision: colliding with some other launch is
+common noise, whereas wearing the ticker of the asset on the other side of your
+own pool is aimed at the person about to trade it.
+
+## Staying at the chain head
+
+`npm run bot` tails the factory every 3 seconds, so a launch is in the index
+within seconds of its event rather than on first scan. Marked bulk like the
+decode drip, so interactive scans always preempt it.
+
+Without it, a scan of an unindexed token falls back to walking the factory's own
+logs — a topic-filtered `getLogs` per 500k-block chunk, measured at **0.7–9s per
+chunk** with wide variance and up to 18 chunks before giving up. The tail loop
+removes that path for anything it has seen.
+
+Two details the measurements forced:
+
+- **An empty pass costs one request.** Block-time anchors are primed lazily, only
+  when a chunk actually yielded launches — priming up front spent `getBlock`
+  calls on every empty poll, a standing charge against the same rate limit
+  interactive scans draw from. At 3s that is 0.33 req/s of a 10 req/s budget.
+- **`getBlockNumber` is read with `cacheTime: 0`.** viem caches it for its
+  polling interval (4s by default), which is longer than this loop's own
+  interval, so the tail would otherwise act on a head it had already seen.
+- **A catch-up pass is bounded to 30,000 blocks.** After downtime the cursor can
+  be far behind, and closing the whole gap in one pass — decoding a creation
+  transaction per launch — would block the poller for minutes, which is exactly
+  the responsiveness it exists to provide.
+
+## Scan logging
+
+One line per scan request on stdout, `key=value` so it greps:
+
+```
+[scan] source=dm token=0xd384…1B76 age=180101s cache=miss duration=3738ms early=no outcome=ok
+[scan] source=inline token=0xd384…1B76 age=180101s cache=hit duration=0ms early=no outcome=ok
+[scan] source=group token=0x0000…beef age=? cache=miss duration=652ms early=? outcome=not_found
+```
+
+A request with no age or early verdict — a rate-limited one, or an address that
+is not a launch — prints `?` rather than `0`, which would be a measurement
+nobody took.
+
 ## Early mode
 
 Degens scan the moment a launch opens. A token five seconds old has no traction
@@ -284,7 +338,7 @@ labelled as such, for a younger token):
 - graduation progress
 - progress velocity, % per 10 min
 
-**Flags** — seven negative signals, plus `buybackEnabled` reported separately as
+**Flags** — eight negative signals, plus `buybackEnabled` reported separately as
 a positive one:
 
 | flag | source |
@@ -295,6 +349,7 @@ a positive one:
 | deployer median peak mcap of prior launches | recheck history |
 | deployer share of priors still trading at +24h | recheck history |
 | name/ticker collision with an existing pons token | local index, homoglyph-normalised |
+| ticker matches the asset it is paired against | pair token's own `symbol()`, homoglyph-normalised |
 | custom pair asset | `getLaunchedToken().pairToken` |
 
 Each flag is `clean`, `raised`, or **`undetermined`**. Undetermined is never

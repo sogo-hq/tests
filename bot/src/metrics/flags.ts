@@ -282,6 +282,36 @@ export function computeFlags(opts: {
   }
 
   // ---------------------------------------------------------------- flag 7
+  // A launch can take the ticker of the very asset it is paired against.
+  //
+  // Seen live: 0xAa0C1171... launches as $NVDA, name "No Value Dog Agent",
+  // paired against 0xd0601CE1..., whose symbol is also NVDA and whose name is
+  // "NVIDIA - Robinhood Token". Different contracts, identical ticker. A buyer
+  // reading "$NVDA" in a group has no way to tell which one they are looking at,
+  // and the pair asset is the one with a real price to anchor to.
+  //
+  // Compared after the same homoglyph normalisation the collision flag uses, so
+  // a Cyrillic or mathematical-alphanumeric spelling of the pair's ticker is
+  // caught too.
+  const pairKey = normaliseKey(opts.pairSymbol);
+  const impersonatesPair = symKey !== '' && pairKey !== '' && symKey === pairKey;
+  flags.push({
+    key: 'pair_ticker',
+    label: 'Ticker vs pair asset',
+    state: impersonatesPair ? 'raised' : 'clean',
+    detail: impersonatesPair
+      ? `ticker ${clamp(opts.symbol ?? '?', MAX_TICKER)} is the same as the pair asset ${clamp(opts.pairSymbol ?? '?', MAX_TICKER)} — different contracts, identical ticker`
+      : 'ticker differs from the pair asset',
+    compactDetail: impersonatesPair
+      ? `ticker matches its pair asset ${clamp(opts.pairSymbol ?? '?', MAX_TICKER)} — different contract`
+      : 'ticker differs from the pair asset',
+    // Above a plain name collision: colliding with some other launch is common
+    // noise, whereas wearing the ticker of the asset on the other side of your
+    // own pool is targeted at the person about to trade it.
+    severity: impersonatesPair ? 80 : 0,
+  });
+
+  // ---------------------------------------------------------------- flag 8
   const custom = !isNativePair(opts.pairToken);
   flags.push({
     key: 'custom_pair',

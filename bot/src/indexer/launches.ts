@@ -69,8 +69,18 @@ export async function indexLaunches(
 
   // Anchor block times once for the whole range rather than fetching a block per
   // launch; see blocktime.ts for why that is safe here.
+  //
+  // Primed lazily. The tail poller runs every few seconds and most passes find
+  // no launches at all, so priming up front would spend getBlock calls on every
+  // empty pass -- a standing cost against the same rate limit interactive scans
+  // draw from.
   const times = new BlockTimeEstimator();
-  await times.prime(fromBlock, toBlock);
+  let primed = false;
+  const ensurePrimed = async () => {
+    if (primed) return;
+    await times.prime(fromBlock, toBlock);
+    primed = true;
+  };
 
   for (let start = fromBlock; start <= toBlock; start += BigInt(FACTORY_LOG_CHUNK)) {
     const end = start + BigInt(FACTORY_LOG_CHUNK) - 1n > toBlock
@@ -85,6 +95,7 @@ export async function indexLaunches(
     });
 
     if (logs.length) {
+      await ensurePrimed();
       // Creation-calldata decode is optional: it costs one request per launch
       // against a rate-limited node, so the default pass records launches
       // immediately and leaves exemptions to `decodePending`, which is
@@ -245,14 +256,34 @@ export async function backfill(
 }
 
 /** Index anything new since the cursor. Used by the tail loop. */
+/**
+ * Largest range a single tail pass will cover.
+ *
+ * After downtime the cursor can be a long way behind, and catching all of it up
+ * in one pass -- decoding a creation transaction per launch -- would block the
+ * poller for minutes, which is exactly the responsiveness the loop exists to
+ * provide. Bounded instead, so it closes the gap over successive passes while
+ * genuinely new launches keep arriving promptly.
+ */
+const TAIL_MAX_BLOCKS = 30_000; // ~50 minutes
+
 export async function indexNew() {
-  const head = await client.getBlockNumber();
+  // cacheTime 0 because viem caches getBlockNumber for its polling interval
+  // (4s by default), which is longer than this loop's own interval -- the tail
+  // would otherwise act on a head it had already seen.
+  const head = await client.getBlockNumber({ cacheTime: 0 });
   const cursor = getCursor(CURSOR);
   if (!cursor) return backfill();
   if (cursor >= head) return { launches: 0, fromBlock: cursor, toBlock: head, undecodable: 0, pendingDecode: 0 };
+
+  const from = cursor + 1n;
+  const to = head - from > BigInt(TAIL_MAX_BLOCKS) ? from + BigInt(TAIL_MAX_BLOCKS) : head;
+  if (to < head) {
+    console.log(`[index] catching up: ${head - to} block(s) still behind after this pass`);
+  }
   // The tail is small, so decode inline -- new launches arrive fully populated.
-  const res = await indexLaunches(cursor + 1n, head, { decode: true });
-  await indexLifecycle(cursor + 1n, head);
+  const res = await indexLaunches(from, to, { decode: true });
+  await indexLifecycle(from, to);
   return res;
 }
 
@@ -286,4 +317,48 @@ export function startDecodeLoop(batch = 200, intervalMs = 15_000): NodeJS.Timeou
   };
   void tick();
   return setInterval(tick, intervalMs);
+}
+
+/**
+ * Keep the index at the chain head from inside a long-running process.
+ *
+ * Without this, indexNew only ran from the CLI, so a token seconds old was not
+ * in the index and every part of a scan that normally reads from it had to be
+ * fetched live -- including findLaunch walking back through the factory's logs.
+ * The first scan of a fresh launch took close to a minute.
+ *
+ * Marked bulk, like the decode drip, so an interactive scan always preempts it.
+ * A pass that finds nothing is silent: at roughly two launches a minute, logging
+ * every empty poll would bury the lines that matter.
+ */
+export function startIndexLoop(intervalMs = 3_000): NodeJS.Timeout {
+  let running = false;
+  let consecutiveErrors = 0;
+
+  const tick = async () => {
+    if (running) return; // a slow pass must not overlap the next tick
+    running = true;
+    try {
+      const res = await bulk(() => indexNew());
+      consecutiveErrors = 0;
+      if (res.launches > 0) {
+        console.log(`[index] +${res.launches} launch${res.launches === 1 ? '' : 'es'} (through block ${res.toBlock})`);
+      }
+    } catch (err) {
+      // Logged, but throttled: if the RPC is down this fires every few seconds,
+      // and a screen of identical stack traces hides everything else.
+      consecutiveErrors++;
+      if (consecutiveErrors === 1 || consecutiveErrors % 20 === 0) {
+        console.error(`[index] poll failed (${consecutiveErrors} in a row):`, String((err as Error)?.message ?? err).slice(0, 200));
+      }
+    } finally {
+      running = false;
+    }
+  };
+
+  console.log(`[index] tailing the factory every ${(intervalMs / 1000).toFixed(0)}s`);
+  void tick();
+  const t = setInterval(tick, intervalMs);
+  t.unref?.();
+  return t;
 }
