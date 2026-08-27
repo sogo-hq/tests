@@ -4,7 +4,7 @@ import { renderCard, renderCompactCard, renderCompactNotFound, compactMeta, type
 import { scanCache, type CachedScan } from './cache.js';
 import { userQuota, floodQuota, scanSemaphore, SlotTimeout, formatRetry } from './quota.js';
 import { db } from './db.js';
-import { EARLY_CACHE_TTL_MS } from './config.js';
+import { EARLY_CACHE_TTL_MS, EARLY_WINDOW_SECONDS } from './config.js';
 
 export type ScanSource = 'dm' | 'group' | 'inline' | 'cli';
 
@@ -167,7 +167,7 @@ function sharedScan(token: string, userId?: number, botUsername?: string): Promi
         card: rendered.card,
         compact: rendered.compact,
         meta: rendered.meta,
-        ttlMs: rendered.meta.early ? EARLY_CACHE_TTL_MS : undefined,
+        ttlMs: earlyTtlFor(rendered.meta),
       });
       return rendered;
     } finally {
@@ -184,6 +184,24 @@ function sharedScan(token: string, userId?: number, botUsername?: string): Promi
   run.catch(() => { /* handled by awaiting callers in performScan */ });
   return run;
 }
+
+/**
+ * How long an early-mode card may be served for.
+ *
+ * Capped at the shorter of the early cache life and the time left in the early
+ * window itself. Without the second bound a card rendered at 179s would keep
+ * telling users "too early for traction" until 189s -- nine seconds after the
+ * token stopped being early and the real card became available. Returns
+ * undefined for a settled card, which then takes the normal cache lifetime.
+ */
+function earlyTtlFor(meta: { early: boolean; ageSeconds: number }): number | undefined {
+  if (!meta.early) return undefined;
+  const untilSettled = (EARLY_WINDOW_SECONDS - meta.ageSeconds) * 1000;
+  return Math.max(0, Math.min(EARLY_CACHE_TTL_MS, untilSettled));
+}
+
+/** Exposed for tests; the window cap is a boundary worth asserting directly. */
+export const earlyTtlForTest = earlyTtlFor;
 
 /** In-flight scans, for diagnostics. */
 export function inFlightCount(): number {

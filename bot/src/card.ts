@@ -163,10 +163,16 @@ function renderEarlyCard(r: ScanResult): string {
         ? `  🚩 snipe-tax exemptions: ${n} wallet${n === 1 ? '' : 's'} pre-exempted from the opening tax`
         : '  · snipe-tax exemptions: none — no wallets pre-exempted at creation',
   );
+  // launchBuyAmount is null both when there was genuinely no buy and when the
+  // creation transaction could not be decoded at all. Those must not render
+  // alike: claiming "none" about a transaction we just said we could not read
+  // is precisely the undetermined-as-clean error the card exists to avoid.
   L.push(
     hasCreatorLaunchBuy(r)
       ? `  🚩 creator opening buy: ${fmtUnits(r.creation.launchBuyAmount!)} ${esc(quote)} bought in the launch transaction`
-      : '  · creator opening buy: none in the launch transaction',
+      : n === null
+        ? '  ❔ creator opening buy: unknown — the creation transaction could not be decoded'
+        : '  · creator opening buy: none in the launch transaction',
   );
   L.push('');
 
@@ -192,7 +198,14 @@ function renderEarlyCompactCard(r: ScanResult, botUsername?: string): string {
   const L: string[] = [];
   L.push(`<b>VITALS</b>  <b>${esc(ticker(r))}</b>`);
   L.push(`launched ${earlySeconds(r)} ago · too early for traction`);
-  for (const finding of earlyFindings(r).slice(0, 2)) L.push(`🚩 ${esc(finding)}`);
+
+  // The early compact card carries no "N undetermined" counter -- unlike the
+  // settled one -- so an undecodable creation transaction would otherwise render
+  // byte-identically to a genuinely clean launch. Stated outright instead, with
+  // the query mark that distinguishes it from a finding.
+  const undecoded = r.creation.snipeExemptionCount === null;
+  if (undecoded) L.push('❔ creation tx not decoded — exemptions unconfirmed');
+  for (const finding of earlyFindings(r).slice(0, undecoded ? 1 : 2)) L.push(`🚩 ${esc(finding)}`);
   L.push('re-scan in 2 min');
   const via = botUsername ? `via @${esc(botUsername)} · ` : '';
   L.push(`<i>${via}${COMPACT_DISCLAIMER}</i>`);

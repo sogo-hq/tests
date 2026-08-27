@@ -92,5 +92,33 @@ const rechecks = db.prepare('SELECT COUNT(*) n FROM rechecks WHERE scan_id = ?')
 assert.equal(rechecks, 4, `expected 4 rechecks queued, got ${rechecks}`);
 ok('an early scan still queues its +1h/+6h/+24h/+7d rechecks');
 
+// ---- inline: Telegram's own answer cache must not outlive early mode -------
+{
+  const { createBot } = await import('../dist/bot.js');
+  const { EARLY_CACHE_TTL_MS } = await import('../dist/config.js');
+  const bot = createBot('123456:FAKE');
+  bot.botInfo = {
+    id: 42, is_bot: true, first_name: 'VITALS', username: 'vitalscheck_bot',
+    can_join_groups: true, can_read_all_group_messages: false, supports_inline_queries: true,
+  };
+  const calls = [];
+  bot.api.config.use(async (_p, method, payload) => {
+    calls.push({ method, payload });
+    return { ok: true, result: true };
+  });
+  await bot.handleUpdate({
+    update_id: 1,
+    inline_query: { id: 'q1', from: { id: 8801, is_bot: false, first_name: 'U' }, query: r.reads.token, offset: '' },
+  });
+  const answer = calls.find((c) => c.method === 'answerInlineQuery');
+  assert.ok(answer, 'inline query was not answered');
+  const expected = Math.max(1, Math.floor(EARLY_CACHE_TTL_MS / 1000));
+  assert.equal(answer.payload.cache_time, expected,
+    `early inline answer cache_time was ${answer.payload.cache_time}s, expected ${expected}s — 60s would keep serving a stale "launched Ns ago" to every user`);
+  const text = answer.payload.results[0].input_message_content.message_text;
+  assert.match(text, /too early for traction/);
+  ok(`inline answer for an early token caches for ${answer.payload.cache_time}s, not 60s`);
+}
+
 console.log('\nAll early-mode live checks passed.');
 process.exit(0);

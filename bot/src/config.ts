@@ -64,6 +64,23 @@ export const WINDOW_10_MIN_BLOCKS = BLOCKS_PER_MINUTE * 10; // 6,000
 export const WINDOW_30_MIN_BLOCKS = BLOCKS_PER_MINUTE * 30; // 18,000
 
 /**
+ * Parse a numeric setting, refusing to let a malformed value disable a rule.
+ *
+ * Number('180s') is NaN, and every comparison against NaN is false -- so an
+ * operator writing a unit suffix would silently switch early mode off entirely
+ * with nothing in the logs to say so.
+ */
+function positiveNumber(name: string, raw: string | undefined, fallback: number): number {
+  if (raw === undefined || raw === '') return fallback;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) {
+    console.warn(`[config] ignoring invalid ${name}=${JSON.stringify(raw)}, using ${fallback}`);
+    return fallback;
+  }
+  return n;
+}
+
+/**
  * Below this age a launch is reported in early mode.
  *
  * Traction metrics are not merely small this early -- they are undefined. The
@@ -73,13 +90,24 @@ export const WINDOW_30_MIN_BLOCKS = BLOCKS_PER_MINUTE * 30; // 18,000
  * when it is really an absence of data, which is the false negative this mode
  * exists to stop.
  */
-export const EARLY_WINDOW_SECONDS = Number(process.env.EARLY_WINDOW_SECONDS || 180);
+export const EARLY_WINDOW_SECONDS = positiveNumber('EARLY_WINDOW_SECONDS', process.env.EARLY_WINDOW_SECONDS, 180);
 
 /**
  * Early-mode results go stale fast: the same launch at 5s and at 90s are
  * genuinely different answers, so they cannot share the normal 60s cache life.
  */
-export const EARLY_CACHE_TTL_MS = Number(process.env.EARLY_CACHE_TTL_MS || 10_000);
+export const EARLY_CACHE_TTL_MS = positiveNumber('EARLY_CACHE_TTL_MS', process.env.EARLY_CACHE_TTL_MS, 10_000);
+
+/**
+ * Margin added to the early window when the exact launch time is unavailable.
+ *
+ * Sized to the measured worst-case drift of the interpolated block timestamps
+ * the index stores. Applied in the safe direction: with a less precise clock the
+ * window widens, because showing "too early" for a token that is actually 185s
+ * old is a far smaller error than the false "TRACTION none" this mode exists to
+ * prevent.
+ */
+export const EARLY_DRIFT_MARGIN_SECONDS = 10;
 
 /** Recheck offsets, in hours after the scan. */
 export const RECHECK_OFFSETS_HOURS = [1, 6, 24, 24 * 7] as const;

@@ -16,6 +16,8 @@ import {
   RECHECK_OFFSETS_HOURS,
   LOOKBACK_DAYS,
   EARLY_WINDOW_SECONDS,
+  EARLY_DRIFT_MARGIN_SECONDS,
+  BLOCK_TIME_SECONDS,
 } from './config.js';
 
 /** Facts fixed in the launch transaction, available the instant a token exists. */
@@ -159,16 +161,50 @@ async function scanTokenInner(token: string, requestedBy?: number): Promise<Scan
     scannedAt,
   });
 
-  /**
-   * Age is taken from the curve's own launchedAt() when available, not from the
-   * indexed launch time. The index stores an interpolated block timestamp --
-   * accurate to a second or two on average but drifting up to about seven
-   * seconds -- which is fine for a seven-day window and not fine for a 180-second
-   * one, where it decides which card a user gets.
-   */
-  const launchedAtExact = reads.launchedAt > 0 ? reads.launchedAt : launch.launchedAt;
-  const ageSeconds = Math.max(0, scannedAt - launchedAtExact);
-  const isEarly = ageSeconds < EARLY_WINDOW_SECONDS;
+  // -------------------------------------------------------------------------
+  // Age, and the early-mode decision that hangs off it.
+  //
+  // Three separate clocks disagree here, and the 180-second boundary is tight
+  // enough that each one matters:
+  //
+  //  1. curve.launchedAt() -- exact, straight from the chain, but it is read
+  //     through the optional-read helper and so can come back absent.
+  //  2. launches.launched_at -- an interpolated block timestamp, measured to
+  //     drift up to about seven seconds. Fine for a seven-day window, not for
+  //     a 180-second one.
+  //  3. this host's wall clock, which supplies "now" and can be wrong by any
+  //     amount at all after a VM resume or before an NTP sync.
+  //
+  // So: prefer the exact launch time; widen the window by the known drift when
+  // only the interpolated one is available; and cross-check the elapsed time
+  // against the chain's own block progression, which no host clock can skew.
+  // -------------------------------------------------------------------------
+  const haveExactLaunchTime = reads.launchedAt > 0;
+  const launchedAtExact = haveExactLaunchTime ? reads.launchedAt : launch.launchedAt;
+
+  /** Elapsed time derived purely from block progression -- immune to host clock skew. */
+  const chainAgeSeconds = Math.max(0, (Number(head) - launch.block) * BLOCK_TIME_SECONDS);
+  const wallAgeSeconds = scannedAt - launchedAtExact;
+
+  // A negative age, or one wildly out of step with the chain, means this host's
+  // clock is wrong rather than the token being new. Clamping to zero would turn
+  // that into maximum-confidence "launched 0s ago" for a token that may be hours
+  // old and already trading.
+  const clockSuspect = wallAgeSeconds < 0 || Math.abs(wallAgeSeconds - chainAgeSeconds) > 120;
+  if (clockSuspect) {
+    console.warn(
+      `[scan] host clock disagrees with the chain for ${reads.token}: ` +
+      `wall age ${wallAgeSeconds}s vs block-derived ${Math.round(chainAgeSeconds)}s — using the chain`,
+    );
+  }
+  const ageSeconds = Math.max(0, Math.round(clockSuspect ? chainAgeSeconds : wallAgeSeconds));
+
+  // Without an exact launch time the window widens by the index's known drift,
+  // so a token that might still be inside it is never given a traction verdict.
+  const earlyThreshold = haveExactLaunchTime
+    ? EARLY_WINDOW_SECONDS
+    : EARLY_WINDOW_SECONDS + EARLY_DRIFT_MARGIN_SECONDS;
+  const isEarly = ageSeconds < earlyThreshold;
 
   const creationRow = db
     .prepare('SELECT entry_point, launch_buy_amount, launch_buy_recipient, snipe_exemption_count FROM launches WHERE token = ?')
@@ -202,7 +238,10 @@ async function scanTokenInner(token: string, requestedBy?: number): Promise<Scan
     )
   `).run(
     reads.token.toLowerCase(), reads.curve.toLowerCase(), reads.deployer.toLowerCase(),
-    reads.symbol, reads.name, scannedAt, Number(head), launch.launchedAt,
+    // launchedAtExact, not the indexed time: a row whose launched_at and
+    // age_seconds are derived from different clocks cannot be reasoned about
+    // later, and this table exists to be reasoned about later.
+    reads.symbol, reads.name, scannedAt, Number(head), launchedAtExact,
     ageSeconds, requestedBy ?? null,
     // An early scan stores NULL for every traction metric and the label 'early'.
     // Writing zeros here would be worse than useless: this table exists to pair

@@ -4,6 +4,7 @@ import { performScan, normaliseToken, looksLikeTxHash, SCAN_FAILED, type ScanSou
 import { scanCache, startCacheReporter } from './cache.js';
 import { userQuota, floodQuota, scanSemaphore, startQuotaSweeper, formatRetry } from './quota.js';
 import { inlineDescription, COMPACT_DISCLAIMER } from './card.js';
+import { EARLY_CACHE_TTL_MS } from './config.js';
 import { db } from './db.js';
 import { TELEGRAM_BOT_TOKEN, DISCLAIMER } from './config.js';
 
@@ -208,8 +209,8 @@ async function handleInline(ctx: Context): Promise<void> {
    * transient "still indexing" would outlive the indexing. Those are answered
    * uncached and personal.
    */
-  const answerShared = (results: InlineQueryResult[]) =>
-    ctx.answerInlineQuery(results, { cache_time: 60, is_personal: false });
+  const answerShared = (results: InlineQueryResult[], cacheSeconds = 60) =>
+    ctx.answerInlineQuery(results, { cache_time: cacheSeconds, is_personal: false });
   const answerTransient = (results: InlineQueryResult[]) =>
     ctx.answerInlineQuery(results, { cache_time: 0, is_personal: true });
 
@@ -272,9 +273,14 @@ async function handleInline(ctx: Context): Promise<void> {
       const label = outcome.meta.symbol
         ? `$${outcome.meta.symbol.toUpperCase()}`
         : short;
-      await answerShared([
-        article(token, `VITALS — ${label}`, inlineDescription(outcome.meta), outcome.compact),
-      ]);
+      // An early card is only true for a few seconds. Telegram's own answer
+      // cache is shared across every user, so leaving it at 60s would keep
+      // serving "launched 12s ago" for a full minute and defeat the short
+      // server-side TTL entirely.
+      await answerShared(
+        [article(token, `VITALS — ${label}`, inlineDescription(outcome.meta), outcome.compact)],
+        outcome.meta.early ? Math.max(1, Math.floor(EARLY_CACHE_TTL_MS / 1000)) : 60,
+      );
       return;
     case 'not_found':
       await answerShared([

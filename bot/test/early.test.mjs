@@ -217,3 +217,76 @@ test('early HTML is balanced so Telegram will accept it', () => {
     assert.ok(html.includes('&lt;'), 'hostile ticker still escaped in early mode');
   }
 });
+
+// ------------------------------------------------ early cache cannot outlive the window
+test('an early card is never served after the token stops being early', async () => {
+  const { earlyTtlForTest } = await import('../dist/service.js');
+  // at 5s there is plenty of window left, so the full 10s cap applies
+  assert.equal(earlyTtlForTest({ early: true, ageSeconds: 5 }), 10_000);
+  // at 175s only 5s of window remains, so the card must not outlive it
+  assert.equal(earlyTtlForTest({ early: true, ageSeconds: 175 }), 5_000);
+  // at 179s, one second
+  assert.equal(earlyTtlForTest({ early: true, ageSeconds: 179 }), 1_000);
+  // a settled card takes the normal cache lifetime
+  assert.equal(earlyTtlForTest({ early: false, ageSeconds: 900 }), undefined);
+});
+
+test('an explicit tiny TTL is honoured, not silently promoted to the default', async () => {
+  const c = new ScanCache(60_000, 10);
+  const meta = { symbol: 'X', traction: 'early', flagsRaised: 0, flagsTotal: 7, flagsUnknown: 0, topFlag: null, notFound: false, early: true, ageSeconds: 179 };
+  c.set('t', { card: 'c', compact: 'c', meta, ttlMs: 30 });
+  await new Promise((r) => setTimeout(r, 60));
+  assert.equal(c.get('t'), null, 'a 30ms TTL must expire in 30ms, not inherit the 60s default');
+});
+
+// ------------------------------------------- config robustness (review round)
+test('a malformed EARLY_WINDOW_SECONDS cannot silently disable early mode', async () => {
+  // Number('180s') is NaN and `age < NaN` is false, which would switch the whole
+  // mode off with nothing in the logs
+  const { execFileSync } = await import('node:child_process');
+  const out = execFileSync(process.execPath, ['-e',
+    "import('./dist/config.js').then(c => console.log(JSON.stringify({w: c.EARLY_WINDOW_SECONDS, t: c.EARLY_CACHE_TTL_MS})))"],
+    { cwd: process.cwd(), env: { ...process.env, EARLY_WINDOW_SECONDS: '180s', EARLY_CACHE_TTL_MS: 'abc' }, encoding: 'utf8' });
+  const cfg = JSON.parse(out.trim().split('\n').pop());
+  assert.equal(cfg.w, 180, 'falls back to the default rather than NaN');
+  assert.equal(cfg.t, 10_000);
+  assert.ok(Number.isFinite(cfg.w) && cfg.w > 0);
+});
+
+test('the drift margin is applied in the safe direction', async () => {
+  const { EARLY_WINDOW_SECONDS, EARLY_DRIFT_MARGIN_SECONDS } = await import('../dist/config.js');
+  assert.ok(EARLY_DRIFT_MARGIN_SECONDS > 0);
+  // widening, never narrowing: a token that might still be early must not be
+  // handed a traction verdict
+  assert.ok(EARLY_WINDOW_SECONDS + EARLY_DRIFT_MARGIN_SECONDS > EARLY_WINDOW_SECONDS);
+});
+
+// ------------------------------------- review round 2: undetermined vs clean
+test('an undecoded creation tx never renders as a clean creator-buy', () => {
+  const undecoded = makeScan({ ageSeconds: 10, snipeExemptionCount: null, launchBuyAmount: null });
+  const clean = makeScan({ ageSeconds: 10, snipeExemptionCount: 0, launchBuyAmount: null });
+  const uText = renderCardText(undecoded);
+  const cText = renderCardText(clean);
+  assert.match(uText, /creator opening buy: unknown/);
+  assert.doesNotMatch(uText, /creator opening buy: none/);
+  assert.match(cText, /creator opening buy: none/);
+});
+
+test('an undecoded creation tx is visibly different from a clean one in compact', () => {
+  const undecoded = renderCompactText(makeScan({ ageSeconds: 10, snipeExemptionCount: null }), 'b');
+  const clean = renderCompactText(makeScan({ ageSeconds: 10, snipeExemptionCount: 0 }), 'b');
+  assert.notEqual(undecoded, clean, 'undetermined must not be byte-identical to clean');
+  assert.match(undecoded, /❔ creation tx not decoded — exemptions unconfirmed/);
+  assert.doesNotMatch(clean, /not decoded/);
+});
+
+test('the undetermined line does not push the compact card over its budget', () => {
+  const r = makeScan({
+    ageSeconds: 10, snipeExemptionCount: null, launchBuyAmount: 10n ** 17n,
+    flags: Array.from({ length: 5 }, (_, i) => flag(`f${i}`, 'raised', `finding ${i}`, i * 10)),
+  });
+  const lines = renderCompactText(r, 'vitalscheck_bot').split('\n');
+  assert.ok(lines.length <= 8, `compact card was ${lines.length} lines`);
+  assert.equal(lines.filter((l) => l.startsWith('❔')).length, 1);
+  assert.equal(lines.filter((l) => l.startsWith('🚩')).length, 1, 'one slot yields to the undetermined line');
+});

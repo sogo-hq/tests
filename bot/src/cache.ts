@@ -71,9 +71,16 @@ export class ScanCache {
     return token.toLowerCase();
   }
 
-  /** Lifetime for one entry: its own if it set one, otherwise the default. */
+  /**
+   * Lifetime for one entry: its own if it set one, otherwise the default.
+   *
+   * An explicit ttlMs is authoritative even when it is very small or zero.
+   * Treating a small value as "unset" and falling back to the 60s default would
+   * invert the caller's intent at exactly the moment it matters most -- a card
+   * asked to live one more second would instead live a minute.
+   */
   private lifetime(entry: CachedScan): number {
-    return entry.ttlMs && entry.ttlMs > 0 ? entry.ttlMs : this.ttlMs;
+    return entry.ttlMs === undefined ? this.ttlMs : Math.max(0, entry.ttlMs);
   }
 
   get(token: string): CachedScan | null {
