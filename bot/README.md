@@ -193,6 +193,34 @@ Three deviations, all deliberate:
 available now, not traction-derived — and dropping it would make the same token
 report a different flag total before and after 180s.
 
+## Two bugs the review found in the write path
+
+Worth recording because both were silent and one was self-inflicting.
+
+**A decoded row could lose the creator's opening buy.** `ensureLaunchRow`'s
+`ON CONFLICT DO UPDATE` refreshed `snipe_exemption_count` and `entry_point` but
+omitted `launch_buy_amount` — the fields all come from the same decode. Since
+`token` is the primary key, any row already present (and `npm run backfill`
+records rows without decoding by default) took the update branch and kept a stale
+NULL buy amount beside a freshly decoded exemption count. The early card's
+"undetermined" guard read the *count*, so it waved through a confident
+`creator opening buy: none` for launches that opened with one; the snipe flag
+also quietly lost its "alongside a creator buy in the same transaction" clause.
+Worse, the row was then permanently unrepairable, because the repair pass selects
+`WHERE snipe_exemption_count IS NULL`. Reproduced against the live index on a
+token whose real opening buy was 0.009 ETH.
+
+Fixed in three places: both upserts now persist those columns, the repair pass
+also picks up `launchAndBuy` rows with a missing buy amount, and the renderer's
+guard keys on whether the creation transaction was decoded at all rather than on
+a column that can be fresh while its sibling is stale.
+
+**Quote amounts were printed with a hardcoded 18 decimals.** Every
+quote-denominated figure — the creator's opening buy, the median buy, the
+strongest-signal line — is in the *pair token's* units. Most pairs are 18
+decimals so this was invisible, but `USDG` on this chain has **6**: a 5 USDG buy
+rendered as `0.000000000005 USDG`. All three now take `pairDecimals`.
+
 ## Failure behaviour
 
 Every failure produces a reply, on all three surfaces. A DM's "Scanning…"

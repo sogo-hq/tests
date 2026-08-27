@@ -53,7 +53,7 @@ function age(seconds: number): string {
  * The single strongest observed signal. This describes what the measured window
  * contains -- it is never a projection.
  */
-function strongestSignal(t: TractionMetrics, quote: string): string {
+function strongestSignal(t: TractionMetrics, quote: string, quoteDecimals: number): string {
   const cands: { weight: number; text: string }[] = [];
 
   if (t.uniqueBuyers30m > 0)
@@ -78,7 +78,7 @@ function strongestSignal(t: TractionMetrics, quote: string): string {
   if (t.medianBuySize > 0n && t.uniqueBuyers30m >= 5)
     cands.push({
       weight: t.uniqueBuyers30m * 0.8,
-      text: `median buy ${fmtUnits(t.medianBuySize)} ${quote} across ${t.buyTxCount} buys`,
+      text: `median buy ${fmtUnits(t.medianBuySize, quoteDecimals)} ${quote} across ${t.buyTxCount} buys`,
     });
 
   if (!cands.length) return 'no buying activity recorded in the measured window';
@@ -97,6 +97,20 @@ function earlySeconds(r: ScanResult): string {
 
 export const EARLY_TRACTION_LINE =
   'traction unavailable — the snipe tax window is still open. re-scan in 2 minutes.';
+
+/**
+ * Was the creation transaction decoded at all?
+ *
+ * Keyed on the entry point rather than the exemption count. Those two are
+ * written by the same decode but were not always persisted together, so a row
+ * could carry a fresh exemption count beside a stale NULL buy amount -- and a
+ * guard reading the count would then wave through a confident "creator opening
+ * buy: none" for a launch that opened with a creator buy.
+ */
+export function creationUndecoded(r: ScanResult): boolean {
+  const e = r.creation.entryPoint;
+  return r.creation.snipeExemptionCount === null || e === null || e === 'unknown';
+}
 
 /** Did the creator buy their own token inside the launch transaction? */
 export function hasCreatorLaunchBuy(r: ScanResult): boolean {
@@ -169,8 +183,8 @@ function renderEarlyCard(r: ScanResult): string {
   // is precisely the undetermined-as-clean error the card exists to avoid.
   L.push(
     hasCreatorLaunchBuy(r)
-      ? `  🚩 creator opening buy: ${fmtUnits(r.creation.launchBuyAmount!)} ${esc(quote)} bought in the launch transaction`
-      : n === null
+      ? `  🚩 creator opening buy: ${fmtUnits(r.creation.launchBuyAmount!, k.pairDecimals)} ${esc(quote)} bought in the launch transaction`
+      : creationUndecoded(r)
         ? '  ❔ creator opening buy: unknown — the creation transaction could not be decoded'
         : '  · creator opening buy: none in the launch transaction',
   );
@@ -205,7 +219,7 @@ function renderEarlyCompactCard(r: ScanResult, botUsername?: string): string {
   // settled one -- so an undecodable creation transaction would otherwise render
   // byte-identically to a genuinely clean launch. Stated outright instead, with
   // the query mark that distinguishes it from a finding.
-  const undecoded = r.creation.snipeExemptionCount === null;
+  const undecoded = creationUndecoded(r);
   if (undecoded) L.push('❔ creation tx not decoded — exemptions unconfirmed');
   for (const finding of earlyFindings(r).slice(0, undecoded ? 1 : 2)) L.push(`🚩 ${esc(finding)}`);
   L.push('re-scan in 2 min');
@@ -235,7 +249,7 @@ export function renderCard(r: ScanResult): string {
   L.push(`  unique buyers, first ${num(t.windowMinutes, 0)} min: <b>${t.uniqueBuyers30m}</b>`);
   L.push(`  buyer growth: ${t.uniqueBuyers10m} at +10 min → ${t.uniqueBuyers30m} at +${num(t.windowMinutes, 0)} min${t.buyerGrowthRatio !== null ? ` (${ratioStr(t.buyerGrowthRatio)}x)` : ''}`);
   L.push(`  buy/sell tx: ${t.buyTxCount}/${t.sellTxCount}${t.buySellRatio !== null ? ` (${ratioStr(t.buySellRatio)}:1)` : t.buyTxCount ? ' (no sells)' : ''}`);
-  L.push(`  median buy: ${fmtUnits(t.medianBuySize)} ${esc(quote)}`);
+  L.push(`  median buy: ${fmtUnits(t.medianBuySize, k.pairDecimals)} ${esc(quote)}`);
   L.push(`  graduation progress: ${num(k.progressPct, 3)}%`);
   L.push(`  progress velocity: ${num(t.progressVelocityPer10m, 3)}% per 10 min`);
   if (t.peakProgressPct > k.progressPct + 0.01)
@@ -258,7 +272,7 @@ export function renderCard(r: ScanResult): string {
     ? `${f.worst.label.toLowerCase()} — ${f.worst.detail}`
     : 'no flags raised';
   L.push(
-    `<b>Strongest signal:</b> ${esc(strongestSignal(t, quote))}. ` +
+    `<b>Strongest signal:</b> ${esc(strongestSignal(t, quote, k.pairDecimals))}. ` +
       `<b>Worst flag:</b> ${esc(worst)}.`,
   );
   L.push('');

@@ -348,3 +348,41 @@ test('the early full card says nothing about traction beyond the two specified l
     'traction unavailable — the snipe tax window is still open. re-scan in 2 minutes.',
   ]);
 });
+
+// ------------------- review round 5: stale NULLs and pair-token decimals
+test('a stale NULL buy amount is never reported as a confident "none"', async () => {
+  const { creationUndecoded } = await import('../dist/card.js');
+  // the shape the old upsert produced: exemption count decoded, buy amount lost
+  const stale = makeScan({ ageSeconds: 12, snipeExemptionCount: 8, entryPoint: 'launchAndBuy', launchBuyAmount: null });
+  assert.equal(creationUndecoded(stale), false, 'a fully decoded row is not "undecoded"');
+
+  // and a genuinely undecoded row is caught even though the count column alone
+  // would not reveal it
+  const undecoded = makeScan({ ageSeconds: 12, snipeExemptionCount: null, entryPoint: 'unknown', launchBuyAmount: null });
+  assert.equal(creationUndecoded(undecoded), true);
+  assert.match(renderCardText(undecoded), /creator opening buy: unknown/);
+
+  const clean = makeScan({ ageSeconds: 12, snipeExemptionCount: 0, entryPoint: 'launchToken', launchBuyAmount: null });
+  assert.equal(creationUndecoded(clean), false);
+  assert.match(renderCardText(clean), /creator opening buy: none/);
+});
+
+test('quote amounts use the pair token decimals, not a hardcoded 18', () => {
+  // USDG on this chain has 6 decimals; 5 USDG is 5_000_000 base units
+  const usdg = makeScan({
+    ageSeconds: 12, pairSymbol: 'USDG', pairDecimals: 6,
+    snipeExemptionCount: 1, launchBuyAmount: 5_000_000n,
+  });
+  const text = renderCardText(usdg);
+  assert.match(text, /creator opening buy: 5 USDG/, `printed: ${text.split('\n').find((l) => /creator opening buy/.test(l))}`);
+  assert.doesNotMatch(text, /0\.000000000005/, 'an 18-decimal reading would be 10^12 times too small');
+});
+
+test('the settled card also uses pair decimals for the median buy', () => {
+  const usdg = makeScan({
+    ageSeconds: 1800, pairSymbol: 'USDG', pairDecimals: 6,
+    medianBuySize: 12_500_000n, buyers: 9, roundTrippers: 1,
+  });
+  const line = renderCardText(usdg).split('\n').find((l) => /median buy/.test(l));
+  assert.match(line, /median buy: 12\.5 USDG/, `printed: ${line}`);
+});

@@ -30,6 +30,8 @@ const insertLaunch = db.prepare(`
     snipe_exemption_count = COALESCE(excluded.snipe_exemption_count, launches.snipe_exemption_count),
     snipe_exemptions      = COALESCE(excluded.snipe_exemptions, launches.snipe_exemptions),
     entry_point           = excluded.entry_point,
+    launch_buy_amount     = excluded.launch_buy_amount,
+    launch_buy_recipient  = excluded.launch_buy_recipient,
     name                  = COALESCE(excluded.name, launches.name),
     symbol                = COALESCE(excluded.symbol, launches.symbol),
     name_key              = COALESCE(excluded.name_key, launches.name_key),
@@ -145,7 +147,11 @@ export async function decodePending(
 ): Promise<{ decoded: number; failed: number; remaining: number }> {
   const rows = db
     .prepare(
-      `SELECT token, tx_hash FROM launches WHERE snipe_exemption_count IS NULL
+      `SELECT token, tx_hash FROM launches
+       WHERE snipe_exemption_count IS NULL
+          -- also repair rows whose exemption count was decoded while the
+          -- creator's opening buy was dropped by the old upsert
+          OR (entry_point = 'launchAndBuy' AND launch_buy_amount IS NULL)
        ORDER BY launched_at DESC LIMIT ?`,
     )
     .all(Number.isFinite(limit) ? limit : -1) as { token: string; tx_hash: string }[];
@@ -185,7 +191,9 @@ export async function decodePending(
   });
 
   const remaining = (db
-    .prepare('SELECT COUNT(*) AS n FROM launches WHERE snipe_exemption_count IS NULL')
+    .prepare(`SELECT COUNT(*) AS n FROM launches
+              WHERE snipe_exemption_count IS NULL
+                 OR (entry_point = 'launchAndBuy' AND launch_buy_amount IS NULL)`)
     .get() as { n: number }).n;
   return { decoded, failed, remaining };
 }

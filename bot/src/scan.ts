@@ -113,6 +113,12 @@ async function ensureLaunchRow(
       snipe_exemption_count = COALESCE(excluded.snipe_exemption_count, launches.snipe_exemption_count),
       snipe_exemptions      = COALESCE(excluded.snipe_exemptions, launches.snipe_exemptions),
       entry_point           = excluded.entry_point,
+      -- These come from the same decode as entry_point and snipe_exemption_count.
+      -- Omitting them left a row whose exemption count says "decoded" while the
+      -- creator's opening buy stays NULL, which the card then reports as a
+      -- confident "creator opening buy: none".
+      launch_buy_amount     = excluded.launch_buy_amount,
+      launch_buy_recipient  = excluded.launch_buy_recipient,
       name = COALESCE(excluded.name, launches.name),
       symbol = COALESCE(excluded.symbol, launches.symbol),
       name_key = COALESCE(excluded.name_key, launches.name_key),
