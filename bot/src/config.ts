@@ -63,6 +63,24 @@ export const CURVE_BATCH_SIZE = 150;
 export const WINDOW_10_MIN_BLOCKS = BLOCKS_PER_MINUTE * 10; // 6,000
 export const WINDOW_30_MIN_BLOCKS = BLOCKS_PER_MINUTE * 30; // 18,000
 
+/**
+ * Below this age a launch is reported in early mode.
+ *
+ * Traction metrics are not merely small this early -- they are undefined. The
+ * snipe tax window (snipeTaxSeconds, currently 3s) has barely closed, buyer
+ * growth needs two points in time to exist at all, and progress velocity needs
+ * elapsed time in the denominator. Rendering them as zero reads as a finding
+ * when it is really an absence of data, which is the false negative this mode
+ * exists to stop.
+ */
+export const EARLY_WINDOW_SECONDS = Number(process.env.EARLY_WINDOW_SECONDS || 180);
+
+/**
+ * Early-mode results go stale fast: the same launch at 5s and at 90s are
+ * genuinely different answers, so they cannot share the normal 60s cache life.
+ */
+export const EARLY_CACHE_TTL_MS = Number(process.env.EARLY_CACHE_TTL_MS || 10_000);
+
 /** Recheck offsets, in hours after the scan. */
 export const RECHECK_OFFSETS_HOURS = [1, 6, 24, 24 * 7] as const;
 

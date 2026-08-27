@@ -15,7 +15,17 @@ import {
   WINDOW_30_MIN_BLOCKS,
   RECHECK_OFFSETS_HOURS,
   LOOKBACK_DAYS,
+  EARLY_WINDOW_SECONDS,
 } from './config.js';
+
+/** Facts fixed in the launch transaction, available the instant a token exists. */
+export interface CreationFacts {
+  entryPoint: string | null;
+  /** launchAndBuy only: the creator's own opening buy, in the same transaction. */
+  launchBuyAmount: bigint | null;
+  launchBuyRecipient: string | null;
+  snipeExemptionCount: number | null;
+}
 
 export interface ScanResult {
   scanId: number;
@@ -26,6 +36,13 @@ export interface ScanResult {
   launchedAt: number;
   ageSeconds: number;
   currentBlock: number;
+  creation: CreationFacts;
+  /**
+   * True when the token is younger than EARLY_WINDOW_SECONDS, so every traction
+   * metric on this result is structurally undefined rather than measured. The
+   * renderers must not present them.
+   */
+  isEarly: boolean;
 }
 
 /** Locate a token's launch, from the index if present, otherwise from the chain. */
@@ -142,7 +159,28 @@ async function scanTokenInner(token: string, requestedBy?: number): Promise<Scan
     scannedAt,
   });
 
-  const ageSeconds = scannedAt - launch.launchedAt;
+  /**
+   * Age is taken from the curve's own launchedAt() when available, not from the
+   * indexed launch time. The index stores an interpolated block timestamp --
+   * accurate to a second or two on average but drifting up to about seven
+   * seconds -- which is fine for a seven-day window and not fine for a 180-second
+   * one, where it decides which card a user gets.
+   */
+  const launchedAtExact = reads.launchedAt > 0 ? reads.launchedAt : launch.launchedAt;
+  const ageSeconds = Math.max(0, scannedAt - launchedAtExact);
+  const isEarly = ageSeconds < EARLY_WINDOW_SECONDS;
+
+  const creationRow = db
+    .prepare('SELECT entry_point, launch_buy_amount, launch_buy_recipient, snipe_exemption_count FROM launches WHERE token = ?')
+    .get(reads.token.toLowerCase()) as
+    | { entry_point: string | null; launch_buy_amount: string | null; launch_buy_recipient: string | null; snipe_exemption_count: number | null }
+    | undefined;
+  const creation: CreationFacts = {
+    entryPoint: creationRow?.entry_point ?? null,
+    launchBuyAmount: creationRow?.launch_buy_amount ? BigInt(creationRow.launch_buy_amount) : null,
+    launchBuyRecipient: creationRow?.launch_buy_recipient ?? null,
+    snipeExemptionCount: creationRow?.snipe_exemption_count ?? null,
+  };
 
   const info = db.prepare(`
     INSERT INTO scans (
@@ -166,17 +204,26 @@ async function scanTokenInner(token: string, requestedBy?: number): Promise<Scan
     reads.token.toLowerCase(), reads.curve.toLowerCase(), reads.deployer.toLowerCase(),
     reads.symbol, reads.name, scannedAt, Number(head), launch.launchedAt,
     ageSeconds, requestedBy ?? null,
-    traction.uniqueBuyers30m, traction.uniqueBuyers10m, traction.buyerGrowthRatio,
-    traction.buyTxCount, traction.sellTxCount, traction.buySellRatio,
-    String(traction.medianBuySize), traction.progressPct,
-    traction.progressVelocityPer10m, traction.label,
+    // An early scan stores NULL for every traction metric and the label 'early'.
+    // Writing zeros here would be worse than useless: this table exists to pair
+    // an early signal against a later outcome, and a row claiming "0 buyers,
+    // traction none" for a token nobody could have bought yet would train that
+    // pairing on a measurement that was never taken.
+    ...(isEarly
+      ? [null, null, null, null, null, null, null, null, null, 'early']
+      : [
+          traction.uniqueBuyers30m, traction.uniqueBuyers10m, traction.buyerGrowthRatio,
+          traction.buyTxCount, traction.sellTxCount, traction.buySellRatio,
+          String(traction.medianBuySize), traction.progressPct,
+          traction.progressVelocityPer10m, traction.label,
+        ]),
     flags.snipeExemptionCount, reads.creatorTaxBps, flags.creatorTaxMedianBps,
     flags.deployerLaunches7d,
     flags.deployerMedianPeakMcap === null ? null : String(flags.deployerMedianPeakMcap),
     flags.deployerSurvival24h, flags.nameCollision ? 1 : 0,
     reads.buybackEnabled ? 1 : 0, flags.flags.find((f) => f.key === 'custom_pair')?.state === 'raised' ? 1 : 0,
     flags.raised, flags.total,
-    String(reads.mcapInQuote), traction.uniqueBuyers30m, reads.pairToken.toLowerCase(),
+    String(reads.mcapInQuote), isEarly ? null : traction.uniqueBuyers30m, reads.pairToken.toLowerCase(),
     reads.phase, String(reads.realQuoteReserve), String(reads.graduationThreshold),
   );
 
@@ -190,9 +237,11 @@ async function scanTokenInner(token: string, requestedBy?: number): Promise<Scan
     traction,
     flags,
     launchBlock: launch.block,
-    launchedAt: launch.launchedAt,
+    launchedAt: launchedAtExact,
     ageSeconds,
     currentBlock: Number(head),
+    creation,
+    isEarly,
   };
 }
 

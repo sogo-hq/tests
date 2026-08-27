@@ -15,22 +15,22 @@
  * recorded: every request, hit or miss, writes a `scan_events` row.
  */
 
+import type { CompactMeta } from './card.js';
+
 export interface CachedScan {
   /** Full HTML card, for DM. */
   card: string;
   /** Compact HTML card, for groups and inline. */
   compact: string;
-  /** Enough structure to build an inline result without re-scanning. */
-  meta: {
-    symbol: string | null;
-    traction: string;
-    flagsRaised: number;
-    flagsTotal: number;
-    flagsUnknown: number;
-    topFlag: string | null;
-    notFound: boolean;
-  };
+  /**
+   * Enough structure to build an inline result without re-scanning. Uses the
+   * renderer's own type rather than a structural copy, so a field added there
+   * cannot silently drift out of the cached payload.
+   */
+  meta: CompactMeta;
   ts: number;
+  /** Per-entry lifetime. Omitted entries use the cache default. */
+  ttlMs?: number;
 }
 
 /**
@@ -71,6 +71,11 @@ export class ScanCache {
     return token.toLowerCase();
   }
 
+  /** Lifetime for one entry: its own if it set one, otherwise the default. */
+  private lifetime(entry: CachedScan): number {
+    return entry.ttlMs && entry.ttlMs > 0 ? entry.ttlMs : this.ttlMs;
+  }
+
   get(token: string): CachedScan | null {
     const k = this.key(token);
     const hit = this.map.get(k);
@@ -78,7 +83,7 @@ export class ScanCache {
       this.misses++;
       return null;
     }
-    if (Date.now() - hit.ts > this.ttlMs) {
+    if (Date.now() - hit.ts > this.lifetime(hit)) {
       // Expired entries are dropped on read; a stale card is worse than a slow
       // one when the underlying metrics move minute to minute.
       this.map.delete(k);
@@ -101,7 +106,7 @@ export class ScanCache {
    */
   peek(token: string): boolean {
     const hit = this.map.get(this.key(token));
-    return !!hit && Date.now() - hit.ts <= this.ttlMs;
+    return !!hit && Date.now() - hit.ts <= this.lifetime(hit);
   }
 
   set(token: string, value: Omit<CachedScan, 'ts'>): void {
@@ -124,7 +129,7 @@ export class ScanCache {
     const now = Date.now();
     let n = 0;
     for (const [k, v] of this.map) {
-      if (now - v.ts > this.ttlMs) {
+      if (now - v.ts > this.lifetime(v)) {
         this.map.delete(k);
         n++;
       }

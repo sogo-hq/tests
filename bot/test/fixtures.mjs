@@ -1,13 +1,25 @@
 /** Minimal ScanResult shaped like the real thing, for renderer tests. */
+const EARLY_WINDOW_SECONDS = 180;
+
 export function makeScan(over = {}) {
   const flags = over.flags ?? [];
   const raised = flags.filter((f) => f.state === 'raised').length;
   const unknown = flags.filter((f) => f.state === 'unknown').length;
+  const ageSeconds = over.ageSeconds ?? 1800;
   return {
     scanId: 1,
     launchBlock: 100,
     launchedAt: 1_700_000_000,
-    ageSeconds: over.ageSeconds ?? 1800,
+    ageSeconds,
+    // derived exactly as production does, so a fixture cannot assert against an
+    // age/mode pair the real code would never produce
+    isEarly: ageSeconds < EARLY_WINDOW_SECONDS,
+    creation: {
+      entryPoint: over.entryPoint ?? 'launchToken',
+      launchBuyAmount: over.launchBuyAmount ?? null,
+      launchBuyRecipient: over.launchBuyRecipient ?? null,
+      snipeExemptionCount: 'snipeExemptionCount' in over ? over.snipeExemptionCount : 0,
+    },
     currentBlock: 18_100,
     reads: {
       token: '0x147Bbaa458Ab7Cd11E1E478B87f08FE5A42A9E67',

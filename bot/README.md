@@ -120,6 +120,56 @@ never exceed 60 seconds and always reads as `try again in 60s`. The hourly windo
 can be nearly an hour, and `try again in 3400s` is not usable, so anything above
 90 seconds is rendered as minutes.
 
+## Early mode
+
+Degens scan the moment a launch opens. A token five seconds old has no traction
+because nobody has had time to buy it — but rendering that as `TRACTION none`
+reads as a finding about the token rather than an absence of data, which is a
+false negative on the most-scanned case there is.
+
+Under **180 seconds** the card switches to early mode:
+
+```
+VITALS  $COIN
+launched 3s ago · too early for traction
+🚩 deployer launched 86 other tokens in 7d
+🚩 name collides with 4 tokens after homoglyph normalisation
+re-scan in 2 min
+via @vitalscheck_bot · signals only, not financial advice
+```
+
+The traction block is replaced by one line — *traction unavailable — the snipe
+tax window is still open. re-scan in 2 minutes.* — and round-trippers, buyer
+growth and progress velocity are **absent**, not zeroed. They are structurally
+undefined this early: buyer growth needs two points in time to exist, velocity
+needs elapsed time in the denominator, and the snipe tax window has barely shut.
+
+What early mode still shows is everything fixed at creation or drawn from the
+index of *other* launches — the snipe-tax exemption count, the creator's own buy
+inside the launch transaction, creator tax against the median, buyback, deployer
+history, and ticker collisions. That is real signal: the live example above is a
+three-second-old token already carrying four flags.
+
+Three details worth knowing:
+
+- **Age comes from the curve's `launchedAt()`, not the index.** The indexed
+  launch time is an interpolated block timestamp, accurate to a second or two but
+  drifting up to about seven — fine for a seven-day window, not fine for a
+  180-second one where it decides which card a user gets.
+- **Early results cache for 10s, not 60s.** The same launch at 5s and at 90s are
+  different answers, and one of them says "too early" while the other has real
+  traction.
+- **An early scan stores NULL for every traction metric and the label `early`.**
+  Writing zeros would be worse than useless: the scans table exists to pair an
+  early signal against a later outcome, and a row claiming "0 buyers, traction
+  none" for a token nobody could have bought yet would train that pairing on a
+  measurement never taken.
+
+One deviation: the compact early card also counts the **custom pair** flag, which
+the brief's list omitted. It meets the stated criterion — fixed at creation,
+available now, not traction-derived — and dropping it would make the same token
+report a different flag total before and after 180s.
+
 ## Failure behaviour
 
 Every failure produces a reply, on all three surfaces. A DM's "Scanning…"

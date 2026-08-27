@@ -3,6 +3,7 @@ import type { TractionMetrics } from './metrics/traction.js';
 import type { FlagResult } from './metrics/flags.js';
 import { DISCLAIMER, EXPLORER_URL } from './config.js';
 import { clamp, clampMessage, MAX_NAME, MAX_TICKER, TELEGRAM_MAX_MESSAGE } from './text.js';
+import { EARLY_WINDOW_SECONDS } from './config.js';
 
 export { TELEGRAM_MAX_MESSAGE };
 
@@ -84,7 +85,123 @@ function strongestSignal(t: TractionMetrics, quote: string): string {
   return cands.sort((a, b) => b.weight - a.weight)[0]!.text;
 }
 
+
+// ---------------------------------------------------------------------------
+// Early mode — under EARLY_WINDOW_SECONDS old
+// ---------------------------------------------------------------------------
+
+/** Exact seconds, because at this age "1m" would throw away the useful part. */
+function earlySeconds(r: ScanResult): string {
+  return `${Math.max(0, Math.floor(r.ageSeconds))}s`;
+}
+
+export const EARLY_TRACTION_LINE =
+  'traction unavailable — the snipe tax window is still open. re-scan in 2 minutes.';
+
+/** Did the creator buy their own token inside the launch transaction? */
+export function hasCreatorLaunchBuy(r: ScanResult): boolean {
+  return r.creation.launchBuyAmount !== null && r.creation.launchBuyAmount > 0n;
+}
+
+/**
+ * Findings that are legitimately available seconds after launch.
+ *
+ * Everything here is fixed in the creation transaction or derived from the
+ * index of *other* launches, so none of it depends on trading having happened.
+ * Ordered so the highest-value signal leads: the exemption count first -- no
+ * view function anywhere exposes it -- then the creator's own opening buy, then
+ * the remaining raised flags by severity.
+ *
+ * Undetermined flags are deliberately excluded, exactly as in the normal
+ * compact card: "we could not determine this" must never occupy a slot the
+ * reader will parse as a finding.
+ */
+export function earlyFindings(r: ScanResult): string[] {
+  const out: string[] = [];
+  const n = r.creation.snipeExemptionCount;
+  if (n !== null && n > 0) {
+    out.push(`${n} wallet${n === 1 ? '' : 's'} pre-exempted from the opening tax`);
+  }
+  if (hasCreatorLaunchBuy(r)) out.push('creator bought in the launch tx');
+  for (const fl of r.flags.flags
+    .filter((f) => f.state === 'raised' && f.key !== 'snipe_exemptions')
+    .sort((a, b) => b.severity - a.severity)) {
+    out.push(fl.compactDetail);
+  }
+  return out;
+}
+
+/**
+ * Full card for a launch that is too young to have measurable traction.
+ *
+ * Shows only what is fixed at creation or comes from the index. There is no
+ * TRACTION block at all -- not a zeroed one -- because at this age every metric
+ * in it is undefined rather than small, and a reader who sees "TRACTION none"
+ * takes it as a finding about the token instead of an absence of data.
+ */
+function renderEarlyCard(r: ScanResult): string {
+  const { reads: k, flags: f } = r;
+  const quote = clamp(k.pairSymbol ?? 'quote', MAX_TICKER);
+  const sym = k.symbol ? esc(clamp(k.symbol, MAX_TICKER)) : '?';
+  const name = k.name ? esc(clamp(k.name, MAX_NAME)) : 'unknown';
+
+  const L: string[] = [];
+  L.push(`<b>${sym}</b> — ${name}`);
+  L.push(`<code>${k.token}</code>`);
+  L.push(`<b>launched ${earlySeconds(r)} ago — too early for traction</b>`);
+  L.push(`phase ${esc(k.phaseName)} · pair ${esc(quote)}`);
+  L.push('');
+  L.push(EARLY_TRACTION_LINE);
+  L.push('');
+
+  L.push(`<b>FIXED AT CREATION</b>`);
+  const n = r.creation.snipeExemptionCount;
+  L.push(
+    n === null
+      ? '  ❔ snipe-tax exemptions: creation transaction not decoded — not confirmed clean'
+      : n > 0
+        ? `  🚩 snipe-tax exemptions: ${n} wallet${n === 1 ? '' : 's'} pre-exempted from the opening tax`
+        : '  · snipe-tax exemptions: none — no wallets pre-exempted at creation',
+  );
+  L.push(
+    hasCreatorLaunchBuy(r)
+      ? `  🚩 creator opening buy: ${fmtUnits(r.creation.launchBuyAmount!)} ${esc(quote)} bought in the launch transaction`
+      : '  · creator opening buy: none in the launch transaction',
+  );
+  L.push('');
+
+  L.push(`<b>FLAGS  ${f.raised} of ${f.total}</b>${f.unknown ? ` · ${f.unknown} undetermined` : ''}`);
+  for (const fl of f.flags) {
+    if (fl.key === 'snipe_exemptions') continue; // already stated above
+    const mark = fl.state === 'raised' ? '🚩' : fl.state === 'unknown' ? '❔' : '·';
+    L.push(`  ${mark} ${esc(fl.label)}: ${esc(fl.detail)}`);
+  }
+  L.push(`  ${f.buyback.enabled ? '✅' : '·'} ${esc(f.buyback.detail)}`);
+  L.push('');
+
+  const worst = f.worst ? `${f.worst.label.toLowerCase()} — ${f.worst.detail}` : 'no flags raised';
+  L.push(`<b>Worst flag:</b> ${esc(worst)}. <b>Traction:</b> not yet measurable.`);
+  L.push('');
+  L.push(`<a href="${EXPLORER_URL}/address/${k.token}">token</a> · <a href="${EXPLORER_URL}/address/${k.curve}">curve</a> · <a href="${EXPLORER_URL}/address/${k.deployer}">deployer</a>`);
+  L.push(`<i>${DISCLAIMER}</i>`);
+  return clampMessage(L.join('\n'));
+}
+
+/** Compact card for a launch that is too young to have measurable traction. */
+function renderEarlyCompactCard(r: ScanResult, botUsername?: string): string {
+  const L: string[] = [];
+  L.push(`<b>VITALS</b>  <b>${esc(ticker(r))}</b>`);
+  L.push(`launched ${earlySeconds(r)} ago · too early for traction`);
+  for (const finding of earlyFindings(r).slice(0, 2)) L.push(`🚩 ${esc(finding)}`);
+  L.push('re-scan in 2 min');
+  const via = botUsername ? `via @${esc(botUsername)} · ` : '';
+  L.push(`<i>${via}${COMPACT_DISCLAIMER}</i>`);
+  return clampMessage(L.join('\n'));
+}
+
 export function renderCard(r: ScanResult): string {
+  if (r.isEarly) return renderEarlyCard(r);
+
   const { reads: k, traction: t, flags: f } = r;
   const quote = clamp(k.pairSymbol ?? 'quote', MAX_TICKER);
   const sym = k.symbol ? esc(clamp(k.symbol, MAX_TICKER)) : '?';
@@ -161,6 +278,9 @@ export interface CompactMeta {
   /** Compact phrasing of the highest-signal raised flag, or null if none. */
   topFlag: string | null;
   notFound: boolean;
+  /** Younger than EARLY_WINDOW_SECONDS: traction is undefined, not zero. */
+  early: boolean;
+  ageSeconds: number;
 }
 
 function ticker(r: ScanResult): string {
@@ -184,6 +304,7 @@ function ticker(r: ScanResult): string {
  * one.
  */
 export function renderCompactCard(r: ScanResult, botUsername?: string): string {
+  if (r.isEarly) return renderEarlyCompactCard(r, botUsername);
   const { reads: k, traction: t, flags: f } = r;
   const L: string[] = [];
 
@@ -225,12 +346,16 @@ export function compactMeta(r: ScanResult): CompactMeta {
   const top = topRaisedFlags(r, 1)[0] ?? null;
   return {
     symbol: r.reads.symbol ? clamp(r.reads.symbol, MAX_TICKER) : null,
-    traction: r.traction.label,
+    // 'early' rather than the computed label: reporting 'none' for a token
+    // nobody has had time to buy is the false negative this mode removes.
+    traction: r.isEarly ? 'early' : r.traction.label,
     flagsRaised: r.flags.raised,
     flagsTotal: r.flags.total,
     flagsUnknown: r.flags.unknown,
-    topFlag: top ? top.compactDetail : null,
+    topFlag: r.isEarly ? (earlyFindings(r)[0] ?? null) : top ? top.compactDetail : null,
     notFound: false,
+    early: r.isEarly,
+    ageSeconds: Math.max(0, Math.floor(r.ageSeconds)),
   };
 }
 
@@ -238,7 +363,7 @@ export function compactMeta(r: ScanResult): CompactMeta {
 export function inlineDescription(m: CompactMeta): string {
   if (m.notFound) return 'not a pons v2 launch on this chain';
   const parts = [
-    `traction ${m.traction}`,
+    m.early ? `launched ${m.ageSeconds}s ago · too early for traction` : `traction ${m.traction}`,
     `${m.flagsRaised} flag${m.flagsRaised === 1 ? '' : 's'}`,
   ];
   if (m.topFlag) parts.push(m.topFlag);

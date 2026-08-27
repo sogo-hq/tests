@@ -4,6 +4,7 @@ import { renderCard, renderCompactCard, renderCompactNotFound, compactMeta, type
 import { scanCache, type CachedScan } from './cache.js';
 import { userQuota, floodQuota, scanSemaphore, SlotTimeout, formatRetry } from './quota.js';
 import { db } from './db.js';
+import { EARLY_CACHE_TTL_MS } from './config.js';
 
 export type ScanSource = 'dm' | 'group' | 'inline' | 'cli';
 
@@ -127,7 +128,7 @@ function render(token: string, result: Awaited<ReturnType<typeof scanToken>>, bo
       compact,
       meta: {
         symbol: null, traction: 'unknown', flagsRaised: 0, flagsTotal: 0,
-        flagsUnknown: 0, topFlag: null, notFound: true,
+        flagsUnknown: 0, topFlag: null, notFound: true, early: false, ageSeconds: 0,
       },
     };
   }
@@ -157,7 +158,17 @@ function sharedScan(token: string, userId?: number, botUsername?: string): Promi
       const result = await scanToken(token, userId);
       const rendered = render(token, result, botUsername);
       // Cached here, not at the call site: the caller may already have timed out.
-      scanCache.set(token, { card: rendered.card, compact: rendered.compact, meta: rendered.meta });
+      //
+      // An early-mode card is only true for a few seconds -- the same launch at
+      // 5s and at 90s are different answers, and one of them says "too early"
+      // while the other has real traction -- so it gets a much shorter life than
+      // the settled card that follows it.
+      scanCache.set(token, {
+        card: rendered.card,
+        compact: rendered.compact,
+        meta: rendered.meta,
+        ttlMs: rendered.meta.early ? EARLY_CACHE_TTL_MS : undefined,
+      });
       return rendered;
     } finally {
       release();
