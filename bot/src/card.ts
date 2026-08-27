@@ -248,12 +248,16 @@ export function inlineDescription(m: CompactMeta): string {
   return s.length > 120 ? `${s.slice(0, 117)}…` : s;
 }
 
+/** The one sentence used for an unknown token, on every surface. */
+export const NOT_A_PONS_LAUNCH =
+  'not a pons v2 launch. this bot only covers pons v2 on Robinhood Chain.';
+
 /** Compact card for an address that the factory has no record of. */
 export function renderCompactNotFound(token: string, botUsername?: string): string {
   const via = botUsername ? `via @${esc(botUsername)} · ` : '';
   return [
     `<b>VITALS</b>  <code>${esc(token.slice(0, 6))}…${esc(token.slice(-4))}</code>`,
-    'not a pons v2 launch — the factory has no record of this token',
+    NOT_A_PONS_LAUNCH,
     `<i>${via}${COMPACT_DISCLAIMER}</i>`,
   ].join('\n');
 }

@@ -74,10 +74,25 @@ function ratio(a: bigint, b: bigint): number {
   return Number((a * SCALE) / b) / 1e12;
 }
 
-async function tryRead<T>(fn: () => Promise<T>, fallback: T): Promise<T> {
+/**
+ * Read a contract value, falling back when the call reverts.
+ *
+ * Reverts here are routine and expected rather than exceptional: optional
+ * interfaces such as getTokenInfo() are simply absent on some tokens, and a
+ * custom pair asset need not implement symbol(). Logging each one would bury
+ * real problems under thousands of lines a day, so the fallback IS the handling.
+ * Set PONS_DEBUG_READS=1 when a card shows unexpected blanks and you need to see
+ * which read gave up.
+ */
+const DEBUG_READS = process.env.PONS_DEBUG_READS === '1';
+
+async function tryRead<T>(fn: () => Promise<T>, fallback: T, label = 'read'): Promise<T> {
   try {
     return await fn();
-  } catch {
+  } catch (err) {
+    if (DEBUG_READS) {
+      console.warn(`[reads] ${label} failed, using fallback:`, String((err as Error)?.message ?? err).slice(0, 120));
+    }
     return fallback;
   }
 }
@@ -94,16 +109,23 @@ async function tryRead<T>(fn: () => Promise<T>, fallback: T): Promise<T> {
 export async function readToken(tokenAddr: string): Promise<TokenReads | null> {
   const token = tokenAddr as Address;
 
-  const info = await tryRead(
-    () =>
-      client.readContract({
-        address: FACTORY,
-        abi: factoryAbi,
-        functionName: 'getLaunchedToken',
-        args: [token],
-      }),
-    null as any,
-  );
+  /**
+   * The one read that must NOT fall back.
+   *
+   * Everything below is optional and may legitimately revert, but this call is
+   * what decides whether the token is a pons launch at all. Swallowing a failure
+   * here made an RPC outage indistinguishable from a genuine miss, and the bot
+   * told users "not a pons v2 launch" -- asserting a fact about the chain it had
+   * just failed to reach. Letting it throw keeps the two apart: a struct with
+   * exists=false is a real answer, anything thrown is not an answer at all and
+   * surfaces as "scan failed, try again".
+   */
+  const info: any = await client.readContract({
+    address: FACTORY,
+    abi: factoryAbi,
+    functionName: 'getLaunchedToken',
+    args: [token],
+  });
   if (!info || !info.exists) return null;
 
   const curve = info.curve as Address;

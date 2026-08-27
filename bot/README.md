@@ -120,6 +120,38 @@ never exceed 60 seconds and always reads as `try again in 60s`. The hourly windo
 can be nearly an hour, and `try again in 3400s` is not usable, so anything above
 90 seconds is rendered as minutes.
 
+## Failure behaviour
+
+Every failure produces a reply, on all three surfaces. A DM's "Scanning…"
+notice is always resolved by **editing** it — a fresh message would leave the
+notice sitting above the answer, still reading as in-progress.
+
+| case | what the user sees |
+|---|---|
+| not a pons v2 launch | `not a pons v2 launch. this bot only covers pons v2 on Robinhood Chain.` |
+| anything else | `scan failed, try again` |
+
+The full error goes to the server log; an RPC stack trace in a group chat helps
+nobody and leaks internals. Neither a not-found nor a failed scan consumes scan
+quota — a user should not be charged for a token that does not exist. Abuse is
+still bounded, because the flood cap counts every request either way.
+
+There are no bare catches: every catch handles the error or logs it, and a test
+fails the build if one is reintroduced.
+
+Two bugs this behaviour came from:
+
+- `performScan` was called outside any try/catch, so anything it threw escaped to
+  `bot.catch` and left "Scanning…" on screen permanently, with no reply and no
+  way for the user to tell the scan had ended.
+- Worse, `readToken` wrapped its *primary* read — `getLaunchedToken`, the call
+  that decides whether a token is a pons launch at all — in the same
+  fallback-on-error helper as the optional reads around it. An RPC outage was
+  therefore indistinguishable from a genuine miss, and the bot answered "not a
+  pons v2 launch": asserting a fact about a chain it had just failed to reach.
+  That read is now allowed to throw, so "the chain says no" and "we could not
+  ask the chain" are different answers.
+
 ## Known limitation
 
 **There is no per-user concurrency cap.** One user pasting ten distinct

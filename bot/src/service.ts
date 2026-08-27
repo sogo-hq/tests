@@ -7,6 +7,13 @@ import { db } from './db.js';
 
 export type ScanSource = 'dm' | 'group' | 'inline' | 'cli';
 
+/**
+ * What a user sees when a scan fails for a reason that is not their problem.
+ * The real error goes to the server log -- an RPC stack trace in a group chat
+ * helps nobody and leaks internals.
+ */
+export const SCAN_FAILED = 'scan failed, try again';
+
 export type ScanOutcome =
   | { kind: 'ok'; card: string; compact: string; meta: CompactMeta; cacheHit: boolean; durationMs: number }
   | { kind: 'not_found'; card: string; compact: string; meta: CompactMeta; cacheHit: boolean; durationMs: number }
@@ -159,9 +166,11 @@ function sharedScan(token: string, userId?: number, botUsername?: string): Promi
   })();
 
   inFlight.set(key, run);
-  // Callers attach their own handlers; this one only stops Node treating a
-  // fully-abandoned rejection as unhandled.
-  run.catch(() => {});
+  // Every real caller awaits `run` and handles its rejection. This handler
+  // exists only so that a scan whose callers have all timed out does not count
+  // as an unhandled rejection, which Node escalates to a process exit. The
+  // error itself is logged by performScan's catch on the awaiting path.
+  run.catch(() => { /* handled by awaiting callers in performScan */ });
   return run;
 }
 
@@ -227,8 +236,10 @@ export async function performScan(req: ScanRequest): Promise<ScanOutcome> {
   }
 
   // 2. Scan quota. Counts real scans only -- a cache hit did no RPC.
+  let consumedScanQuota = false;
   if (quotaKey !== undefined) {
     const decision = userQuota.consume(quotaKey);
+    consumedScanQuota = decision.allowed;
     if (!decision.allowed) {
       const d = Date.now() - started;
       logEvent(req, false, d, `rate_limited_${decision.window}`);
@@ -253,6 +264,11 @@ export async function performScan(req: ScanRequest): Promise<ScanOutcome> {
 
     const d = Date.now() - started;
     const kind = rendered.meta.notFound ? 'not_found' : 'ok';
+    // A token the factory has never heard of is not a scan the user should be
+    // charged for -- they asked a fair question and got no answer.
+    if (kind === 'not_found' && consumedScanQuota && quotaKey !== undefined) {
+      userQuota.refund(quotaKey);
+    }
     logEvent(req, false, d, kind, rendered.scanId);
     return {
       kind,
@@ -265,13 +281,18 @@ export async function performScan(req: ScanRequest): Promise<ScanOutcome> {
   } catch (err: any) {
     const d = Date.now() - started;
     if (err instanceof DeadlineExceeded || err instanceof SlotTimeout) {
-      // The scan itself continues and will still fill the cache.
+      // The scan itself continues and will still fill the cache, so the user is
+      // not charged for work they will get the benefit of on retry either.
+      if (consumedScanQuota && quotaKey !== undefined) userQuota.refund(quotaKey);
       logEvent(req, false, d, 'timeout');
       return { kind: 'busy', message: 'still indexing, try again in a moment' };
     }
-    console.error('[scan] failed:', err);
+    // A failed scan is not the user's fault and is not charged to them. The
+    // full error goes to the server log; the user gets a plain sentence.
+    if (consumedScanQuota && quotaKey !== undefined) userQuota.refund(quotaKey);
+    console.error(`[scan] failed for ${token} (${req.source}):`, err);
     logEvent(req, false, d, 'error');
-    return { kind: 'error', message: String(err?.shortMessage ?? err?.message ?? err).slice(0, 200) };
+    return { kind: 'error', message: SCAN_FAILED };
   }
 }
 
@@ -294,7 +315,7 @@ export function withDeadline<T>(p: Promise<T>, ms: number): Promise<T> {
     // Still attach a handler before walking away: returning without one leaves
     // an unhandled rejection if the abandoned promise later fails, which Node
     // escalates to a process crash by default.
-    p.catch(() => {});
+    p.catch(() => { /* abandoned by design; the caller is told via DeadlineExceeded */ });
     return Promise.reject(new DeadlineExceeded());
   }
   return new Promise<T>((resolve, reject) => {

@@ -446,3 +446,59 @@ test('regression: over-long and truncated hex strings are rejected', async () =>
   assert.equal(normaliseToken('0x' + 'a'.repeat(64)), null, 'a 32-byte value is not an address');
   assert.equal(normaliseToken('not hex at all'), null);
 });
+
+// ------------------------------------------------ error paths / quota refund
+test('quota: a refunded scan does not count against the user', async () => {
+  const { UserQuota } = await import('../dist/quota.js');
+  const q = new UserQuota(3, 100);
+  q.consume(1); q.consume(1); q.consume(1);
+  assert.equal(q.check(1).allowed, false, 'three consumed');
+  q.refund(1);
+  assert.equal(q.check(1).allowed, true, 'refund frees a slot');
+  q.consume(1);
+  assert.equal(q.check(1).allowed, false, 'and it can be spent again');
+});
+
+test('quota: refund never goes negative or leaks slots', async () => {
+  const { UserQuota } = await import('../dist/quota.js');
+  const q = new UserQuota(2, 10);
+  q.refund(99);            // refund with nothing consumed
+  q.refund(99);
+  assert.equal(q.consume(99).allowed, true);
+  assert.equal(q.consume(99).allowed, true);
+  assert.equal(q.consume(99).allowed, false, 'still capped at 2 after stray refunds');
+});
+
+test('the not-found sentence is one shared string across every surface', async () => {
+  const { NOT_A_PONS_LAUNCH, renderCompactNotFound } = await import('../dist/card.js');
+  assert.equal(NOT_A_PONS_LAUNCH,
+    'not a pons v2 launch. this bot only covers pons v2 on Robinhood Chain.');
+  const card = renderCompactNotFound('0x147Bbaa458Ab7Cd11E1E478B87f08FE5A42A9E67', 'vitalscheck_bot');
+  assert.ok(card.includes(NOT_A_PONS_LAUNCH));
+  assert.ok(card.trim().endsWith('not financial advice</i>'), 'still carries the disclaimer');
+});
+
+test('the user-facing failure message never leaks internal error text', async () => {
+  const { SCAN_FAILED } = await import('../dist/service.js');
+  assert.equal(SCAN_FAILED, 'scan failed, try again');
+  assert.ok(!/stack|Error:|0x[0-9a-f]{40}|http/i.test(SCAN_FAILED));
+});
+
+test('no bare catch survives in the shipped source', async () => {
+  const { readdirSync, readFileSync, statSync } = await import('node:fs');
+  const walk = (dir) => readdirSync(dir).flatMap((f) => {
+    const p = `${dir}/${f}`;
+    return statSync(p).isDirectory() ? walk(p) : p.endsWith('.ts') ? [p] : [];
+  });
+  const offenders = [];
+  for (const file of walk('src')) {
+    const src = readFileSync(file, 'utf8');
+    src.split('\n').forEach((line, i) => {
+      // `catch {` with no binding, or a catch whose body is empty
+      if (/\bcatch\s*\{\s*$/.test(line) || /\bcatch\s*\([^)]*\)\s*\{\s*\}/.test(line)) {
+        offenders.push(`${file}:${i + 1}: ${line.trim()}`);
+      }
+    });
+  }
+  assert.deepEqual(offenders, [], `bare catch found:\n${offenders.join('\n')}`);
+});

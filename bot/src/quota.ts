@@ -70,6 +70,21 @@ export class UserQuota {
     return decision;
   }
 
+  /**
+   * Give back one consumed scan.
+   *
+   * A scan that found nothing, or failed outright, should not count against the
+   * user: they asked a reasonable question and got no answer. Abuse is still
+   * bounded, because the flood cap counts every request whether or not it is
+   * refunded here.
+   */
+  refund(userId: number): void {
+    for (const map of [this.minute, this.hour]) {
+      const list = map.get(userId);
+      if (list && list.length) list.pop();
+    }
+  }
+
   /** Drop users with no activity in the last hour. */
   sweep(now = Date.now()): number {
     let dropped = 0;

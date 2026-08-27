@@ -161,17 +161,22 @@ ok('every inline path answers with at least one result and a valid id');
 }
 
 // --- rate limiting reaches inline too --------------------------------------
+// Not-found scans are refunded, so they cannot exhaust the scan quota by
+// design. The flood cap is what bounds this: it counts EVERY request including
+// cache hits, which is exactly the replay a single cached card would otherwise
+// allow. Re-using one address keeps this fast -- the first is a real scan, the
+// rest are cache hits, and the cap must still bite.
 const SPAMMER = 4242;
-for (let i = 0; i < 12; i++) {
-  scanCache.sweep();
-  await bot.handleUpdate(inline('0x' + i.toString(16).padStart(2, '0').repeat(20), SPAMMER));
-  drain();
+const SPAM_ADDR = '0x' + 'c7'.repeat(20);
+let limitedAt = null;
+for (let i = 1; i <= 40; i++) {
+  await bot.handleUpdate(inline(SPAM_ADDR, SPAMMER));
+  const res = drain()[0].payload.results[0];
+  if (/[Rr]ate limited/.test(res.title + res.description)) { limitedAt = i; break; }
 }
-await bot.handleUpdate(inline('0xdeadbeef' + '11'.repeat(16), SPAMMER));
-c = drain();
-const rl = c[0].payload.results[0];
-assert.match(rl.title + rl.description, /[Rr]ate limited/, `expected a rate-limit article, got: ${rl.title} / ${rl.description}`);
-ok(`inline is rate limited too: "${rl.description}"`);
+assert.ok(limitedAt, 'inline was never rate limited across 40 requests');
+assert.ok(limitedAt > 25 && limitedAt <= 35, `flood cap tripped at request ${limitedAt}, expected ~31`);
+ok(`inline is rate limited too: flood cap tripped at request ${limitedAt} (cache hits counted)`);
 
 // --- /stats renders and is valid HTML --------------------------------------
 await bot.handleUpdate(msg('private', '/stats', -400));

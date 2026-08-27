@@ -1,6 +1,6 @@
 import { Bot, type Context } from 'grammy';
 import type { InlineQueryResult } from 'grammy/types';
-import { performScan, normaliseToken, looksLikeTxHash, type ScanSource, type ScanOutcome } from './service.js';
+import { performScan, normaliseToken, looksLikeTxHash, SCAN_FAILED, type ScanSource, type ScanOutcome } from './service.js';
 import { scanCache, startCacheReporter } from './cache.js';
 import { userQuota, floodQuota, scanSemaphore, startQuotaSweeper, formatRetry } from './quota.js';
 import { inlineDescription, COMPACT_DISCLAIMER } from './card.js';
@@ -96,28 +96,59 @@ async function handleScan(ctx: Context, raw: string): Promise<void> {
     notice = await ctx.reply(`Scanning <code>${token}</code>…`, { parse_mode: 'HTML', ...replyOpts });
   }
 
-  const outcome = await performScan({
-    token,
-    source,
-    userId: ctx.from?.id,
-    chatId: ctx.chat?.id,
-    quotaKey: quotaIdentity(ctx),
-    botUsername: usernameOf(ctx),
-  });
+  // performScan converts anything it can into an outcome, but the reply path
+  // must not depend on that discipline holding: anything thrown here would
+  // otherwise escape to bot.catch, leaving "Scanning..." on screen forever with
+  // the user given no reason and no way to tell it is finished.
+  let outcome: ScanOutcome;
+  try {
+    outcome = await performScan({
+      token,
+      source,
+      userId: ctx.from?.id,
+      chatId: ctx.chat?.id,
+      quotaKey: quotaIdentity(ctx),
+      botUsername: usernameOf(ctx),
+    });
+  } catch (err) {
+    console.error(`[scan] unexpected failure for ${token} (${source}):`, err);
+    outcome = { kind: 'error', message: SCAN_FAILED };
+  }
 
-  const text = messageFor(outcome, isGroup);
+  await deliver(ctx, notice, messageFor(outcome, isGroup), replyOpts);
+}
+
+/**
+ * Deliver a result, resolving the "Scanning..." notice if one was posted.
+ *
+ * Editing rather than sending matters: a fresh message would leave the notice
+ * sitting above it, which reads as though the scan is still running.
+ */
+async function deliver(
+  ctx: Context,
+  notice: { chat: { id: number }; message_id: number } | null,
+  text: string,
+  replyOpts: Record<string, unknown>,
+): Promise<void> {
   const opts = { parse_mode: 'HTML' as const, link_preview_options: { is_disabled: true } };
 
-  if (notice) {
-    // If the notice was deleted while the scan ran, the edit fails -- fall back
-    // to a fresh message rather than losing a result that already cost a scan.
-    try {
-      await ctx.api.editMessageText(notice.chat.id, notice.message_id, text, opts);
-    } catch {
-      await ctx.reply(text, { ...opts, ...replyOpts });
-    }
-  } else {
+  if (!notice) {
     await ctx.reply(text, { ...opts, ...replyOpts });
+    return;
+  }
+
+  try {
+    await ctx.api.editMessageText(notice.chat.id, notice.message_id, text, opts);
+  } catch (editErr) {
+    // The notice can legitimately be gone -- deleted by a user or an admin --
+    // so fall back to a fresh message. Logged rather than swallowed: a
+    // persistent edit failure means every scan is posting twice.
+    console.error('[scan] editMessageText failed, sending a new message instead:', editErr);
+    try {
+      await ctx.reply(text, { ...opts, ...replyOpts });
+    } catch (replyErr) {
+      console.error('[scan] could not deliver the result at all:', replyErr);
+    }
   }
 }
 
@@ -132,13 +163,22 @@ function messageFor(outcome: ScanOutcome, compact: boolean): string {
     case 'busy':
       return `⏳ ${outcome.message}`;
     case 'error':
-      return `Scan failed: ${outcome.message}`;
+      return outcome.message;
   }
 }
 
 // ---------------------------------------------------------------------------
 // Inline mode
 // ---------------------------------------------------------------------------
+
+/**
+ * A one-line inline card for an outcome that is not a scan result. Carries the
+ * same attribution and disclaimer as every other card the bot emits.
+ */
+function transientCard(ctx: Context, line: string): string {
+  const via = ctx.me?.username ? `via @${ctx.me.username} · ` : '';
+  return `<b>VITALS</b>\n${line}\n<i>${via}${COMPACT_DISCLAIMER}</i>`;
+}
 
 function article(id: string, title: string, description: string, text: string): InlineQueryResult {
   return {
@@ -247,7 +287,7 @@ async function handleInline(ctx: Context): Promise<void> {
           `rl:${token}:${outcome.retryAfterSec}`,
           'Rate limited',
           outcome.message,
-          `<b>VITALS</b>\n⏳ ${outcome.message}\n<i>${COMPACT_DISCLAIMER}</i>`,
+          transientCard(ctx, `⏳ ${outcome.message}`),
         ),
       ]);
       return;
@@ -257,7 +297,7 @@ async function handleInline(ctx: Context): Promise<void> {
           `busy:${token}`,
           'Still indexing',
           outcome.message,
-          `<b>VITALS</b>\n⏳ ${outcome.message}\n<i>${COMPACT_DISCLAIMER}</i>`,
+          transientCard(ctx, `⏳ ${outcome.message}`),
         ),
       ]);
       return;
@@ -267,7 +307,7 @@ async function handleInline(ctx: Context): Promise<void> {
           `err:${token}`,
           'Scan failed',
           outcome.message.slice(0, 100),
-          `<b>VITALS</b>\nScan failed.\n<i>${COMPACT_DISCLAIMER}</i>`,
+          transientCard(ctx, outcome.message),
         ),
       ]);
       return;

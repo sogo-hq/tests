@@ -20,6 +20,26 @@ export interface LaunchCalldata {
   buyRecipient: string | null;
 }
 
+/**
+ * Selectors already reported as undecodable.
+ *
+ * A decode failure is handled -- the count becomes null and the card says
+ * "undetermined" rather than "clean" -- but it is still worth surfacing once
+ * per selector. A new launch entry point appearing on chain is exactly the
+ * event that would quietly blind the highest-value flag, and it would otherwise
+ * show up only as a slow drift in the undetermined count.
+ */
+const reportedSelectors = new Set<string>();
+
+function reportUndecodable(selector: string, err: unknown): void {
+  if (reportedSelectors.has(selector)) return;
+  reportedSelectors.add(selector);
+  console.warn(
+    `[exemptions] cannot decode launch calldata with selector ${selector} — ` +
+    `recorded as undetermined, never as clean. ${String((err as Error)?.message ?? err).slice(0, 160)}`,
+  );
+}
+
 const UNKNOWN: LaunchCalldata = {
   exemptionCount: null,
   exemptions: [],
@@ -55,7 +75,9 @@ export function decodeLaunchCalldata(input: Hex): LaunchCalldata {
   let selector: Hex;
   try {
     selector = slice(input, 0, 4);
-  } catch {
+  } catch (err) {
+    // Calldata too short to carry a selector; nothing to decode.
+    reportUndecodable('<malformed>', err);
     return UNKNOWN;
   }
 
@@ -76,7 +98,8 @@ export function decodeLaunchCalldata(input: Hex): LaunchCalldata {
         buyAmount: null,
         buyRecipient: null,
       };
-    } catch {
+    } catch (err) {
+      reportUndecodable(selector, err);
       return { ...UNKNOWN, entryPoint: 'launchToken' };
     }
   }
@@ -117,7 +140,8 @@ export function decodeLaunchCalldata(input: Hex): LaunchCalldata {
       buyAmount,
       buyRecipient,
     };
-  } catch {
+  } catch (err) {
+    reportUndecodable(selector, err);
     return UNKNOWN;
   }
 }
@@ -127,7 +151,10 @@ export async function fetchLaunchCalldata(txHash: Hex): Promise<LaunchCalldata> 
   try {
     const tx = await client.getTransaction({ hash: txHash });
     return decodeLaunchCalldata(tx.input);
-  } catch {
+  } catch (err) {
+    // The transaction could not be fetched at all. Recorded as undetermined,
+    // which the card reports as such -- never as a clean zero.
+    console.warn(`[exemptions] could not fetch launch tx ${txHash}:`, String((err as Error)?.message ?? err).slice(0, 160));
     return UNKNOWN;
   }
 }
