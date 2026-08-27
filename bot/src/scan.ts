@@ -45,6 +45,13 @@ export interface ScanResult {
    * renderers must not present them.
    */
   isEarly: boolean;
+  /**
+   * The age threshold that decided isEarly for THIS scan. Not always
+   * EARLY_WINDOW_SECONDS: without an exact launch time it is widened by the
+   * index's drift margin. Anything reasoning about how long the early card
+   * stays true has to use this number, not the constant.
+   */
+  earlyThresholdSeconds: number;
 }
 
 /** Locate a token's launch, from the index if present, otherwise from the chain. */
@@ -281,6 +288,7 @@ async function scanTokenInner(token: string, requestedBy?: number): Promise<Scan
     currentBlock: Number(head),
     creation,
     isEarly,
+    earlyThresholdSeconds: earlyThreshold,
   };
 }
 

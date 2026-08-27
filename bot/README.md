@@ -152,18 +152,39 @@ three-second-old token already carrying four flags.
 
 Three details worth knowing:
 
-- **Age comes from the curve's `launchedAt()`, not the index.** The indexed
-  launch time is an interpolated block timestamp, accurate to a second or two but
-  drifting up to about seven — fine for a seven-day window, not fine for a
-  180-second one where it decides which card a user gets.
-- **Early results cache for 10s, not 60s.** The same launch at 5s and at 90s are
-  different answers, and one of them says "too early" while the other has real
-  traction.
+- **Three clocks disagree at this boundary, and the code says so.** The curve's
+  own `launchedAt()` is exact but read through the optional-read helper, so it
+  can be absent. The indexed launch time is an interpolated block timestamp that
+  drifts up to about seven seconds — fine for a seven-day window, not for a
+  180-second one. And this host's wall clock supplies "now" and can be wrong by
+  any amount after a VM resume. So: prefer the exact time; widen the window by
+  the known drift when only the interpolated one is available (always in the safe
+  direction — a token that *might* still be early is never handed a traction
+  verdict); and cross-check elapsed time against block progression, which no host
+  clock can skew. A negative age is a clock fault, not a brand-new token, and is
+  logged rather than clamped to a confident "launched 0s ago".
+- **Early results cache for 10s, capped by the window itself.** The same launch
+  at 5s and at 90s are different answers. A card rendered at 179s gets a
+  one-second life, not ten, so it can never still be saying "too early" after the
+  token settled. Telegram's own inline answer cache — which is shared across
+  every user — is set from the same computation, or it would re-open the exact
+  overhang the server-side cap closes.
 - **An early scan stores NULL for every traction metric and the label `early`.**
   Writing zeros would be worse than useless: the scans table exists to pair an
   early signal against a later outcome, and a row claiming "0 buyers, traction
   none" for a token nobody could have bought yet would train that pairing on a
   measurement never taken.
+
+Undetermined stays undetermined here too. `launchBuyAmount` is null both when
+there was genuinely no creator buy and when the creation transaction could not be
+decoded, so the card distinguishes them explicitly — and because the compact
+early card carries no "N undetermined" counter, an undecodable launch says so on
+its own line rather than rendering identically to a clean one.
+
+One wording note: the replacement line says *the snipe tax window is still open*,
+as specified. On this chain `snipeTaxSeconds` is **3**, so that is literally true
+only for the first few seconds of the 180-second window. The copy is kept as
+given — worth a second look if the precision matters.
 
 One deviation: the compact early card also counts the **custom pair** flag, which
 the brief's list omitted. It meets the stated criterion — fixed at creation,

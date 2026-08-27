@@ -129,6 +129,7 @@ function render(token: string, result: Awaited<ReturnType<typeof scanToken>>, bo
       meta: {
         symbol: null, traction: 'unknown', flagsRaised: 0, flagsTotal: 0,
         flagsUnknown: 0, topFlag: null, notFound: true, early: false, ageSeconds: 0,
+        earlyThresholdSeconds: EARLY_WINDOW_SECONDS,
       },
     };
   }
@@ -194,10 +195,32 @@ function sharedScan(token: string, userId?: number, botUsername?: string): Promi
  * token stopped being early and the real card became available. Returns
  * undefined for a settled card, which then takes the normal cache lifetime.
  */
-function earlyTtlFor(meta: { early: boolean; ageSeconds: number }): number | undefined {
+function earlyTtlFor(meta: { early: boolean; ageSeconds: number; earlyThresholdSeconds?: number }): number | undefined {
   if (!meta.early) return undefined;
-  const untilSettled = (EARLY_WINDOW_SECONDS - meta.ageSeconds) * 1000;
+  // The threshold this scan actually used, not the constant: without an exact
+  // launch time the window is widened by the drift margin, and computing the
+  // remaining life against the narrower constant yields a negative number that
+  // clamps to zero -- an early card that is never cached at all, so every
+  // request in that state re-scans.
+  const threshold = meta.earlyThresholdSeconds ?? EARLY_WINDOW_SECONDS;
+  const untilSettled = (threshold - meta.ageSeconds) * 1000;
   return Math.max(0, Math.min(EARLY_CACHE_TTL_MS, untilSettled));
+}
+
+/**
+ * Seconds an early answer may be cached by Telegram itself.
+ *
+ * The same computation as the in-process TTL, deliberately: Telegram's inline
+ * answer cache is shared across every user, so a flat value there would re-open
+ * exactly the overhang the server-side cap closes -- a card rendered at 179s
+ * still being served as "too early" well after the token settled.
+ */
+export function inlineCacheSeconds(
+  meta: { early: boolean; ageSeconds: number; earlyThresholdSeconds?: number },
+  settledSeconds = 60,
+): number {
+  const ttl = earlyTtlFor(meta);
+  return ttl === undefined ? settledSeconds : Math.max(1, Math.round(ttl / 1000));
 }
 
 /** Exposed for tests; the window cap is a boundary worth asserting directly. */

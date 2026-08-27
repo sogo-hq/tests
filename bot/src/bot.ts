@@ -1,10 +1,9 @@
 import { Bot, type Context } from 'grammy';
 import type { InlineQueryResult } from 'grammy/types';
-import { performScan, normaliseToken, looksLikeTxHash, SCAN_FAILED, type ScanSource, type ScanOutcome } from './service.js';
+import { performScan, normaliseToken, looksLikeTxHash, inlineCacheSeconds, SCAN_FAILED, type ScanSource, type ScanOutcome } from './service.js';
 import { scanCache, startCacheReporter } from './cache.js';
 import { userQuota, floodQuota, scanSemaphore, startQuotaSweeper, formatRetry } from './quota.js';
 import { inlineDescription, COMPACT_DISCLAIMER } from './card.js';
-import { EARLY_CACHE_TTL_MS } from './config.js';
 import { db } from './db.js';
 import { TELEGRAM_BOT_TOKEN, DISCLAIMER } from './config.js';
 
@@ -279,7 +278,7 @@ async function handleInline(ctx: Context): Promise<void> {
       // server-side TTL entirely.
       await answerShared(
         [article(token, `VITALS — ${label}`, inlineDescription(outcome.meta), outcome.compact)],
-        outcome.meta.early ? Math.max(1, Math.floor(EARLY_CACHE_TTL_MS / 1000)) : 60,
+        inlineCacheSeconds(outcome.meta),
       );
       return;
     case 'not_found':

@@ -294,6 +294,8 @@ export interface CompactMeta {
   /** Younger than EARLY_WINDOW_SECONDS: traction is undefined, not zero. */
   early: boolean;
   ageSeconds: number;
+  /** The threshold that decided `early`, carried so cache lifetimes can match it. */
+  earlyThresholdSeconds: number;
 }
 
 function ticker(r: ScanResult): string {
@@ -369,6 +371,7 @@ export function compactMeta(r: ScanResult): CompactMeta {
     notFound: false,
     early: r.isEarly,
     ageSeconds: Math.max(0, Math.floor(r.ageSeconds)),
+    earlyThresholdSeconds: r.earlyThresholdSeconds,
   };
 }
 

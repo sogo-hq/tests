@@ -14,6 +14,7 @@ export function makeScan(over = {}) {
     // derived exactly as production does, so a fixture cannot assert against an
     // age/mode pair the real code would never produce
     isEarly: ageSeconds < EARLY_WINDOW_SECONDS,
+    earlyThresholdSeconds: over.earlyThresholdSeconds ?? EARLY_WINDOW_SECONDS,
     creation: {
       entryPoint: over.entryPoint ?? 'launchToken',
       launchBuyAmount: over.launchBuyAmount ?? null,

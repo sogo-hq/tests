@@ -290,3 +290,39 @@ test('the undetermined line does not push the compact card over its budget', () 
   assert.equal(lines.filter((l) => l.startsWith('❔')).length, 1);
   assert.equal(lines.filter((l) => l.startsWith('🚩')).length, 1, 'one slot yields to the undetermined line');
 });
+
+// ------------------------- review round 3: one lifetime, two caches, one rule
+test('the TTL cap uses the threshold that actually decided early, not the constant', async () => {
+  const { earlyTtlForTest } = await import('../dist/service.js');
+  // exact launch time available: threshold 180
+  assert.equal(earlyTtlForTest({ early: true, ageSeconds: 179, earlyThresholdSeconds: 180 }), 1_000);
+  // no exact launch time: threshold widened to 190, so 185 still has life left.
+  // Against the bare constant this would compute -5000 and clamp to 0, meaning
+  // the card is never cached and every request in that state re-scans.
+  assert.equal(earlyTtlForTest({ early: true, ageSeconds: 185, earlyThresholdSeconds: 190 }), 5_000);
+  assert.ok(earlyTtlForTest({ early: true, ageSeconds: 185, earlyThresholdSeconds: 190 }) > 0);
+});
+
+test('Telegram inline cache_time matches the in-process TTL exactly', async () => {
+  const { inlineCacheSeconds, earlyTtlForTest } = await import('../dist/service.js');
+  for (const ageSeconds of [0, 5, 60, 175, 179]) {
+    const meta = { early: true, ageSeconds, earlyThresholdSeconds: 180 };
+    const server = earlyTtlForTest(meta);
+    const telegram = inlineCacheSeconds(meta);
+    assert.equal(telegram, Math.max(1, Math.round(server / 1000)),
+      `at ${ageSeconds}s Telegram would cache ${telegram}s against a server TTL of ${server}ms`);
+    assert.ok(telegram <= 10, `Telegram cache_time ${telegram}s exceeds the 10s early cap`);
+  }
+  // a settled card goes back to the normal minute
+  assert.equal(inlineCacheSeconds({ early: false, ageSeconds: 900, earlyThresholdSeconds: 180 }), 60);
+});
+
+test('an early card is never served past its own window, by either cache', async () => {
+  const { earlyTtlForTest, inlineCacheSeconds } = await import('../dist/service.js');
+  for (const ageSeconds of [170, 175, 179]) {
+    const meta = { early: true, ageSeconds, earlyThresholdSeconds: 180 };
+    const expiresAt = ageSeconds + earlyTtlForTest(meta) / 1000;
+    assert.ok(expiresAt <= 180, `server cache would serve an early card until ${expiresAt}s`);
+    assert.ok(ageSeconds + inlineCacheSeconds(meta) <= 181, 'Telegram cache would overrun the window');
+  }
+});
