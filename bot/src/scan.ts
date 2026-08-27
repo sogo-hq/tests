@@ -193,11 +193,24 @@ async function scanTokenInner(token: string, requestedBy?: number): Promise<Scan
   const chainAgeSeconds = Math.max(0, (Number(head) - launch.block) * BLOCK_TIME_SECONDS);
   const wallAgeSeconds = scannedAt - launchedAtExact;
 
-  // A negative age, or one wildly out of step with the chain, means this host's
-  // clock is wrong rather than the token being new. Clamping to zero would turn
-  // that into maximum-confidence "launched 0s ago" for a token that may be hours
-  // old and already trading.
-  const clockSuspect = wallAgeSeconds < 0 || Math.abs(wallAgeSeconds - chainAgeSeconds) > 120;
+  // A negative age, or one out of step with the chain NEAR THE BOUNDARY, means
+  // this host's clock is wrong rather than the token being new. Clamping to zero
+  // would turn that into maximum-confidence "launched 0s ago" for a token that
+  // may be hours old and already trading.
+  //
+  // The comparison is scoped to the regime where it matters. Block time is 0.1s
+  // on average but not exactly, so the block-derived estimate drifts from the
+  // timestamp by roughly a percent over long spans -- about 23 minutes across a
+  // two-day-old token. A flat tolerance therefore fires on essentially every
+  // older token, logging a false clock warning and replacing an accurate age
+  // with a worse one. Past a few multiples of the early window the exact age is
+  // not load-bearing for anything, so the check simply does not apply there.
+  const BOUNDARY_REGIME_SECONDS = EARLY_WINDOW_SECONDS * 3;
+  const nearBoundary =
+    wallAgeSeconds < BOUNDARY_REGIME_SECONDS || chainAgeSeconds < BOUNDARY_REGIME_SECONDS;
+  const clockSuspect =
+    wallAgeSeconds < 0 ||
+    (nearBoundary && Math.abs(wallAgeSeconds - chainAgeSeconds) > 30);
   if (clockSuspect) {
     console.warn(
       `[scan] host clock disagrees with the chain for ${reads.token}: ` +
@@ -224,6 +237,41 @@ async function scanTokenInner(token: string, requestedBy?: number): Promise<Scan
     launchBuyRecipient: creationRow?.launch_buy_recipient ?? null,
     snipeExemptionCount: creationRow?.snipe_exemption_count ?? null,
   };
+
+  /**
+   * One early row per token, not one per re-scan.
+   *
+   * "Re-scan in 2 minutes" invites exactly that, and with a 10s cache a single
+   * token can be scanned around eighteen times inside its early window. Each
+   * would otherwise append a near-identical all-NULL row and queue four more
+   * rechecks -- seventy-two for one token -- polluting the table this product is
+   * built on and multiplying background work for no new information.
+   *
+   * The first early row is kept rather than refreshed: it is the earliest
+   * observation, which is the one worth pairing against the outcome. Every
+   * individual request is still recorded in scan_events.
+   */
+  if (isEarly) {
+    const existing = db
+      .prepare("SELECT id FROM scans WHERE token = ? AND traction = 'early' ORDER BY id ASC LIMIT 1")
+      .get(reads.token.toLowerCase()) as { id: number } | undefined;
+    if (existing) {
+      recordPeak(reads.token.toLowerCase(), reads.mcapInQuote, scannedAt);
+      return {
+        scanId: existing.id,
+        reads,
+        traction,
+        flags,
+        launchBlock: launch.block,
+        launchedAt: launchedAtExact,
+        ageSeconds,
+        currentBlock: Number(head),
+        creation,
+        isEarly,
+        earlyThresholdSeconds: earlyThreshold,
+      };
+    }
+  }
 
   const info = db.prepare(`
     INSERT INTO scans (

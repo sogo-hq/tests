@@ -186,8 +186,10 @@ as specified. On this chain `snipeTaxSeconds` is **3**, so that is literally tru
 only for the first few seconds of the 180-second window. The copy is kept as
 given — worth a second look if the precision matters.
 
-One deviation: the compact early card also counts the **custom pair** flag, which
-the brief's list omitted. It meets the stated criterion — fixed at creation,
+Three deviations, all deliberate:
+
+- The compact early card also counts the **custom pair** flag, which
+  the brief's list omitted. It meets the stated criterion — fixed at creation,
 available now, not traction-derived — and dropping it would make the same token
 report a different flag total before and after 180s.
 

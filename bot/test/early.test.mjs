@@ -326,3 +326,25 @@ test('an early card is never served past its own window, by either cache', async
     assert.ok(ageSeconds + inlineCacheSeconds(meta) <= 181, 'Telegram cache would overrun the window');
   }
 });
+
+// --------------------------------------- review round 4: spec-literal details
+test('the early cache TTL is a ceiling, not a default configuration can raise', async () => {
+  const { execFileSync } = await import('node:child_process');
+  const read = (env) => JSON.parse(execFileSync(process.execPath, ['-e',
+    "import('./dist/config.js').then(c => console.log(JSON.stringify({t: c.EARLY_CACHE_TTL_MS})))"],
+    { cwd: process.cwd(), env: { ...process.env, ...env }, encoding: 'utf8' }).trim().split('\n').pop()).t;
+  assert.equal(read({ EARLY_CACHE_TTL_MS: '60000' }), 10_000, 'configuration must not raise the 10s maximum');
+  assert.equal(read({ EARLY_CACHE_TTL_MS: '3000' }), 3_000, 'but may lower it');
+});
+
+test('the early full card says nothing about traction beyond the two specified lines', () => {
+  const text = renderCardText(makeScan({ ageSeconds: 12, snipeExemptionCount: 8 }));
+  const mentions = text.split('\n').filter((l) => /traction/i.test(l));
+  // exactly the spec's header and its single replacement line -- an earlier
+  // draft also appended "Traction: not yet measurable." to the summary, which
+  // restated the replacement line the spec says is the only one
+  assert.deepEqual(mentions, [
+    'launched 12s ago — too early for traction',
+    'traction unavailable — the snipe tax window is still open. re-scan in 2 minutes.',
+  ]);
+});

@@ -96,7 +96,12 @@ export const EARLY_WINDOW_SECONDS = positiveNumber('EARLY_WINDOW_SECONDS', proce
  * Early-mode results go stale fast: the same launch at 5s and at 90s are
  * genuinely different answers, so they cannot share the normal 60s cache life.
  */
-export const EARLY_CACHE_TTL_MS = positiveNumber('EARLY_CACHE_TTL_MS', process.env.EARLY_CACHE_TTL_MS, 10_000);
+/** Hard ceiling. The rule is "10s maximum", so configuration may lower it, never raise it. */
+export const EARLY_CACHE_TTL_CEILING_MS = 10_000;
+export const EARLY_CACHE_TTL_MS = Math.min(
+  EARLY_CACHE_TTL_CEILING_MS,
+  positiveNumber('EARLY_CACHE_TTL_MS', process.env.EARLY_CACHE_TTL_MS, EARLY_CACHE_TTL_CEILING_MS),
+);
 
 /**
  * Margin added to the early window when the exact launch time is unavailable.

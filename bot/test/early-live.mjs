@@ -120,5 +120,37 @@ ok('an early scan still queues its +1h/+6h/+24h/+7d rechecks');
   ok(`inline answer for an early token caches for ${answer.payload.cache_time}s, not 60s`);
 }
 
+// ---- repeated early scans must not multiply rows or rechecks --------------
+{
+  const { scanCache } = await import('../dist/cache.js');
+  const before = db.prepare('SELECT COUNT(*) n FROM scans').get().n;
+  const beforeRechecks = db.prepare('SELECT COUNT(*) n FROM rechecks WHERE token = ?').get(r.reads.token.toLowerCase()).n;
+  const ids = new Set();
+  for (let i = 0; i < 5; i++) {
+    scanCache.sweep();               // force a real re-scan, as "re-scan in 2 min" invites
+    const again = await scanToken(r.reads.token);
+    if (again && again.isEarly) ids.add(again.scanId);
+  }
+  const added = db.prepare('SELECT COUNT(*) n FROM scans').get().n - before;
+  const addedRechecks = db.prepare('SELECT COUNT(*) n FROM rechecks WHERE token = ?').get(r.reads.token.toLowerCase()).n - beforeRechecks;
+  assert.equal(added, 0, `5 early re-scans added ${added} extra scans rows — the table this product is built on must not fill with all-NULL duplicates`);
+  assert.equal(addedRechecks, 0, `5 early re-scans queued ${addedRechecks} extra rechecks`);
+  assert.equal(ids.size, 1, 'every early re-scan reuses the first row');
+  ok('5 early re-scans reused one row and queued no extra rechecks');
+}
+
+// ---- the clock cross-check must not misfire on a settled token -------------
+{
+  const settled = await scanToken('0xd384722f6adfe7d79E8e6623896DF199afD31B76');
+  if (settled) {
+    const wall = Math.floor(Date.now() / 1000) - settled.launchedAt;
+    assert.ok(Math.abs(settled.ageSeconds - wall) < 60,
+      `a settled token's age (${settled.ageSeconds}s) should track the wall clock (${wall}s); ` +
+      'a large gap means the block-derived estimate was substituted, which drifts about a percent over long spans');
+    assert.equal(settled.isEarly, false);
+    ok(`settled token age tracks the wall clock (${settled.ageSeconds}s vs ${wall}s)`);
+  }
+}
+
 console.log('\nAll early-mode live checks passed.');
 process.exit(0);

@@ -185,8 +185,10 @@ function renderEarlyCard(r: ScanResult): string {
   L.push(`  ${f.buyback.enabled ? '✅' : '·'} ${esc(f.buyback.detail)}`);
   L.push('');
 
+  // Worst flag only. The spec replaces the traction block with a single line and
+  // it is already above; a second traction statement here just restates it.
   const worst = f.worst ? `${f.worst.label.toLowerCase()} — ${f.worst.detail}` : 'no flags raised';
-  L.push(`<b>Worst flag:</b> ${esc(worst)}. <b>Traction:</b> not yet measurable.`);
+  L.push(`<b>Worst flag:</b> ${esc(worst)}.`);
   L.push('');
   L.push(`<a href="${EXPLORER_URL}/address/${k.token}">token</a> · <a href="${EXPLORER_URL}/address/${k.curve}">curve</a> · <a href="${EXPLORER_URL}/address/${k.deployer}">deployer</a>`);
   L.push(`<i>${DISCLAIMER}</i>`);
