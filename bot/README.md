@@ -190,6 +190,51 @@ carries formatting.
 Under 12 lines so it never truncates in a Telegram preview, footer always last,
 and the same shape on all three surfaces — DM, group and inline.
 
+### PNG render
+
+Text forwards well inside Telegram but does not cross to X or Discord, and it
+cannot be read in a preview. People screenshot the card anyway — this makes that
+deliberate.
+
+**Opt-in, never automatic.** The text card carries an `Image` button; nothing is
+rendered until it is pressed, because rendering is slower than text and most
+requests do not want it. `/full` has no button — it is a reference view, not the
+thing people forward.
+
+1200×630, the social preview ratio. Same content as the text card, plus three
+things the text does not carry and a forwarded image needs: the **token address
+in full** so a reader can verify what they are looking at, a **UTC timestamp** so
+a week-old card cannot pass as today's, and the **checkvitals.xyz** footer.
+
+Styling says nothing. A card with three concerns and a card with none use the
+same four colours at the same sizes in the same positions — only the words
+differ. The accent green appears on exactly two elements, the wordmark and the
+footer link, and never on a finding, so it can never read as "good". Tests
+assert all of that rather than trusting it.
+
+**resvg, not node-canvas**: 4.3 MB installed against 26 MB, and no Cairo or Pango
+system libraries. The card is built as SVG and rasterised, which also means the
+layout can be asserted on without decoding a bitmap.
+
+**Fonts are bundled, not fetched.** IBM Plex Mono ships only as woff2, which
+resvg's font database cannot read, so `npm run build:fonts` decompresses the
+subsets we use to TTF once and those are committed — 249 KB for Latin,
+Latin-Extended and Cyrillic at two weights. Cyrillic is in there because tickers
+on this chain routinely use Cyrillic homoglyphs of Latin letters. System fonts
+are disabled, so a render is identical on any host.
+
+Two glyphs the text card uses are in no bundled subset — `→` and `▪` — and a
+missing glyph rasterises as a tofu box, which looks like a defect on something
+built to be forwarded. The arrow is substituted with `->`, the bullet is drawn as
+a rectangle rather than set as text, and anything else outside the covered ranges
+becomes `?`. Which glyphs are actually present was established by rendering each
+one and comparing it against a known-missing codepoint, not assumed from the
+subset names.
+
+The image shares the text card's cache key and lifetime. Rendering twice for one
+scan is waste, and an image that outlived the text it was made from would be a
+different answer wearing the same address.
+
 ### /full
 
 Renders exactly the previous card, unchanged: the technical wording of every

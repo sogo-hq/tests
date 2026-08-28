@@ -387,7 +387,7 @@ function formatProgress(pct: number): string {
 }
 
 /** Compact age for the header: 47s, 2m, 3h, 5d. */
-function headerAge(seconds: number): string {
+export function headerAge(seconds: number): string {
   const s = Math.max(0, Math.floor(seconds));
   if (s < 60) return `${s}s`;
   if (s < 3600) return `${Math.floor(s / 60)}m`;
@@ -396,9 +396,9 @@ function headerAge(seconds: number): string {
 }
 
 /** How many raised flags the default card shows before summarising the rest. */
-const MAX_DEFAULT_FLAGS = 3;
+export const MAX_DEFAULT_FLAGS = 3;
 
-function defaultTicker(r: ScanResult): string {
+export function defaultTicker(r: ScanResult): string {
   const s = r.reads.symbol?.trim();
   if (s) return `$${plainField(s, MAX_TICKER).toUpperCase()}`;
   return `${r.reads.token.slice(0, 6)}\u2026${r.reads.token.slice(-4)}`;
@@ -412,7 +412,7 @@ function defaultTicker(r: ScanResult): string {
  * data; raw counts carry the same information without pretending to a
  * conclusion.
  */
-function activityLine(r: ScanResult): string {
+export function activityLine(r: ScanResult): string {
   const t = r.traction;
   const buyers = t.uniqueBuyers30m;
   const progress = `${formatProgress(r.reads.progressPct)}%`;
@@ -433,7 +433,7 @@ function activityLine(r: ScanResult): string {
  * Below ten minutes there is no +10min reading to grow from, so the line is
  * absent rather than showing a change that was never measured.
  */
-function growthLine(r: ScanResult): string | null {
+export function growthLine(r: ScanResult): string | null {
   const t = r.traction;
   if (t.windowMinutes < 10 || t.uniqueBuyers30m === 0) return null;
   return `buyers ${t.uniqueBuyers10m} \u2192 ${t.uniqueBuyers30m} in ${Math.round(t.windowMinutes)} min`;

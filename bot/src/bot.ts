@@ -1,6 +1,6 @@
-import { Bot, type Context } from 'grammy';
+import { Bot, InputFile, type Context } from 'grammy';
 import type { InlineQueryResult } from 'grammy/types';
-import { performScan, normaliseToken, looksLikeTxHash, inlineCacheSeconds, SCAN_FAILED, type ScanSource, type ScanOutcome } from './service.js';
+import { performScan, scanImage, normaliseToken, looksLikeTxHash, inlineCacheSeconds, SCAN_FAILED, type ScanSource, type ScanOutcome } from './service.js';
 import { scanCache, startCacheReporter } from './cache.js';
 import { userQuota, floodQuota, scanSemaphore, startQuotaSweeper, formatRetry } from './quota.js';
 import { inlineDescription } from './card.js';
@@ -118,7 +118,58 @@ async function handleScan(ctx: Context, raw: string, full = false): Promise<void
     outcome = { kind: 'error', message: SCAN_FAILED };
   }
 
-  await deliver(ctx, notice, messageFor(outcome, full), replyOpts, full);
+  // The image is opt-in and lives behind this button. It is never rendered
+  // automatically: it is slower than the text and most people do not want it.
+  const withImage =
+    !full && (outcome.kind === 'ok')
+      ? { reply_markup: { inline_keyboard: [[{ text: 'Image', callback_data: `img:${token}` }]] } }
+      : {};
+  await deliver(ctx, notice, messageFor(outcome, full), { ...replyOpts, ...withImage }, full);
+}
+
+/**
+ * Render and send the PNG for a token.
+ *
+ * Answered on the callback query first so the button stops spinning while the
+ * render happens, then sent as a photo reply. Failures are reported rather than
+ * left silent -- a button that does nothing reads as a broken bot.
+ */
+async function handleImageButton(ctx: Context): Promise<void> {
+  const data = ctx.callbackQuery?.data ?? '';
+  const token = normaliseToken(data.slice(4));
+  if (!token) {
+    await ctx.answerCallbackQuery({ text: 'unrecognised token', show_alert: false });
+    return;
+  }
+
+  await ctx.answerCallbackQuery({ text: 'rendering…' });
+  const source = sourceOf(ctx);
+  try {
+    const res = await scanImage({
+      token,
+      source,
+      userId: ctx.from?.id,
+      chatId: ctx.chat?.id,
+      quotaKey: quotaIdentity(ctx),
+      botUsername: usernameOf(ctx),
+    });
+    if (res.kind !== 'ok') {
+      await ctx.reply(messageFor(res.outcome, false));
+      return;
+    }
+    await ctx.replyWithPhoto(new InputFile(res.png, `vitals-${token.slice(0, 10)}.png`), {
+      reply_parameters: ctx.callbackQuery?.message
+        ? { message_id: ctx.callbackQuery.message.message_id, allow_sending_without_reply: true }
+        : undefined,
+    });
+  } catch (err) {
+    console.error(`[image] render failed for ${token}:`, err);
+    try {
+      await ctx.reply('could not render the image, the text card above still stands');
+    } catch (replyErr) {
+      console.error('[image] could not report the failure either:', replyErr);
+    }
+  }
 }
 
 /**
@@ -376,6 +427,10 @@ export function createBot(token = TELEGRAM_BOT_TOKEN): Bot {
 
   bot.on('inline_query', handleInline);
 
+  // Only the chat surfaces get the button. An inline result is posted into a
+  // chat the bot may not be in, so a photo reply to it has nowhere to go.
+  bot.callbackQuery(/^img:/, handleImageButton);
+
   /**
    * A bare address is treated as a scan in DMs only.
    *
@@ -565,5 +620,5 @@ export async function startBot(): Promise<void> {
   startCacheReporter();
   startQuotaSweeper();
 
-  await bot.start({ allowed_updates: ['message', 'inline_query'] });
+  await bot.start({ allowed_updates: ['message', 'inline_query', 'callback_query'] });
 }

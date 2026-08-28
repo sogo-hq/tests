@@ -25,6 +25,10 @@ bot.api.config.use(async (_prev, method, payload) => {
   if (method === 'sendMessage') {
     return { ok: true, result: { message_id: calls.length, chat: { id: payload.chat_id }, date: 0, text: payload.text } };
   }
+  if (method === 'sendPhoto') {
+    return { ok: true, result: { message_id: calls.length, chat: { id: payload.chat_id }, date: 0, photo: [] } };
+  }
+  if (method === 'answerCallbackQuery') return { ok: true, result: true };
   if (method === 'editMessageText') {
     return { ok: true, result: { message_id: payload.message_id, chat: { id: payload.chat_id }, date: 0, text: payload.text } };
   }
@@ -187,6 +191,56 @@ for (let i = 1; i <= 40; i++) {
 assert.ok(limitedAt, 'inline was never rate limited across 40 requests');
 assert.ok(limitedAt > 25 && limitedAt <= 35, `flood cap tripped at request ${limitedAt}, expected ~31`);
 ok(`inline is rate limited too: flood cap tripped at request ${limitedAt} (cache hits counted)`);
+
+// --- the image is opt-in, behind a button ----------------------------------
+{
+  await bot.handleUpdate(msg('private', `/scan ${TOKEN}`, -500));
+  const c2 = drain();
+  const card = c2[c2.length - 1].payload;
+  assert.ok(card.reply_markup, 'the text card carries a button');
+  const button = card.reply_markup.inline_keyboard[0][0];
+  assert.equal(button.text, 'Image');
+  assert.ok(button.callback_data.startsWith('img:'));
+  assert.ok(Buffer.byteLength(button.callback_data) <= 64, 'callback_data must fit 64 bytes');
+  assert.ok(!c2.some((x) => x.method === 'sendPhoto'), 'no image is rendered until asked for');
+  ok('text card carries an Image button; nothing rendered automatically');
+
+  // pressing it renders and sends a photo
+  await bot.handleUpdate({
+    update_id: ++uid,
+    callback_query: {
+      id: 'cb1', from: { id: 6001, is_bot: false, first_name: 'U' },
+      chat_instance: 'x', data: button.callback_data,
+      message: { message_id: 999, date: 0, chat: { id: -500, type: 'private' } },
+    },
+  });
+  const c3 = drain();
+  assert.ok(c3.some((x) => x.method === 'answerCallbackQuery'), 'the button stops spinning');
+  const photo = c3.find((x) => x.method === 'sendPhoto');
+  assert.ok(photo, 'pressing the button sends a photo');
+  ok('pressing Image renders and sends a PNG');
+
+  // a second press is served from the cache, not re-rendered
+  await bot.handleUpdate({
+    update_id: ++uid,
+    callback_query: {
+      id: 'cb2', from: { id: 6002, is_bot: false, first_name: 'U' },
+      chat_instance: 'x', data: button.callback_data,
+      message: { message_id: 999, date: 0, chat: { id: -500, type: 'private' } },
+    },
+  });
+  const c4 = drain();
+  assert.ok(c4.find((x) => x.method === 'sendPhoto'), 'second press also sends');
+  ok('a second press reuses the cached render');
+}
+
+// --- /full has no button: it is not the forwardable card --------------------
+await bot.handleUpdate(msg('private', `/full ${TOKEN}`, -501));
+{
+  const c5 = drain();
+  assert.ok(!c5[c5.length - 1].payload.reply_markup, '/full carries no image button');
+  ok('/full carries no image button');
+}
 
 // --- /stats renders and is valid HTML --------------------------------------
 await bot.handleUpdate(msg('private', '/stats', -400));

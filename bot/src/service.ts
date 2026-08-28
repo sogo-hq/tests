@@ -4,6 +4,7 @@ import { renderCard, renderDefaultCard, renderDefaultNotFound, compactMeta, type
 import { scanCache, type CachedScan } from './cache.js';
 import { userQuota, floodQuota, scanSemaphore, SlotTimeout, formatRetry } from './quota.js';
 import { db } from './db.js';
+import { renderCardPng } from './image.js';
 import { EARLY_CACHE_TTL_MS, EARLY_WINDOW_SECONDS } from './config.js';
 
 export type ScanSource = 'dm' | 'group' | 'inline' | 'cli';
@@ -120,6 +121,38 @@ function logEvent(
 const ADDRESS_RE = /(?<![a-fA-F0-9])0x[a-fA-F0-9]{40}(?![a-fA-F0-9])/;
 const TX_HASH_RE = /(?<![a-fA-F0-9])0x[a-fA-F0-9]{64}(?![a-fA-F0-9])/;
 
+/**
+ * The PNG for a token, rendered at most once per cached scan.
+ *
+ * Routed through performScan so the image path is limited exactly like the text
+ * path: when the card has expired this triggers a real scan, and that scan costs
+ * the same quota as any other. The render then attaches to the cache entry the
+ * text card already occupies, so the image and the text it was made from share
+ * one key and one lifetime -- an image outliving its text would be a different
+ * answer wearing the same address.
+ */
+export async function scanImage(req: ScanRequest): Promise<
+  { kind: 'ok'; png: Buffer; cacheHit: boolean } | { kind: 'unavailable'; outcome: ScanOutcome }
+> {
+  const cached = scanCache.get(req.token);
+  if (cached?.png) return { kind: 'ok', png: cached.png, cacheHit: true };
+
+  if (cached?.result) {
+    const png = renderCardPng(cached.result);
+    scanCache.attachPng(req.token, png);
+    return { kind: 'ok', png, cacheHit: false };
+  }
+
+  const outcome = await performScan(req);
+  if (outcome.kind !== 'ok') return { kind: 'unavailable', outcome };
+
+  const fresh = scanCache.get(req.token);
+  if (!fresh?.result) return { kind: 'unavailable', outcome: { kind: 'error', message: SCAN_FAILED } };
+  const png = renderCardPng(fresh.result);
+  scanCache.attachPng(req.token, png);
+  return { kind: 'ok', png, cacheHit: false };
+}
+
 export function normaliseToken(raw: string): string | null {
   const m = raw.match(ADDRESS_RE);
   if (!m) return null;
@@ -136,6 +169,8 @@ function fromCache(hit: CachedScan): { defaultCard: string; fullCard: string; me
 }
 
 interface RenderedScan {
+  /** The scan itself, kept so an image can be rendered later without re-scanning. */
+  result?: ScanResult;
   /** Plain-text card shown by default on every surface. */
   defaultCard: string;
   /** Today's HTML card, shown only for /full. */
@@ -176,6 +211,7 @@ function render(token: string, result: Awaited<ReturnType<typeof scanToken>>, bo
     };
   }
   return {
+    result,
     defaultCard: renderDefaultCard(result, botUsername),
     fullCard: renderCard(result),
     meta: compactMeta(result),
@@ -207,6 +243,7 @@ function sharedScan(token: string, userId?: number, botUsername?: string): Promi
       // while the other has real traction -- so it gets a much shorter life than
       // the settled card that follows it.
       scanCache.set(token, {
+        result: rendered.result,
         defaultCard: rendered.defaultCard,
         fullCard: rendered.fullCard,
         meta: rendered.meta,

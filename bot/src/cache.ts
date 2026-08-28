@@ -16,12 +16,25 @@
  */
 
 import type { CompactMeta } from './card.js';
+import type { ScanResult } from './scan.js';
 
 export interface CachedScan {
   /** Plain-text card shown by default on every surface. */
   defaultCard: string;
   /** Today's HTML card, served only by /full. */
   fullCard: string;
+  /**
+   * Rendered PNG, attached lazily the first time someone asks for the image.
+   * Absent until then -- rendering is opt-in and most requests never want it.
+   */
+  png?: Buffer;
+  /**
+   * The scan this entry was rendered from, kept so the image can be produced
+   * later without re-scanning. Held only in memory and only for the entry's
+   * lifetime; a PNG is roughly 50 KB and is attached to a handful of entries at
+   * most, since it exists only where somebody pressed the button.
+   */
+  result?: ScanResult;
   /**
    * Enough structure to build an inline result without re-scanning. Uses the
    * renderer's own type rather than a structural copy, so a field added there
@@ -129,6 +142,21 @@ export class ScanCache {
       this.map.delete(oldest.value);
       this.evictions++;
     }
+  }
+
+  /**
+   * Attach a rendered PNG to an existing entry without touching its timestamp.
+   *
+   * The image shares the text card's key and lifetime: re-rendering the same
+   * scan is waste, and an image that outlived the text it was made from would
+   * be a different answer wearing the same address. Returns false when the
+   * entry has already gone, in which case the caller has nothing to attach to.
+   */
+  attachPng(token: string, png: Buffer): boolean {
+    const hit = this.map.get(this.key(token));
+    if (!hit || Date.now() - hit.ts > this.lifetime(hit)) return false;
+    hit.png = png;
+    return true;
   }
 
   /** Drop expired entries. Bounds memory when traffic goes quiet. */
