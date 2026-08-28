@@ -267,7 +267,8 @@ export async function backfill(
  */
 const TAIL_MAX_BLOCKS = 30_000; // ~50 minutes
 
-export async function indexNew() {
+export async function indexNew(opts: { lifecycle?: boolean } = {}) {
+  const { lifecycle = true } = opts;
   // cacheTime 0 because viem caches getBlockNumber for its polling interval
   // (4s by default), which is longer than this loop's own interval -- the tail
   // would otherwise act on a head it had already seen.
@@ -283,7 +284,7 @@ export async function indexNew() {
   }
   // The tail is small, so decode inline -- new launches arrive fully populated.
   const res = await indexLaunches(from, to, { decode: true });
-  await indexLifecycle(from, to);
+  if (lifecycle) await indexLifecycle(from, to);
   return res;
 }
 
@@ -334,12 +335,26 @@ export function startDecodeLoop(batch = 200, intervalMs = 15_000): NodeJS.Timeou
 export function startIndexLoop(intervalMs = 3_000): NodeJS.Timeout {
   let running = false;
   let consecutiveErrors = 0;
+  let tick_n = 0;
+
+  /**
+   * Sweep LaunchSwept / PoolGraduated every Nth pass rather than every pass.
+   *
+   * Those are two more getLogs calls, and at a three-second cadence they were
+   * most of the loop's standing cost -- five requests per pass where the launch
+   * feed itself needs two. Graduation is not time-critical the way a new launch
+   * is: nothing about a scan changes in the thirty seconds it takes to notice
+   * one, whereas a launch that is not indexed sends the scan to walk the
+   * factory's logs.
+   */
+  const LIFECYCLE_EVERY = 10;
 
   const tick = async () => {
     if (running) return; // a slow pass must not overlap the next tick
     running = true;
     try {
-      const res = await bulk(() => indexNew());
+      const res = await bulk(() => indexNew({ lifecycle: tick_n % LIFECYCLE_EVERY === 0 }));
+      tick_n++;
       consecutiveErrors = 0;
       if (res.launches > 0) {
         console.log(`[index] +${res.launches} launch${res.launches === 1 ? '' : 'es'} (through block ${res.toBlock})`);

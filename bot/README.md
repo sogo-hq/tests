@@ -211,6 +211,56 @@ too. Ranked **above** a plain name collision: colliding with some other launch i
 common noise, whereas wearing the ticker of the asset on the other side of your
 own pool is aimed at the person about to trade it.
 
+## Surviving a redeploy
+
+The container has no persistent volume, so every deploy starts from an empty
+SQLite file. Untreated that is worse than it sounds: the bot comes back up
+answering scans from a handful of rows, and every index-backed check quietly
+turns into a confident negative — `no match against indexed pons tokens` derived
+from zero rows is a false all-clear, which is the one failure mode this tool
+exists to prevent.
+
+**On boot** the index is assessed and the decision is logged either way:
+
+```
+[boot] index has 36,190 decoded launches — skipping recovery
+[boot] index empty — backfilling, then decoding in background
+```
+
+Recovery runs at bulk priority, the same treatment as the decode drip, so an
+interactive scan always preempts it. The bot answers throughout — the point is
+that a scan during recovery gets an honest *undetermined*, not that it waits.
+Measured: a full rebuild indexes ~36,000 launches in about 46 seconds, and the
+decode of those rows then drains in the background.
+
+**Index-backed negatives are gated on coverage.** A finding is always reported —
+a collision found against a partial index is still a real collision. It is only
+the *absence* of one that needs a population behind it:
+
+| check | negative needs |
+|---|---|
+| ticker collision | decoded rows (only those carry the normalised keys) |
+| deployer launch rate | indexed rows spanning the window |
+| creator tax vs median | indexed rows to take a median from |
+
+On an empty index those three report undetermined; `pair ticker` and
+`custom pair` still answer, because they read the chain rather than the index.
+So the card degrades to *"no concerns raised · 2 of 8 checked · 6 undetermined"*
+rather than pretending to an all-clear.
+
+One design note. `markRecovering` covers the **backfill only**, not the decode
+that follows it. The decode loop runs for the life of the process draining
+whatever is undecoded, so a flag tied to "decode is running" would never clear
+and every index-derived negative would be suppressed forever. Once the backfill
+lands, the coverage thresholds take over and gate each negative on the rows that
+actually exist behind it — a sharper test than a process-wide flag, since it
+distinguishes checks that need decoded rows from those that only need indexed
+ones. The log says which state it ended in:
+
+```
+[boot] recovery finished — 36,268 indexed, 0 decoded; index-derived negatives still withheld until decode catches up
+```
+
 ## Staying at the chain head
 
 `npm run bot` tails the factory every 3 seconds, so a launch is in the index
@@ -224,10 +274,13 @@ removes that path for anything it has seen.
 
 Two details the measurements forced:
 
-- **An empty pass costs one request.** Block-time anchors are primed lazily, only
-  when a chunk actually yielded launches — priming up front spent `getBlock`
-  calls on every empty poll, a standing charge against the same rate limit
-  interactive scans draw from. At 3s that is 0.33 req/s of a 10 req/s budget.
+- **A pass costs two requests, four on the lifecycle sweep.** Block-time anchors
+  are primed lazily, only when a chunk actually yielded launches — priming up
+  front spent `getBlock` calls on every empty poll. The `LaunchSwept` /
+  `PoolGraduated` sweep is two more `getLogs` and runs one pass in ten rather
+  than every pass: graduation is not time-critical the way a new launch is,
+  since nothing about a scan changes in the thirty seconds it takes to notice
+  one. Steady state is **0.73 req/s** of a 10 req/s budget.
 - **`getBlockNumber` is read with `cacheTime: 0`.** viem caches it for its
   polling interval (4s by default), which is longer than this loop's own
   interval, so the tail would otherwise act on a head it had already seen.
@@ -570,6 +623,8 @@ Tables: `launches`, `trades`, `scans`, `rechecks`, `token_peaks`, `cursors`.
 | `BACKFILL_DAYS` | `7` | default backfill window |
 | `LOOKBACK_DAYS` | `10` | how far `/scan` hunts for an unindexed launch |
 | `RPC_RATE_PER_SEC` | `10` | client-side pacing |
+| `MIN_INDEX_ROWS_FOR_NEGATIVE` | `1000` | rows required before an index-backed negative is asserted |
+| `RECOVERY_STALE_SECONDS` | `21600` | index age past which boot rebuilds it |
 | `SCAN_CACHE_TTL_MS` | `60000` | rendered-card cache TTL |
 | `SCAN_CACHE_MAX` | `500` | cache entry cap |
 | `SCANS_PER_MINUTE` | `10` | per-user quota |

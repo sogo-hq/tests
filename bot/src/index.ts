@@ -1,6 +1,7 @@
 import { getAddress, isAddress } from 'viem';
 import { printVerify } from './verify.js';
 import { backfill, indexNew, decodePending, startDecodeLoop, startIndexLoop } from './indexer/launches.js';
+import { startRecovery } from './recovery.js';
 import { scanToken } from './scan.js';
 import { renderCardText, renderDefaultCard } from './card.js';
 import { runDueRechecks, startRecheckLoop } from './recheck.js';
@@ -158,13 +159,23 @@ async function main(): Promise<void> {
       // All background jobs run in this process on purpose: request priority is
       // per-process, so an interactive /scan only preempts bulk indexing when
       // they share one rate limiter.
+      // Rebuild the index if the container came up without one. Returns
+      // immediately; the bot answers scans throughout, and any check that
+      // depends on the index reports undetermined until it can be trusted.
+      startRecovery();
       startIndexLoop();
       startRecheckLoop();
+      // Started unconditionally. It used to start only when a backlog already
+      // existed, which meant a container that came up with an empty database
+      // had no decoder running when recovery's backfill then created eighteen
+      // thousand undecoded rows -- so the snipe-exemption flag, the highest
+      // value check here, would have stayed undetermined forever. The loop
+      // no-ops when there is nothing pending.
       const pending = (db.prepare('SELECT COUNT(*) n FROM launches WHERE snipe_exemption_count IS NULL').get() as any).n;
       if (pending) {
         console.log(`[decode] ${pending.toLocaleString()} launches pending decode; draining in the background at low priority.`);
-        startDecodeLoop();
       }
+      startDecodeLoop();
       await startBot();
       return;
     }

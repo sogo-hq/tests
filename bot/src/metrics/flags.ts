@@ -1,6 +1,7 @@
 import { db, normaliseKey } from '../db.js';
 import { isNativePair } from '../reads.js';
 import { clamp, MAX_TICKER, MAX_SAMPLE } from '../text.js';
+import { indexCoverage, coverageReason } from '../coverage.js';
 
 export type FlagState = 'clean' | 'raised' | 'unknown';
 
@@ -71,6 +72,10 @@ export function computeFlags(opts: {
   const deployer = opts.deployer.toLowerCase();
   const flags: Flag[] = [];
 
+  // What the index can currently support. A finding is always reported; it is
+  // only the absence of one that needs enough rows behind it to mean anything.
+  const cov = indexCoverage();
+
   // ---------------------------------------------------------------- flag 1
   // Snipe-tax exemptions fixed at creation. Cap is 32. No view function
   // anywhere in the protocol exposes this -- the creation transaction is the
@@ -124,8 +129,16 @@ export function computeFlags(opts: {
     .prepare('SELECT creator_tax_bps AS t FROM launches WHERE creator_tax_bps IS NOT NULL')
     .all() as { t: number }[];
   const taxMedian = medianOf(taxRows.map((r) => r.t));
-  if (taxMedian === null) {
-    flags.push({ key: 'creator_tax', label: 'Creator tax', state: 'unknown', detail: 'no indexed baseline yet', compactDetail: 'no creator-tax baseline yet', plain: "no baseline yet for the creator's cut", severity: 10 });
+  if (taxMedian === null || !cov.trustNegatives.taxBaseline) {
+    flags.push({
+      key: 'creator_tax',
+      label: 'Creator tax',
+      state: 'unknown',
+      detail: taxMedian === null ? 'no indexed baseline yet' : coverageReason(cov),
+      compactDetail: 'no creator-tax baseline yet',
+      plain: "no baseline yet for the creator's cut",
+      severity: 10,
+    });
   } else if (opts.creatorTaxBps > taxMedian) {
     flags.push({
       key: 'creator_tax',
@@ -155,7 +168,19 @@ export function computeFlags(opts: {
   const launches7d = (db
     .prepare('SELECT COUNT(*) AS n FROM launches WHERE deployer = ? AND launched_at >= ? AND token != ?')
     .get(deployer, weekAgo, token) as { n: number }).n;
-  if (launches7d > 2) {
+  if (launches7d === 0 && !cov.trustNegatives.deployerHistory) {
+    // Zero rows for this deployer is meaningless when there are barely any rows
+    // at all. A count above zero is still a real finding and falls through.
+    flags.push({
+      key: 'deployer_rate',
+      label: 'Deployer launch rate',
+      state: 'unknown',
+      detail: coverageReason(cov),
+      compactDetail: 'deployer history unavailable',
+      plain: "can't check the deployer's other launches yet",
+      severity: 15,
+    });
+  } else if (launches7d > 2) {
     flags.push({
       key: 'deployer_rate',
       label: 'Deployer launch rate',
@@ -284,7 +309,20 @@ export function computeFlags(opts: {
     .prepare(`SELECT COUNT(*) AS n FROM launches WHERE ${where}`)
     .get(...args) as { n: number }).n;
 
-  if (collisionCount > 0) {
+  if (collisionCount === 0 && !cov.trustNegatives.collision) {
+    // "no match against indexed pons tokens" with an empty index is a confident
+    // negative derived from nothing -- exactly the false all-clear this tool
+    // exists to avoid.
+    flags.push({
+      key: 'collision',
+      label: 'Name/ticker collision',
+      state: 'unknown',
+      detail: coverageReason(cov),
+      compactDetail: 'ticker collisions not checkable yet',
+      plain: "can't check this ticker against other launches yet",
+      severity: 20,
+    });
+  } else if (collisionCount > 0) {
     // Colliding tokens frequently share the same rendered symbol, so show
     // distinct spellings rather than the same glyph three times.
     const samples = db

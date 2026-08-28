@@ -5,6 +5,7 @@ import { scanCache, startCacheReporter } from './cache.js';
 import { userQuota, floodQuota, scanSemaphore, startQuotaSweeper, formatRetry } from './quota.js';
 import { inlineDescription } from './card.js';
 import { db } from './db.js';
+import { indexCoverage } from './coverage.js';
 import { TELEGRAM_BOT_TOKEN, DISCLAIMER } from './config.js';
 
 /** Inline answers are dropped by Telegram after ~15s; bail well before that. */
@@ -478,7 +479,9 @@ export function statsText(): string {
   const hold = exemptedHoldTime();
   const scans = q('SELECT COUNT(*) n FROM scan_events');
 
+  const cov = indexCoverage();
   return [
+    ...(cov.recovering ? ['index rebuilding after restart — counts below are incomplete'] : []),
     `launches indexed ${launches.toLocaleString()}`,
     `launches with pre-exempted wallets ${withExempt.toLocaleString()} (${pct}% of ${decoded.toLocaleString()} decoded)`,
     hold.medianSeconds === null

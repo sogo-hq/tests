@@ -65,12 +65,26 @@ ok('pair-ticker comparison folds homoglyphs');
     if (u.includes('rpc.mainnet')) reqs++;
     return real(i, init);
   };
+  let withLifecycle = 0;
   try {
-    setCursor('launches', await client.getBlockNumber({ cacheTime: 0 }));
-    await indexNew();
+    // a realistic pass: ~3s of new blocks, no launches in them
+    setCursor('launches', (await client.getBlockNumber({ cacheTime: 0 })) - 30n);
+    reqs = 0;
+    await indexNew({ lifecycle: false });
+    const plain = reqs;
+    setCursor('launches', (await client.getBlockNumber({ cacheTime: 0 })) - 30n);
+    reqs = 0;
+    await indexNew({ lifecycle: true });
+    withLifecycle = reqs;
+    reqs = plain;
   } finally { globalThis.fetch = real; }
-  assert.ok(reqs <= 2, `an empty tail pass cost ${reqs} RPC requests; at a 3s interval that is ${(reqs / 3).toFixed(2)}/s against a 10/s budget`);
-  ok(`an empty tail pass costs ${reqs} RPC request(s) — ${(reqs / 3).toFixed(2)}/s at a 3s interval`);
+
+  // the lifecycle sweep runs one pass in ten, so the steady-state average is
+  // (9 * plain + 1 * withLifecycle) / 10
+  const avg = (9 * reqs + withLifecycle) / 10;
+  assert.ok(reqs <= 3, `a launch-only tail pass cost ${reqs} RPC requests`);
+  assert.ok(avg / 3 < 1.5, `the tail loop averages ${(avg / 3).toFixed(2)} req/s against a 10/s budget`);
+  ok(`tail pass costs ${reqs} req (${withLifecycle} on the lifecycle sweep) — ${(avg / 3).toFixed(2)} req/s average at a 3s interval`);
 }
 
 // ---- 5. a cursor far behind is bounded, not one giant blocking pass --------
