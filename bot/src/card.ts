@@ -209,25 +209,6 @@ function renderEarlyCard(r: ScanResult): string {
   return clampMessage(L.join('\n'));
 }
 
-/** Compact card for a launch that is too young to have measurable traction. */
-function renderEarlyCompactCard(r: ScanResult, botUsername?: string): string {
-  const L: string[] = [];
-  L.push(`<b>VITALS</b>  <b>${esc(ticker(r))}</b>`);
-  L.push(`launched ${earlySeconds(r)} ago · too early for traction`);
-
-  // The early compact card carries no "N undetermined" counter -- unlike the
-  // settled one -- so an undecodable creation transaction would otherwise render
-  // byte-identically to a genuinely clean launch. Stated outright instead, with
-  // the query mark that distinguishes it from a finding.
-  const undecoded = creationUndecoded(r);
-  if (undecoded) L.push('❔ creation tx not decoded — exemptions unconfirmed');
-  for (const finding of earlyFindings(r).slice(0, undecoded ? 1 : 2)) L.push(`🚩 ${esc(finding)}`);
-  L.push('re-scan in 2 min');
-  const via = botUsername ? `via @${esc(botUsername)} · ` : '';
-  L.push(`<i>${via}${COMPACT_DISCLAIMER}</i>`);
-  return clampMessage(L.join('\n'));
-}
-
 export function renderCard(r: ScanResult): string {
   if (r.isEarly) return renderEarlyCard(r);
 
@@ -292,12 +273,10 @@ export function renderCardText(r: ScanResult): string {
 }
 
 // ---------------------------------------------------------------------------
-// Compact card — for groups and inline results
+// Inline result metadata
 // ---------------------------------------------------------------------------
 
-/** Short disclaimer used in the compact footer, where the full one will not fit. */
-export const COMPACT_DISCLAIMER = 'signals only, not financial advice';
-
+/** Enough structure to build an inline result without re-scanning. */
 export interface CompactMeta {
   symbol: string | null;
   traction: string;
@@ -312,57 +291,6 @@ export interface CompactMeta {
   ageSeconds: number;
   /** The threshold that decided `early`, carried so cache lifetimes can match it. */
   earlyThresholdSeconds: number;
-}
-
-function ticker(r: ScanResult): string {
-  const s = r.reads.symbol?.trim();
-  if (s) return `$${clamp(s, MAX_TICKER).toUpperCase()}`;
-  return `${r.reads.token.slice(0, 6)}…${r.reads.token.slice(-4)}`;
-}
-
-/**
- * Compact card: seven lines, sized for a group message or an inline result
- * where the full DM card would dominate the conversation.
- *
- * Only two flag lines fit, so they are the two highest-severity *raised* flags.
- * Undetermined flags are never promoted into those slots -- they are counted in
- * the header instead, because "we could not determine this" must never occupy
- * the space where a reader expects a finding, and must never read as clean.
- *
- * Traction and round-trippers are always present: round-trippers is the line
- * that most often contradicts a healthy-looking buyer count, so dropping it to
- * save space would make the compact card systematically rosier than the full
- * one.
- */
-export function renderCompactCard(r: ScanResult, botUsername?: string): string {
-  if (r.isEarly) return renderEarlyCompactCard(r, botUsername);
-  const { reads: k, traction: t, flags: f } = r;
-  const L: string[] = [];
-
-  L.push(`<b>VITALS</b>  <b>${esc(ticker(r))}</b>`);
-
-  const mins = num(t.windowMinutes, 0);
-  L.push(
-    `traction ${esc(t.label)} · ${t.uniqueBuyers30m} buyer${t.uniqueBuyers30m === 1 ? '' : 's'}/${mins}m · progress ${num(k.progressPct, 2)}%`,
-  );
-
-  L.push(
-    `flags ${f.raised} of ${f.total}${f.unknown ? ` · ${f.unknown} undetermined` : ''}`,
-  );
-
-  for (const fl of topRaisedFlags(r, 2)) {
-    L.push(`🚩 ${esc(fl.compactDetail)}`);
-  }
-
-  L.push(
-    t.uniqueBuyers30m > 0
-      ? `round-trippers ${t.roundTrippers} of ${t.uniqueBuyers30m} buyer${t.uniqueBuyers30m === 1 ? '' : 's'} also sold`
-      : 'round-trippers — no buyers in the window',
-  );
-
-  const via = botUsername ? `via @${esc(botUsername)} · ` : '';
-  L.push(`<i>${via}${COMPACT_DISCLAIMER}</i>`);
-  return clampMessage(L.join('\n'));
 }
 
 /** The N highest-severity raised flags. Undetermined flags are excluded. */
@@ -383,7 +311,8 @@ export function compactMeta(r: ScanResult): CompactMeta {
     flagsRaised: r.flags.raised,
     flagsTotal: r.flags.total,
     flagsUnknown: r.flags.unknown,
-    topFlag: r.isEarly ? (earlyFindings(r)[0] ?? null) : top ? top.compactDetail : null,
+    // plain wording, as on the card this previews
+    topFlag: top ? top.plain : null,
     notFound: false,
     early: r.isEarly,
     ageSeconds: Math.max(0, Math.floor(r.ageSeconds)),
@@ -391,39 +320,181 @@ export function compactMeta(r: ScanResult): CompactMeta {
   };
 }
 
-/** One-line summary for an inline result's description field. */
+/**
+ * One-line summary for an inline result's description field.
+ *
+ * The same language as the card it previews: what was raised, or how much was
+ * checked. No traction verdict -- a subtitle reading "traction none" would put
+ * back the judgement the card deliberately stopped making.
+ */
 export function inlineDescription(m: CompactMeta): string {
   if (m.notFound) return 'not a pons v2 launch on this chain';
-  const parts = [
-    m.early ? `launched ${m.ageSeconds}s ago · too early for traction` : `traction ${m.traction}`,
-    `${m.flagsRaised} flag${m.flagsRaised === 1 ? '' : 's'}`,
-  ];
-  if (m.topFlag) parts.push(m.topFlag);
-  else if (m.flagsUnknown) parts.push(`${m.flagsUnknown} undetermined`);
-  const s = parts.join(' · ');
+  const s = m.flagsRaised > 0
+    ? [
+        `${m.flagsRaised} concern${m.flagsRaised === 1 ? '' : 's'}`,
+        ...(m.topFlag ? [m.topFlag] : []),
+        ...(m.flagsUnknown ? [`${m.flagsUnknown} undetermined`] : []),
+      ].join(' \u00b7 ')
+    : [
+        `no concerns raised \u00b7 ${m.flagsTotal - m.flagsUnknown} of ${m.flagsTotal} checked`,
+        ...(m.flagsUnknown ? [`${m.flagsUnknown} undetermined`] : []),
+      ].join(' \u00b7 ');
   // Telegram truncates long descriptions; keep it inside a sane width.
-  return s.length > 120 ? `${s.slice(0, 117)}…` : s;
+  return s.length > 120 ? `${s.slice(0, 117)}\u2026` : s;
 }
 
 /** The one sentence used for an unknown token, on every surface. */
 export const NOT_A_PONS_LAUNCH =
   'not a pons v2 launch. this bot only covers pons v2 on Robinhood Chain.';
 
-/** Compact card for an address that the factory has no record of. */
-export function renderCompactNotFound(token: string, botUsername?: string): string {
-  const via = botUsername ? `via @${esc(botUsername)} · ` : '';
-  return [
-    `<b>VITALS</b>  <code>${esc(token.slice(0, 6))}…${esc(token.slice(-4))}</code>`,
-    NOT_A_PONS_LAUNCH,
-    `<i>${via}${COMPACT_DISCLAIMER}</i>`,
-  ].join('\n');
+// ---------------------------------------------------------------------------
+// Default card - what every surface shows unless /full is asked for
+// ---------------------------------------------------------------------------
+
+/**
+ * Plain text, deliberately.
+ *
+ * The card is the unit of distribution: someone reads it and forwards it into a
+ * group. It is sent with no parse_mode, so there are no tags to strip and no
+ * entities to leak -- a copy-paste of what is on screen is exactly what was
+ * rendered. That also removes the injection surface entirely, because there is
+ * no markup for an attacker-controlled ticker to break out of.
+ */
+const PLAIN_FOOTER = 'not financial advice';
+
+/**
+ * Strip anything that could break the layout out of attacker-controlled text.
+ * A newline inside a token symbol would add lines to a card specified to stay
+ * under twelve.
+ */
+function plainField(s: string, max: number): string {
+  // Angle brackets go too. Nothing here is parsed as markup, so they are not a
+  // security problem -- but a ticker literally called "<b>" would render as what
+  // looks like a tag in a card people forward, and the card should not appear to
+  // contain formatting it does not have.
+  return clamp(String(s).replace(STRIP_RE, ' ').replace(/[<>]/g, ''), max);
+}
+const STRIP_RE = /[\u0000-\u001F\u007F]/g;
+
+/**
+ * Progress, trimmed. Zero keeps both decimals so it reads as a measurement
+ * rather than a rounding, while 12.40 reads better as 12.4.
+ */
+function formatProgress(pct: number): string {
+  if (!Number.isFinite(pct)) return '0.00';
+  if (pct === 0) return '0.00';
+  return pct.toFixed(2).replace(/0+$/, '').replace(/\.$/, '');
 }
 
-/** Plain-text compact card, for tests and CLI. */
-export function renderCompactText(r: ScanResult, botUsername?: string): string {
-  return renderCompactCard(r, botUsername)
-    .replace(/<[^>]+>/g, '')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&amp;/g, '&');
+/** Compact age for the header: 47s, 2m, 3h, 5d. */
+function headerAge(seconds: number): string {
+  const s = Math.max(0, Math.floor(seconds));
+  if (s < 60) return `${s}s`;
+  if (s < 3600) return `${Math.floor(s / 60)}m`;
+  if (s < 172800) return `${Math.floor(s / 3600)}h`;
+  return `${Math.floor(s / 86400)}d`;
+}
+
+/** How many raised flags the default card shows before summarising the rest. */
+const MAX_DEFAULT_FLAGS = 3;
+
+function defaultTicker(r: ScanResult): string {
+  const s = r.reads.symbol?.trim();
+  if (s) return `$${plainField(s, MAX_TICKER).toUpperCase()}`;
+  return `${r.reads.token.slice(0, 6)}\u2026${r.reads.token.slice(-4)}`;
+}
+
+/**
+ * The one-line summary of what was measured.
+ *
+ * Counts only - no traction verdict. The label was what made a seconds-old
+ * launch read as a judgement ("TRACTION none") when it was really an absence of
+ * data; raw counts carry the same information without pretending to a
+ * conclusion.
+ */
+function activityLine(r: ScanResult): string {
+  const t = r.traction;
+  const buyers = t.uniqueBuyers30m;
+  const progress = `${formatProgress(r.reads.progressPct)}%`;
+  if (buyers === 0) return `no buyers yet \u00b7 ${progress}`;
+
+  const sold =
+    t.roundTrippers >= buyers
+      ? buyers === 2
+        ? 'both already sold'
+        : 'all already sold'
+      : `${t.roundTrippers} sold`;
+  return `${buyers} buyer${buyers === 1 ? '' : 's'} \u00b7 ${sold} \u00b7 ${progress}`;
+}
+
+/**
+ * Buyer growth, only once there is a second point in time to compare against.
+ *
+ * Below ten minutes there is no +10min reading to grow from, so the line is
+ * absent rather than showing a change that was never measured.
+ */
+function growthLine(r: ScanResult): string | null {
+  const t = r.traction;
+  if (t.windowMinutes < 10 || t.uniqueBuyers30m === 0) return null;
+  return `buyers ${t.uniqueBuyers10m} \u2192 ${t.uniqueBuyers30m} in ${Math.round(t.windowMinutes)} min`;
+}
+
+/**
+ * The default card.
+ *
+ * Inverted from the original: concerns first, measurements last. A reader in the
+ * first minute of a launch gets the part that is actually decidable that early
+ * - what was fixed at creation - instead of scrolling past a traction block that
+ * cannot say anything yet.
+ *
+ * It never says "clean", "safe" or "looks good". The absence of a raised flag is
+ * not an all-clear: it means the checks that ran found nothing, which is why the
+ * count of what ran, and of what could not be determined, is stated beside it.
+ */
+export function renderDefaultCard(r: ScanResult, botUsername?: string): string {
+  const f = r.flags;
+  const L: string[] = [];
+
+  L.push(`VITALS  ${defaultTicker(r)} \u00b7 ${headerAge(r.ageSeconds)}`);
+  L.push('');
+
+  const raised = f.flags
+    .filter((fl) => fl.state === 'raised')
+    .sort((a, b) => b.severity - a.severity);
+
+  if (raised.length) {
+    for (const fl of raised.slice(0, MAX_DEFAULT_FLAGS)) {
+      L.push(`\ud83d\udea9 ${plainField(fl.plain, 70)}`);
+    }
+    const hidden = raised.length - MAX_DEFAULT_FLAGS;
+    const extras: string[] = [];
+    if (hidden > 0) extras.push(`+${hidden} more`);
+    // Undetermined is never dropped, even when the flag slots are full.
+    if (f.unknown > 0) extras.push(`${f.unknown} undetermined`);
+    if (extras.length) L.push(`${extras.join(' \u00b7 ')} \u00b7 /full`);
+  } else {
+    const parts = [`no concerns raised \u00b7 ${f.total - f.unknown} of ${f.total} checked`];
+    if (f.unknown > 0) parts.push(`${f.unknown} undetermined`);
+    L.push(parts.join(' \u00b7 '));
+  }
+
+  L.push('');
+  L.push(activityLine(r));
+  const growth = growthLine(r);
+  if (growth) L.push(growth);
+
+  L.push('');
+  L.push(botUsername ? `@${plainField(botUsername, 40)} \u00b7 ${PLAIN_FOOTER}` : PLAIN_FOOTER);
+  return L.join('\n');
+}
+
+/** Default card for an address the factory has no record of. */
+export function renderDefaultNotFound(token: string, botUsername?: string): string {
+  return [
+    `VITALS  ${token.slice(0, 6)}\u2026${token.slice(-4)}`,
+    '',
+    NOT_A_PONS_LAUNCH,
+    '',
+    botUsername ? `@${plainField(botUsername, 40)} \u00b7 ${PLAIN_FOOTER}` : PLAIN_FOOTER,
+  ].join('\n');
 }

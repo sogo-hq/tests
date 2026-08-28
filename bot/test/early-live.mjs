@@ -8,7 +8,7 @@ import { client, logsClient } from '../dist/chain.js';
 import { FACTORY, EARLY_WINDOW_SECONDS } from '../dist/config.js';
 import { TokenLaunched } from '../dist/abi.js';
 import { scanToken } from '../dist/scan.js';
-import { renderCardText, renderCompactText, compactMeta, inlineDescription } from '../dist/card.js';
+import { renderCardText, renderDefaultCard, compactMeta, inlineDescription } from '../dist/card.js';
 import { db } from '../dist/db.js';
 
 const ok = (m) => console.log(`  PASS  ${m}`);
@@ -42,18 +42,19 @@ ok(`live launch at ${r.ageSeconds}s is in early mode`);
 
 // ---- the rendered output ---------------------------------------------------
 const full = renderCardText(r);
-const compact = renderCompactText(r, 'vitalscheck_bot');
-for (const [name, text] of [['full', full], ['compact', compact]]) {
-  assert.doesNotMatch(text, /TRACTION\s+none/i, `${name} printed TRACTION none`);
-  assert.doesNotMatch(text, /round-trippers/i, `${name} printed round-trippers`);
-  assert.doesNotMatch(text, /buyer growth/i, `${name} printed buyer growth`);
-  assert.doesNotMatch(text, /progress velocity/i, `${name} printed progress velocity`);
-}
+const compact = renderDefaultCard(r, 'vitalscheck_bot');
+// /full keeps early mode: no traction verdict, none of the undefined metrics
+assert.doesNotMatch(full, /TRACTION\s+none/i, '/full printed TRACTION none');
+assert.doesNotMatch(full, /round-trippers/i, '/full printed round-trippers');
+assert.doesNotMatch(full, /buyer growth/i, '/full printed buyer growth');
+assert.doesNotMatch(full, /progress velocity/i, '/full printed progress velocity');
+// the default card carries no traction verdict at any age -- the label was the
+// problem, and it is gone from this shape entirely
+assert.doesNotMatch(compact, /traction/i, 'the default card names traction at all');
 assert.match(full, new RegExp(`launched ${r.ageSeconds}s ago — too early for traction`));
 assert.match(full, /traction unavailable — the snipe tax window is still open\. re-scan in 2 minutes\./);
-assert.match(compact, new RegExp(`^launched ${r.ageSeconds}s ago · too early for traction$`, 'm'));
-assert.match(compact, /^re-scan in 2 min$/m);
-ok('both cards render early mode with none of the undefined metrics');
+assert.match(compact, new RegExp(`^VITALS .* · ${r.ageSeconds}s$`, 'm'), `default header was: ${compact.split('\n')[0]}`);
+ok('/full renders early mode; the default card carries no traction verdict');
 
 // ---- inline ----------------------------------------------------------------
 const m = compactMeta(r);

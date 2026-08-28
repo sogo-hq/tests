@@ -18,10 +18,10 @@
 import type { CompactMeta } from './card.js';
 
 export interface CachedScan {
-  /** Full HTML card, for DM. */
-  card: string;
-  /** Compact HTML card, for groups and inline. */
-  compact: string;
+  /** Plain-text card shown by default on every surface. */
+  defaultCard: string;
+  /** Today's HTML card, served only by /full. */
+  fullCard: string;
   /**
    * Enough structure to build an inline result without re-scanning. Uses the
    * renderer's own type rather than a structural copy, so a field added there

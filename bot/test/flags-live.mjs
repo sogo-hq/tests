@@ -5,7 +5,7 @@
  */
 import assert from 'node:assert/strict';
 import { scanToken } from '../dist/scan.js';
-import { renderCardText, renderCompactText } from '../dist/card.js';
+import { renderCardText, renderDefaultCard } from '../dist/card.js';
 import { normaliseKey, setCursor } from '../dist/db.js';
 import { indexNew } from '../dist/indexer/launches.js';
 import { client } from '../dist/chain.js';
@@ -33,8 +33,8 @@ assert.equal(r.flags.worst.key, 'pair_ticker',
 ok('ranked as the worst flag on this token');
 
 assert.match(renderCardText(r), /Ticker vs pair asset/);
-assert.match(renderCompactText(r, 'b'), /ticker matches its pair asset/);
-ok('appears on both the full and compact cards');
+assert.match(renderDefaultCard(r, 'b'), /same ticker as the asset it trades against/);
+ok('appears on both the full card (technical) and the default card (plain English)');
 
 // ---- 2. a normal token is clean, and the flag count moved to 8 -------------
 const normal = await scanToken('0xd384722f6adfe7d79E8e6623896DF199afD31B76');

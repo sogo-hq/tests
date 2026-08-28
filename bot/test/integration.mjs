@@ -28,8 +28,8 @@ const secondMs = Date.now() - t1;
 assert.equal(second.kind, 'ok');
 assert.equal(second.cacheHit, true, 'second scan must be served from cache');
 assert.ok(secondMs < 50, `cache hit took ${secondMs}ms, expected <50ms`);
-assert.equal(second.card, first.card, 'cached card is identical');
-assert.equal(second.compact, first.compact, 'cached compact card is identical');
+assert.equal(second.fullCard, first.fullCard, 'cached full card is identical');
+assert.equal(second.defaultCard, first.defaultCard, 'cached default card is identical');
 ok(`warm scan: ${secondMs}ms, cacheHit=true, identical payload`);
 
 // --- 3. a cache hit must NOT write a duplicate scans row --------------------
@@ -85,8 +85,8 @@ ok(`25-request burst served from cache, ${scanSemaphore.stats().limit} slot limi
 // --- 8. unknown token: not_found, cached, and still disclaimed -------------
 const nf = await performScan({ token: '0x' + '22'.repeat(20), source: 'dm', userId: 1003, botUsername: 'vitalscheck_bot' });
 assert.equal(nf.kind, 'not_found');
-assert.ok(nf.compact.includes('not a pons v2 launch'));
-assert.ok(nf.compact.includes('not financial advice'), 'not-found card still carries the disclaimer');
+assert.ok(nf.defaultCard.includes('not a pons v2 launch'));
+assert.ok(nf.defaultCard.includes('not financial advice'), 'not-found card still carries the disclaimer');
 const nf2 = await performScan({ token: '0x' + '22'.repeat(20), source: 'inline', userId: 1004 });
 assert.equal(nf2.cacheHit, true, 'not-found results are cached too');
 ok('not-found handled, disclaimed and cached');
@@ -105,7 +105,7 @@ ok('not-found handled, disclaimed and cached');
   assert.equal(kinds.size, 1, `all 8 should agree, got ${[...kinds].join(',')}`);
   assert.ok(['ok', 'not_found'].includes([...kinds][0]));
   assert.equal(after - before, 1, `8 concurrent scans of one token must produce 1 scans row, got ${after - before}`);
-  const payloads = new Set(herd.map((h) => h.compact));
+  const payloads = new Set(herd.map((h) => h.defaultCard));
   assert.equal(payloads.size, 1, 'all callers get the identical card');
   console.log(`  PASS  8 concurrent misses on one token -> 1 scan, ${ms}ms, all identical`);
   assert.equal((await import('../dist/service.js')).inFlightCount(), 0, 'in-flight map drained');

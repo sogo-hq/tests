@@ -2,7 +2,7 @@ import { getAddress, isAddress } from 'viem';
 import { printVerify } from './verify.js';
 import { backfill, indexNew, decodePending, startDecodeLoop, startIndexLoop } from './indexer/launches.js';
 import { scanToken } from './scan.js';
-import { renderCardText, renderCompactText } from './card.js';
+import { renderCardText, renderDefaultCard } from './card.js';
 import { runDueRechecks, startRecheckLoop } from './recheck.js';
 import { startBot } from './bot.js';
 import { db } from './db.js';
@@ -102,8 +102,9 @@ async function main(): Promise<void> {
         console.error(`${addr} is not a pons v2 launch — the factory has no record of it.`);
         process.exit(1);
       }
-      const compact = rest.includes('--compact');
-      console.log(compact ? renderCompactText(result, 'vitalscheck_bot') : renderCardText(result));
+      // Same split as the bot: the default card unless --full is asked for.
+      const full = rest.includes('--full');
+      console.log(full ? renderCardText(result) : renderDefaultCard(result, 'vitalscheck_bot'));
       console.log(`\n[scan ${Date.now() - t0}ms · stored as scan #${result.scanId} · rechecks queued at +1h/+6h/+24h/+7d]`);
       break;
     }

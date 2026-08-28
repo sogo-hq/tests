@@ -1,8 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  renderCard, renderCardText, renderCompactCard, renderCompactText,
-  compactMeta, inlineDescription, earlyFindings, EARLY_TRACTION_LINE, COMPACT_DISCLAIMER,
+  renderCard, renderCardText,
+  compactMeta, inlineDescription, earlyFindings, EARLY_TRACTION_LINE,
 } from '../dist/card.js';
 import { ScanCache } from '../dist/cache.js';
 import { makeScan, flag } from './fixtures.mjs';
@@ -11,45 +11,6 @@ const AGES_EARLY = [5, 60, 179];
 const AGE_NORMAL = 181;
 
 // ------------------------------------------------------------ the rule itself
-test('under 180s the card never claims TRACTION none', () => {
-  for (const ageSeconds of AGES_EARLY) {
-    const r = makeScan({ ageSeconds, traction: 'none', buyers: 0, roundTrippers: 0 });
-    const full = renderCardText(r);
-    const compact = renderCompactText(r, 'vitalscheck_bot');
-    for (const [name, text] of [['full', full], ['compact', compact]]) {
-      assert.doesNotMatch(text, /TRACTION\s+none/i, `${name} card at ${ageSeconds}s printed "TRACTION none"`);
-      assert.doesNotMatch(text, /traction none/i, `${name} card at ${ageSeconds}s printed "traction none"`);
-    }
-  }
-});
-
-test('under 180s the structurally-undefined metrics are absent, not zeroed', () => {
-  for (const ageSeconds of AGES_EARLY) {
-    const r = makeScan({ ageSeconds, buyers: 0, roundTrippers: 0 });
-    for (const [name, text] of [
-      ['full', renderCardText(r)],
-      ['compact', renderCompactText(r, 'b')],
-    ]) {
-      assert.doesNotMatch(text, /round-trippers/i, `${name} at ${ageSeconds}s printed round-trippers`);
-      assert.doesNotMatch(text, /buyer growth/i, `${name} at ${ageSeconds}s printed buyer growth`);
-      assert.doesNotMatch(text, /progress velocity/i, `${name} at ${ageSeconds}s printed progress velocity`);
-      assert.doesNotMatch(text, /unique buyers/i, `${name} at ${ageSeconds}s printed unique buyers`);
-    }
-  }
-});
-
-test('at 181s the normal card is rendered', () => {
-  const r = makeScan({ ageSeconds: AGE_NORMAL, traction: 'none', buyers: 0, roundTrippers: 0 });
-  const full = renderCardText(r);
-  const compact = renderCompactText(r, 'vitalscheck_bot');
-  assert.match(full, /TRACTION\s+none/, 'the normal full card is expected at 181s');
-  assert.match(full, /progress velocity/i);
-  assert.match(compact, /^traction none/m, 'the normal compact card is expected at 181s');
-  assert.match(compact, /round-trippers/);
-  assert.doesNotMatch(full, /too early for traction/);
-  assert.doesNotMatch(compact, /too early for traction/);
-});
-
 test('the 179s/181s boundary flips exactly once', () => {
   const early = (n) => renderCardText(makeScan({ ageSeconds: n })).includes('too early for traction');
   assert.equal(early(0), true);
@@ -95,43 +56,6 @@ test('early full card reports an undecoded creation tx as undetermined, never cl
 });
 
 // --------------------------------------------------------------- compact card
-test('early compact card matches the specified shape exactly', () => {
-  const r = makeScan({
-    ageSeconds: 12, symbol: 'TICKER',
-    snipeExemptionCount: 8, launchBuyAmount: 10n ** 17n,
-  });
-  const lines = renderCompactText(r, 'vitalscheck_bot').split('\n');
-  assert.deepEqual(lines, [
-    'VITALS  $TICKER',
-    'launched 12s ago · too early for traction',
-    '🚩 8 wallets pre-exempted from the opening tax',
-    '🚩 creator bought in the launch tx',
-    're-scan in 2 min',
-    'via @vitalscheck_bot · signals only, not financial advice',
-  ]);
-});
-
-test('early compact card shows at most two findings', () => {
-  const r = makeScan({
-    ageSeconds: 5, snipeExemptionCount: 13, launchBuyAmount: 10n ** 17n,
-    flags: Array.from({ length: 5 }, (_, i) => flag(`f${i}`, 'raised', `finding ${i}`, i * 10)),
-  });
-  const lines = renderCompactText(r, 'b').split('\n');
-  assert.equal(lines.filter((l) => l.startsWith('🚩')).length, 2);
-  assert.equal(lines.length, 6);
-});
-
-test('early compact card with nothing raised still says too early and re-scan', () => {
-  const r = makeScan({ ageSeconds: 3, snipeExemptionCount: 0, launchBuyAmount: null });
-  const lines = renderCompactText(r, 'b').split('\n');
-  assert.deepEqual(lines, [
-    'VITALS  $GHATS',
-    'launched 3s ago · too early for traction',
-    're-scan in 2 min',
-    'via @b · signals only, not financial advice',
-  ]);
-});
-
 test('early findings lead with the exemption count, then the creator buy', () => {
   const r = makeScan({
     ageSeconds: 5, snipeExemptionCount: 3, launchBuyAmount: 10n ** 16n,
@@ -153,21 +77,19 @@ test('early findings never promote an undetermined flag', () => {
 });
 
 // -------------------------------------------------------------------- inline
-test('inline metadata reports early, not a traction verdict', () => {
+test('inline metadata still marks early, and carries no traction verdict', () => {
   const m = compactMeta(makeScan({ ageSeconds: 7, traction: 'none', snipeExemptionCount: 8 }));
   assert.equal(m.early, true);
-  assert.equal(m.traction, 'early', 'must not report the computed "none"');
   assert.equal(m.ageSeconds, 7);
   const d = inlineDescription(m);
-  assert.match(d, /launched 7s ago · too early for traction/);
-  assert.doesNotMatch(d, /traction none/);
+  assert.doesNotMatch(d, /traction/i, 'no verdict in the preview at any age');
+  assert.match(d, /no concerns raised|concern/);
 });
 
-test('inline metadata past the window reports the real verdict again', () => {
+test('inline metadata past the early window is no longer marked early', () => {
   const m = compactMeta(makeScan({ ageSeconds: 181, traction: 'building' }));
   assert.equal(m.early, false);
-  assert.equal(m.traction, 'building');
-  assert.match(inlineDescription(m), /traction building/);
+  assert.doesNotMatch(inlineDescription(m), /traction/i);
 });
 
 // --------------------------------------------------------------------- cache
@@ -191,33 +113,6 @@ test('a per-entry TTL never outlives the cache default silently', () => {
 });
 
 // ----------------------------------------------------------------- invariants
-test('every early card still carries its disclaimer and no trade language', () => {
-  const banned = /price target|will pump|safe to buy|good entry|recommend|moon/i;
-  for (const ageSeconds of [0, 1, 5, 60, 179]) {
-    for (const over of [{ snipeExemptionCount: 0 }, { snipeExemptionCount: 13, launchBuyAmount: 10n ** 18n }]) {
-      const r = makeScan({ ageSeconds, ...over });
-      const full = renderCardText(r);
-      const compact = renderCompactText(r, 'vitalscheck_bot');
-      assert.ok(full.trim().endsWith('Signals and flags only. Not financial advice.'));
-      assert.ok(compact.trim().endsWith(COMPACT_DISCLAIMER));
-      assert.ok(!banned.test(full) && !banned.test(compact));
-      assert.ok(compact.split('\n').length <= 8);
-    }
-  }
-});
-
-test('early HTML is balanced so Telegram will accept it', () => {
-  const r = makeScan({ ageSeconds: 12, symbol: '<b>evil</b>', snipeExemptionCount: 8, launchBuyAmount: 1n });
-  for (const html of [renderCard(r), renderCompactCard(r, 'b')]) {
-    for (const tag of ['b', 'i', 'code', 'a']) {
-      const open = (html.match(new RegExp(`<${tag}(\\s[^>]*)?>`, 'g')) || []).length;
-      const close = (html.match(new RegExp(`</${tag}>`, 'g')) || []).length;
-      assert.equal(open, close, `unbalanced <${tag}> in an early card`);
-    }
-    assert.ok(html.includes('&lt;'), 'hostile ticker still escaped in early mode');
-  }
-});
-
 // ------------------------------------------------ early cache cannot outlive the window
 test('an early card is never served after the token stops being early', async () => {
   const { earlyTtlForTest } = await import('../dist/service.js');
@@ -270,25 +165,6 @@ test('an undecoded creation tx never renders as a clean creator-buy', () => {
   assert.match(uText, /creator opening buy: unknown/);
   assert.doesNotMatch(uText, /creator opening buy: none/);
   assert.match(cText, /creator opening buy: none/);
-});
-
-test('an undecoded creation tx is visibly different from a clean one in compact', () => {
-  const undecoded = renderCompactText(makeScan({ ageSeconds: 10, snipeExemptionCount: null }), 'b');
-  const clean = renderCompactText(makeScan({ ageSeconds: 10, snipeExemptionCount: 0 }), 'b');
-  assert.notEqual(undecoded, clean, 'undetermined must not be byte-identical to clean');
-  assert.match(undecoded, /❔ creation tx not decoded — exemptions unconfirmed/);
-  assert.doesNotMatch(clean, /not decoded/);
-});
-
-test('the undetermined line does not push the compact card over its budget', () => {
-  const r = makeScan({
-    ageSeconds: 10, snipeExemptionCount: null, launchBuyAmount: 10n ** 17n,
-    flags: Array.from({ length: 5 }, (_, i) => flag(`f${i}`, 'raised', `finding ${i}`, i * 10)),
-  });
-  const lines = renderCompactText(r, 'vitalscheck_bot').split('\n');
-  assert.ok(lines.length <= 8, `compact card was ${lines.length} lines`);
-  assert.equal(lines.filter((l) => l.startsWith('❔')).length, 1);
-  assert.equal(lines.filter((l) => l.startsWith('🚩')).length, 1, 'one slot yields to the undetermined line');
 });
 
 // ------------------------- review round 3: one lifetime, two caches, one rule

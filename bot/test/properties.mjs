@@ -8,7 +8,7 @@
 import { readFileSync } from 'node:fs';
 import assert from 'node:assert/strict';
 import { scanToken } from '../dist/scan.js';
-import { renderCard, renderCardText, renderCompactCard, renderCompactText, COMPACT_DISCLAIMER } from '../dist/card.js';
+import { renderCard, renderCardText, renderDefaultCard } from '../dist/card.js';
 import { DISCLAIMER } from '../dist/config.js';
 
 const BANNED = /price target|will pump|safe to buy|good entry|buy now|sell now|to the moon|\bmoon\b|recommend (buy|sell)|should buy|should sell|guaranteed/i;
@@ -19,34 +19,38 @@ for (const t of tokens) {
   const r = await scanToken(t);
   if (!r) { console.log(`  skip ${t} (not resolvable)`); continue; }
   const full = renderCard(r), fullText = renderCardText(r);
-  const comp = renderCompactCard(r, 'vitalscheck_bot'), compText = renderCompactText(r, 'vitalscheck_bot');
+  const comp = renderDefaultCard(r, 'vitalscheck_bot'), compText = comp;
   const sym = (r.reads.symbol || '?').slice(0, 10);
   const problems = [];
 
   if (!fullText.trim().endsWith(DISCLAIMER)) problems.push('full card missing disclaimer');
-  if (!compText.trim().endsWith(COMPACT_DISCLAIMER)) problems.push('compact card missing disclaimer');
+  if (!compText.trim().endsWith('not financial advice')) problems.push('default card missing disclaimer');
   if (BANNED.test(fullText)) problems.push('banned language in full card');
   if (BANNED.test(compText)) problems.push('banned language in compact card');
 
   const cl = compText.split('\n');
-  if (cl.length > 8) problems.push(`compact card ${cl.length} lines`);
-  if (cl.filter((l) => l.startsWith('🚩')).length > 2) problems.push('more than 2 flag lines');
-  if (!compText.includes('traction ')) problems.push('compact missing traction');
-  if (!compText.includes('round-trippers')) problems.push('compact missing round-trippers');
+  if (cl.length > 12) problems.push(`default card ${cl.length} lines`);
+  if (cl.filter((l) => l.startsWith('🚩')).length > 3) problems.push('more than 3 flag lines');
+  if (!/^VITALS /.test(cl[0])) problems.push('default card header malformed');
+  if (/<[a-z/]/i.test(comp)) problems.push('markup in the default card');
+  if (/\b(clean|safe)\b|looks good/i.test(comp)) problems.push('all-clear language in the default card');
 
   // the compact card must never claim fewer raised flags than the full card
   const fullRaised = r.flags.raised;
-  const m = compText.match(/flags (\d+) of (\d+)/);
-  if (!m || Number(m[1]) !== fullRaised) problems.push(`compact flag count ${m && m[1]} != full ${fullRaised}`);
+  const shown = cl.filter((l) => l.startsWith('🚩')).length;
+  const more = compText.match(/\+(\d+) more/);
+  const accounted = shown + (more ? Number(more[1]) : 0);
+  if (fullRaised > 0 && accounted !== fullRaised) problems.push(`default card accounts for ${accounted} raised flags, full card has ${fullRaised}`);
+  if (fullRaised === 0 && !/no concerns raised/.test(compText)) problems.push('no-flags card missing its summary line');
 
   // undetermined must never be rendered as a finding
   for (const fl of r.flags.flags) {
-    if (fl.state === 'unknown' && compText.includes(`🚩 ${fl.compactDetail}`)) {
+    if (fl.state === 'unknown' && compText.includes(`🚩 ${fl.plain}`)) {
       problems.push(`undetermined flag "${fl.key}" rendered as a finding`);
     }
   }
   // unbalanced HTML would make Telegram reject the message
-  for (const [name, html] of [['full', full], ['compact', comp]]) {
+  for (const [name, html] of [['full', full]]) {
     for (const tag of ['b', 'i', 'code', 'a']) {
       const open = (html.match(new RegExp(`<${tag}(\\s[^>]*)?>`, 'g')) || []).length;
       const close = (html.match(new RegExp(`</${tag}>`, 'g')) || []).length;

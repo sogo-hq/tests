@@ -37,7 +37,8 @@ export function makeScan(over = {}) {
     },
     traction: {
       label: over.traction ?? 'none',
-      windowMinutes: over.windowMinutes ?? 30,
+      // derived as production does: the window cannot exceed the token's age
+      windowMinutes: over.windowMinutes ?? Math.min(30, ageSeconds / 60),
       windowTruncated: false,
       uniqueBuyers30m: over.buyers ?? 2,
       uniqueBuyers10m: 2,

@@ -59,20 +59,20 @@ await bot.handleUpdate(msg('group', `/scan ${TOKEN}`, -200));
 let c = drain();
 assert.equal(c.length, 1, `group scan should send exactly one message, sent ${c.length}`);
 assert.equal(c[0].method, 'sendMessage');
-assert.ok(c[0].payload.text.startsWith('<b>VITALS</b>'), 'group gets the compact card');
-assert.ok(c[0].payload.text.split('\n').length <= 8, 'compact card is <=8 lines in a group');
+assert.ok(c[0].payload.text.startsWith('VITALS  '), 'group gets the default card');
+assert.ok(c[0].payload.text.split('\n').length <= 12, 'default card is <=12 lines in a group');
+assert.equal(c[0].payload.parse_mode, undefined, 'the default card is sent as plain text');
 assert.ok(c[0].payload.reply_parameters?.message_id, 'sent as a reply to the triggering message');
 assert.equal(c[0].payload.link_preview_options?.is_disabled, true);
-assert.ok(c[0].payload.text.includes('via @vitalscheck_bot'), 'compact footer names the bot');
-assert.ok(c[0].payload.text.trim().endsWith('not financial advice</i>'), 'footer is last');
-ok('group /scan -> single compact card, sent as a reply, no preview, attributed footer');
+assert.ok(c[0].payload.text.trim().endsWith('@vitalscheck_bot · not financial advice'), 'footer names the bot and is last');
+ok('group /scan -> single default card, plain text, sent as a reply, attributed footer');
 
 // supergroup, and the @botname suffix form
 await bot.handleUpdate(msg('supergroup', `/scan@vitalscheck_bot ${TOKEN}`, -201));
 c = drain();
 assert.equal(c.length, 1);
-assert.ok(c[0].payload.text.startsWith('<b>VITALS</b>'), '/scan@botname works in a supergroup');
-ok('supergroup /scan@botname -> compact card');
+assert.ok(c[0].payload.text.startsWith('VITALS  '), '/scan@botname works in a supergroup');
+ok('supergroup /scan@botname -> default card');
 
 // --- the DO NOT rule: no auto-scanning in groups ---------------------------
 await bot.handleUpdate(msg('group', `look at ${TOKEN} everyone`, -202));
@@ -90,9 +90,19 @@ await bot.handleUpdate(msg('private', TOKEN, -300));
 c = drain();
 assert.ok(c.length >= 1, 'bare address in a DM is scanned');
 const dmText = c[c.length - 1].payload.text;
-assert.ok(dmText.includes('TRACTION'), 'DM gets the FULL card');
-assert.ok(dmText.split('\n').length > 8, 'full card is longer than the compact one');
-ok('bare address in a DM -> full card');
+assert.ok(dmText.startsWith('VITALS  '), 'a DM gets the same default card as every other surface');
+assert.ok(dmText.split('\n').length <= 12, 'default card is <=12 lines in a DM too');
+assert.ok(!/TRACTION/.test(dmText), 'the traction block belongs to /full now');
+ok('bare address in a DM -> the same default card');
+
+// --- /full is the only way to the long card ---------------------------------
+await bot.handleUpdate(msg('private', `/full ${TOKEN}`, -301));
+c = drain();
+const fullText = c[c.length - 1].payload.text;
+assert.ok(fullText.includes('TRACTION') || fullText.includes('too early for traction'), '/full renders the long card');
+assert.ok(fullText.split('\n').length > 12, '/full is longer than the default card');
+assert.equal(c[c.length - 1].payload.parse_mode, 'HTML', '/full keeps HTML');
+ok('/full -> the long card, unchanged');
 
 // --- inline ---------------------------------------------------------------
 await bot.handleUpdate(inline(''));
@@ -120,8 +130,8 @@ const r = c[0].payload.results[0];
 assert.equal(r.type, 'article');
 assert.match(r.title, /^VITALS — \$/, `title was: ${r.title}`);
 assert.ok(r.description.length > 0 && r.description.length <= 120);
-assert.ok(r.input_message_content.message_text.startsWith('<b>VITALS</b>'), 'message_text is the compact card');
-assert.equal(r.input_message_content.parse_mode, 'HTML');
+assert.ok(r.input_message_content.message_text.startsWith('VITALS  '), 'message_text is the default card');
+assert.equal(r.input_message_content.parse_mode, undefined, 'inline sends plain text, like every other surface');
 assert.equal(r.input_message_content.link_preview_options.is_disabled, true);
 assert.ok(Buffer.byteLength(r.id) <= 64, `inline result id must be <=64 bytes, was ${Buffer.byteLength(r.id)}`);
 ok(`inline valid address -> article "${r.title}" / "${r.description}"`);
@@ -183,16 +193,13 @@ await bot.handleUpdate(msg('private', '/stats', -400));
 c = drain();
 assert.equal(c.length, 1, '/stats replies once');
 const stats = c[0].payload.text;
-for (const tag of ['b', 'i', 'code']) {
-  const open = (stats.match(new RegExp(`<${tag}>`, 'g')) || []).length;
-  const close = (stats.match(new RegExp(`</${tag}>`, 'g')) || []).length;
-  assert.equal(open, close, `/stats has unbalanced <${tag}>`);
-}
-assert.ok(stats.includes('hit rate'), '/stats reports the cache hit rate');
-assert.ok(stats.includes('concurrency'), '/stats reports concurrency');
-assert.ok(/inline|dm|group/.test(stats), '/stats reports request sources');
-assert.ok(stats.includes('Not financial advice'), '/stats carries the disclaimer');
-ok('/stats renders balanced HTML with cache, limits and source breakdown');
+assert.match(stats, /^launches indexed [\d,]+$/m);
+assert.match(stats, /^launches with pre-exempted wallets [\d,]+ \(/m);
+assert.match(stats, /^median hold time of exempted wallets /m);
+assert.match(stats, /^scans served [\d,]+$/m);
+assert.equal(stats.split('\n').length, 4, '/stats is four counter lines and nothing else');
+assert.ok(!/<[a-z/]/i.test(stats), '/stats is plain text');
+ok('/stats renders four public counters, numbers only');
 
 // --- /help renders ----------------------------------------------------------
 await bot.handleUpdate(msg('private', '/help', -401));

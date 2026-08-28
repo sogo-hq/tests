@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { ScanCache } from '../dist/cache.js';
 import { UserQuota, Semaphore, SlotTimeout, formatRetry } from '../dist/quota.js';
-import { renderCompactCard, renderCompactText, topRaisedFlags, compactMeta, inlineDescription, COMPACT_DISCLAIMER } from '../dist/card.js';
+import { topRaisedFlags, compactMeta, inlineDescription } from '../dist/card.js';
 import { makeScan, flag } from './fixtures.mjs';
 
 const entry = (n) => ({ card: `card${n}`, compact: `compact${n}`, meta: { symbol: `S${n}`, traction: 'none', flagsRaised: 0, flagsTotal: 7, flagsUnknown: 0, topFlag: null, notFound: false } });
@@ -189,100 +189,18 @@ test('semaphore: a timed-out waiter does not steal a later slot', async () => {
 });
 
 // ---------------------------------------------------------------- compact card
-test('compact card: matches the specified shape', () => {
-  const r = makeScan({
-    symbol: 'GHATS', buyers: 2, roundTrippers: 2, flagsTotal: 7,
-    flags: [
-      flag('snipe', 'raised', '1 wallet pre-exempted from the opening tax', 101),
-      flag('collision', 'raised', 'name collides with 2 tokens after homoglyph normalisation', 70),
-      flag('peaks', 'unknown', 'no prior outcomes for this deployer yet', 5),
-      flag('surv', 'unknown', 'no +24h history for this deployer yet', 5),
-    ],
-  });
-  const lines = renderCompactText(r, 'vitalscheck_bot').split('\n');
-  assert.equal(lines.length, 7, `expected 7 lines, got ${lines.length}:\n${lines.join('\n')}`);
-  assert.equal(lines[0], 'VITALS  $GHATS');
-  assert.equal(lines[1], 'traction none · 2 buyers/30m · progress 0.00%');
-  assert.equal(lines[2], 'flags 2 of 7 · 2 undetermined');
-  assert.equal(lines[3], '🚩 1 wallet pre-exempted from the opening tax');
-  assert.equal(lines[4], '🚩 name collides with 2 tokens after homoglyph normalisation');
-  assert.equal(lines[5], 'round-trippers 2 of 2 buyers also sold');
-  assert.equal(lines[6], 'via @vitalscheck_bot · signals only, not financial advice');
-});
-
-test('compact card: never shows more than two flag lines', () => {
-  const flags = Array.from({ length: 6 }, (_, i) => flag(`f${i}`, 'raised', `detail ${i}`, i * 10));
-  const r = makeScan({ flags });
-  const lines = renderCompactText(r, 'b').split('\n');
-  assert.equal(lines.filter((l) => l.startsWith('🚩')).length, 2);
-});
-
-test('compact card: shows the two HIGHEST severity raised flags', () => {
-  const r = makeScan({ flags: [
-    flag('low', 'raised', 'low sev', 1),
-    flag('high', 'raised', 'high sev', 100),
-    flag('mid', 'raised', 'mid sev', 50),
-  ]});
-  const top = topRaisedFlags(r, 2).map((f) => f.compactDetail);
-  assert.deepEqual(top, ['high sev', 'mid sev']);
-});
-
-test('compact card: undetermined flags never occupy a flag line', () => {
-  const r = makeScan({ flags: [
-    flag('u1', 'unknown', 'undetermined thing', 900),
-    flag('r1', 'raised', 'a real finding', 10),
-  ]});
-  const text = renderCompactText(r, 'b');
-  assert.ok(text.includes('🚩 a real finding'));
-  assert.ok(!text.includes('undetermined thing'), 'unknown flag must not be shown as a finding');
-  assert.ok(text.includes('1 undetermined'), 'but it is still counted');
-});
-
-test('compact card: always shows traction, round-trippers and footer', () => {
-  for (const over of [{ buyers: 0, roundTrippers: 0 }, { buyers: 5, roundTrippers: 0 }, { buyers: 9, roundTrippers: 9 }]) {
-    const text = renderCompactText(makeScan(over), 'b');
-    assert.ok(/^VITALS/m.test(text), 'header');
-    assert.ok(text.includes('traction '), 'traction always present');
-    assert.ok(text.includes('round-trippers'), 'round-trippers always present');
-    assert.ok(text.trim().endsWith(COMPACT_DISCLAIMER), 'footer is last');
-  }
-});
-
-test('compact card: zero buyers reads sensibly rather than "0 of 0"', () => {
-  const text = renderCompactText(makeScan({ buyers: 0, roundTrippers: 0 }), 'b');
-  assert.ok(text.includes('round-trippers — no buyers in the window'));
-  assert.ok(!text.includes('0 of 0'));
-});
-
-test('compact card: HTML is escaped so a hostile ticker cannot inject markup', () => {
-  const r = makeScan({ symbol: '<b>x</b>' });
-  const html = renderCompactCard(r, 'b');
-  // ticker() upper-cases, so the injected tag arrives as <B>...</B>
-  assert.ok(html.includes('&lt;B&gt;X&lt;/B&gt;'), `ticker markup escaped, got: ${html.split('\n')[0]}`);
-  assert.ok(!/\$<B>/.test(html), 'no raw tag survives into the ticker');
-});
-
-test('compact card: falls back to a short address when there is no symbol', () => {
-  const r = makeScan({ symbol: null });
-  const text = renderCompactText(r, 'b');
-  assert.ok(text.startsWith('VITALS  0x147B…9E67'), text.split('\n')[0]);
-});
-
-test('compact card: stays within a group-friendly length', () => {
-  const flags = Array.from({ length: 7 }, (_, i) => flag(`f${i}`, 'raised', `a fairly long flag description number ${i}`, i));
-  const text = renderCompactText(makeScan({ flags }), 'vitalscheck_bot');
-  assert.ok(text.split('\n').length <= 8, 'at most 8 lines');
-});
-
 // ---------------------------------------------------------------- inline description
-test('inline description: summarises traction, flags and top flag', () => {
+test('inline description leads with concerns, in the card\'s own words', () => {
   const r = makeScan({ flags: [flag('snipe', 'raised', '1 wallet pre-exempted', 100)] });
-  assert.equal(inlineDescription(compactMeta(r)), 'traction none · 1 flag · 1 wallet pre-exempted');
+  r.flags.flags[0].plain = '1 wallet got in tax-free before you could';
+  const d = inlineDescription(compactMeta(r));
+  assert.equal(d, '1 concern · 1 wallet got in tax-free before you could');
+  assert.doesNotMatch(d, /traction/i, 'the preview must not carry a verdict the card stopped making');
 });
 
-test('inline description: falls back to undetermined count with no raised flags', () => {
-  const r = makeScan({ flags: [flag('u', 'unknown', 'unknown thing', 5)] });
-  assert.equal(inlineDescription(compactMeta(r)), 'traction none · 0 flags · 1 undetermined');
+test('inline description with nothing raised states what was checked', () => {
+  const r = makeScan({ flagsTotal: 8, flags: [flag('u', 'unknown', 'unknown thing', 5)] });
+  assert.equal(inlineDescription(compactMeta(r)), 'no concerns raised · 7 of 8 checked · 1 undetermined');
 });
 
 test('inline description: not-found case', () => {
@@ -295,18 +213,6 @@ test('inline description: truncated to a sane width', () => {
 });
 
 // ---------------------------------------------------------------- output rules
-test('output rules: compact card contains no prediction or trade language', () => {
-  const banned = /price target|will pump|safe to buy|good entry|buy now|sell now|moon|to the moon|recommend/i;
-  for (const over of [
-    { traction: 'strong', buyers: 90, roundTrippers: 0, progressPct: 88 },
-    { traction: 'none', buyers: 0, roundTrippers: 0 },
-    { traction: 'building', buyers: 20, roundTrippers: 3, flags: [flag('a', 'raised', 'b', 1)] },
-  ]) {
-    const text = renderCompactText(makeScan(over), 'b');
-    assert.ok(!banned.test(text), `banned language in: ${text}`);
-  }
-});
-
 // ------------------------------------------------- regressions from review
 test('regression: malformed cache config falls back instead of disabling limits', () => {
   const c = new ScanCache(NaN, NaN);
@@ -353,20 +259,6 @@ test('regression: quota keys fall back to the chat when Telegram omits `from`', 
 });
 
 // --------------------------------------- review round 2: hostile metadata
-test('regression: a hostile token symbol cannot blow Telegram message limits', async () => {
-  const { TELEGRAM_MAX_MESSAGE } = await import('../dist/card.js');
-  const { renderCard } = await import('../dist/card.js');
-  const evil = 'A'.repeat(9000);
-  const r = makeScan({ symbol: evil, name: evil });
-  const compact = renderCompactCard(r, 'vitalscheck_bot');
-  const full = renderCard(r);
-  assert.ok(compact.length <= TELEGRAM_MAX_MESSAGE, `compact card was ${compact.length} chars`);
-  assert.ok(full.length <= TELEGRAM_MAX_MESSAGE, `full card was ${full.length} chars`);
-  assert.ok(compact.split('\n')[0].length < 80, 'ticker is clamped, not merely truncated at the end');
-  // clamping must not break the required trailing footer
-  assert.ok(renderCompactText(r, 'b').trim().endsWith(COMPACT_DISCLAIMER));
-});
-
 test('regression: a hostile symbol cannot break out of the inline description', async () => {
   const r = makeScan({ symbol: 'B'.repeat(500) });
   const m = compactMeta(r);
@@ -467,15 +359,6 @@ test('quota: refund never goes negative or leaks slots', async () => {
   assert.equal(q.consume(99).allowed, true);
   assert.equal(q.consume(99).allowed, true);
   assert.equal(q.consume(99).allowed, false, 'still capped at 2 after stray refunds');
-});
-
-test('the not-found sentence is one shared string across every surface', async () => {
-  const { NOT_A_PONS_LAUNCH, renderCompactNotFound } = await import('../dist/card.js');
-  assert.equal(NOT_A_PONS_LAUNCH,
-    'not a pons v2 launch. this bot only covers pons v2 on Robinhood Chain.');
-  const card = renderCompactNotFound('0x147Bbaa458Ab7Cd11E1E478B87f08FE5A42A9E67', 'vitalscheck_bot');
-  assert.ok(card.includes(NOT_A_PONS_LAUNCH));
-  assert.ok(card.trim().endsWith('not financial advice</i>'), 'still carries the disclaimer');
 });
 
 test('the user-facing failure message never leaks internal error text', async () => {

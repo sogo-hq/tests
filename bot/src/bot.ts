@@ -3,7 +3,7 @@ import type { InlineQueryResult } from 'grammy/types';
 import { performScan, normaliseToken, looksLikeTxHash, inlineCacheSeconds, SCAN_FAILED, type ScanSource, type ScanOutcome } from './service.js';
 import { scanCache, startCacheReporter } from './cache.js';
 import { userQuota, floodQuota, scanSemaphore, startQuotaSweeper, formatRetry } from './quota.js';
-import { inlineDescription, COMPACT_DISCLAIMER } from './card.js';
+import { inlineDescription } from './card.js';
 import { db } from './db.js';
 import { TELEGRAM_BOT_TOKEN, DISCLAIMER } from './config.js';
 
@@ -30,18 +30,20 @@ const EXAMPLE = '0x147Bbaa458Ab7Cd11E1E478B87f08FE5A42A9E67';
 const HELP = [
   '<b>VITALS</b> — pons v2 launch scanner, Robinhood Chain',
   '',
-  `Send <code>/scan &lt;token address&gt;</code> for a traction and flag card.`,
+  'Send <code>/scan &lt;token address&gt;</code> for a card of what the chain shows.',
   '',
-  'Works three ways:',
-  '  • <b>DM</b> — full card',
-  '  • <b>Groups</b> — <code>/scan &lt;address&gt;</code>, compact card',
+  'Works three ways, same card on each:',
+  '  • <b>DM</b> — <code>/scan &lt;address&gt;</code>, or just paste an address',
+  '  • <b>Groups</b> — <code>/scan &lt;address&gt;</code>',
   `  • <b>Inline</b> — type <code>@BOTNAME &lt;address&gt;</code> in any chat`,
   '',
-  'The card reports what the chain shows: how many distinct wallets bought in',
-  'the opening window, whether buying outpaced selling, how far the curve',
-  'filled, and structural flags — the most useful being the number of wallets',
-  'the creator pre-exempted from the opening snipe tax, which is readable only',
-  'from the launch transaction itself.',
+  '<code>/full &lt;address&gt;</code> adds the technical detail behind every line.',
+  '<code>/stats</code> shows what has been indexed.',
+  '',
+  'The card leads with concerns — the things fixed at creation, which are',
+  'readable the second a token exists — and puts the counts underneath. There',
+  'is no grade and no score. The absence of a raised flag is not an all-clear:',
+  'the card says how many checks ran and how many could not be determined.',
   '',
   `<i>${DISCLAIMER}</i>`,
 ].join('\n');
@@ -68,7 +70,7 @@ function sourceOf(ctx: Context): ScanSource {
 // DM and group scanning
 // ---------------------------------------------------------------------------
 
-async function handleScan(ctx: Context, raw: string): Promise<void> {
+async function handleScan(ctx: Context, raw: string, full = false): Promise<void> {
   const source = sourceOf(ctx);
   const isGroup = source === 'group';
   const replyOpts = isGroup && ctx.msg
@@ -81,8 +83,8 @@ async function handleScan(ctx: Context, raw: string): Promise<void> {
       ? 'That is a transaction hash, not a token address.\n'
       : '';
     await ctx.reply(
-      `${hint}Send a pons v2 token address:\n<code>/scan ${EXAMPLE}</code>`,
-      { parse_mode: 'HTML', ...replyOpts },
+      `${hint}Send a pons v2 token address:\n/scan ${EXAMPLE}`,
+      { ...replyOpts },
     );
     return;
   }
@@ -93,7 +95,7 @@ async function handleScan(ctx: Context, raw: string): Promise<void> {
   const cached = scanCache.peek(token);
   let notice: { chat: { id: number }; message_id: number } | null = null;
   if (!cached && !isGroup) {
-    notice = await ctx.reply(`Scanning <code>${token}</code>…`, { parse_mode: 'HTML', ...replyOpts });
+    notice = await ctx.reply(`Scanning ${token}…`, { ...replyOpts });
   }
 
   // performScan converts anything it can into an outcome, but the reply path
@@ -115,7 +117,7 @@ async function handleScan(ctx: Context, raw: string): Promise<void> {
     outcome = { kind: 'error', message: SCAN_FAILED };
   }
 
-  await deliver(ctx, notice, messageFor(outcome, isGroup), replyOpts);
+  await deliver(ctx, notice, messageFor(outcome, full), replyOpts, full);
 }
 
 /**
@@ -129,8 +131,15 @@ async function deliver(
   notice: { chat: { id: number }; message_id: number } | null,
   text: string,
   replyOpts: Record<string, unknown>,
+  html = false,
 ): Promise<void> {
-  const opts = { parse_mode: 'HTML' as const, link_preview_options: { is_disabled: true } };
+  // The default card is sent with no parse_mode at all. It is built to be
+  // forwarded, and a card someone copies out of Telegram should be exactly what
+  // they saw -- no tags, no &amp; where an ampersand belongs. /full keeps HTML
+  // because it is a reference view, not something anyone pastes into a group.
+  const opts = html
+    ? { parse_mode: 'HTML' as const, link_preview_options: { is_disabled: true } }
+    : { link_preview_options: { is_disabled: true } };
 
   if (!notice) {
     await ctx.reply(text, { ...opts, ...replyOpts });
@@ -152,12 +161,17 @@ async function deliver(
   }
 }
 
-/** Render an outcome for a chat message. Groups get the compact card. */
-function messageFor(outcome: ScanOutcome, compact: boolean): string {
+/**
+ * Render an outcome for a chat message.
+ *
+ * The same default card on every surface -- DM, group and inline. /full is the
+ * only thing that gets the long HTML card, and only in a DM or group.
+ */
+function messageFor(outcome: ScanOutcome, full: boolean): string {
   switch (outcome.kind) {
     case 'ok':
     case 'not_found':
-      return compact ? outcome.compact : outcome.card;
+      return full ? outcome.fullCard : outcome.defaultCard;
     case 'rate_limited':
       return `⏳ ${outcome.message}`;
     case 'busy':
@@ -176,8 +190,8 @@ function messageFor(outcome: ScanOutcome, compact: boolean): string {
  * same attribution and disclaimer as every other card the bot emits.
  */
 function transientCard(ctx: Context, line: string): string {
-  const via = ctx.me?.username ? `via @${ctx.me.username} · ` : '';
-  return `<b>VITALS</b>\n${line}\n<i>${via}${COMPACT_DISCLAIMER}</i>`;
+  const via = ctx.me?.username ? `@${ctx.me.username} · ` : '';
+  return `VITALS\n${line}\n${via}not financial advice`;
 }
 
 function article(id: string, title: string, description: string, text: string): InlineQueryResult {
@@ -187,8 +201,10 @@ function article(id: string, title: string, description: string, text: string): 
     title,
     description,
     input_message_content: {
+      // No parse_mode: inline sends the same plain-text card as every other
+      // surface. With escaping removed, declaring HTML here would let a token
+      // whose ticker contains "<" or "&" break the message outright.
       message_text: text,
-      parse_mode: 'HTML',
       link_preview_options: { is_disabled: true },
     },
   };
@@ -221,9 +237,9 @@ async function handleInline(ctx: Context): Promise<void> {
         'Paste a pons token address',
         'VITALS scans pons v2 launches on Robinhood Chain',
         [
-          '<b>VITALS</b> — pons v2 launch scanner',
-          `Paste a token address after <code>@${usernameOf(ctx) ?? 'the bot'}</code> to scan it.`,
-          `<i>${COMPACT_DISCLAIMER}</i>`,
+          'VITALS — pons v2 launch scanner',
+          `Paste a token address after @${usernameOf(ctx) ?? 'the bot'} to scan it.`,
+          `@${usernameOf(ctx) ?? 'the bot'} · not financial advice`,
         ].join('\n'),
       ),
     ]);
@@ -241,12 +257,12 @@ async function handleInline(ctx: Context): Promise<void> {
         isTx ? 'That is a transaction hash' : 'Not a token address',
         'Expected 0x followed by 40 hex characters',
         [
-          '<b>VITALS</b> — pons v2 launch scanner',
+          'VITALS — pons v2 launch scanner',
           isTx
-            ? 'That is a transaction hash, not a token address. Expected <code>0x</code> followed by 40 hex characters, e.g.'
-            : 'That is not a token address. Expected <code>0x</code> followed by 40 hex characters, e.g.',
-          `<code>${EXAMPLE}</code>`,
-          `<i>${COMPACT_DISCLAIMER}</i>`,
+            ? 'That is a transaction hash, not a token address. Expected 0x followed by 40 hex characters, e.g.'
+            : 'That is not a token address. Expected 0x followed by 40 hex characters, e.g.',
+          EXAMPLE,
+          `@${usernameOf(ctx) ?? 'the bot'} · not financial advice`,
         ].join('\n'),
       ),
     ]);
@@ -277,13 +293,13 @@ async function handleInline(ctx: Context): Promise<void> {
       // serving "launched 12s ago" for a full minute and defeat the short
       // server-side TTL entirely.
       await answerShared(
-        [article(token, `VITALS — ${label}`, inlineDescription(outcome.meta), outcome.compact)],
+        [article(token, `VITALS — ${label}`, inlineDescription(outcome.meta), outcome.defaultCard)],
         inlineCacheSeconds(outcome.meta),
       );
       return;
     case 'not_found':
       await answerShared([
-        article(`nf:${token}`, `VITALS — ${short}`, 'not a pons v2 launch on this chain', outcome.compact),
+        article(`nf:${token}`, `VITALS — ${short}`, 'not a pons v2 launch on this chain', outcome.defaultCard),
       ]);
       return;
     case 'rate_limited':
@@ -338,6 +354,10 @@ export function createBot(token = TELEGRAM_BOT_TOKEN): Bot {
   // so /scan and /scan@vitalscheck_bot both land here.
   bot.command('scan', (ctx) => handleScan(ctx, ctx.match || ''));
 
+  // Everything the default card leaves out: the technical wording of every
+  // flag, the traction block, phase, pair and links.
+  bot.command('full', (ctx) => handleScan(ctx, ctx.match || '', true));
+
   bot.command('stats', async (ctx) => {
     // /stats runs several COUNT(*) queries against SQLite on the event loop, so
     // it goes through the same flood cap as everything else rather than being a
@@ -350,7 +370,7 @@ export function createBot(token = TELEGRAM_BOT_TOKEN): Bot {
         return;
       }
     }
-    await ctx.reply(statsText(), { parse_mode: 'HTML' });
+    await ctx.reply(statsText());
   });
 
   bot.on('inline_query', handleInline);
@@ -373,43 +393,99 @@ export function createBot(token = TELEGRAM_BOT_TOKEN): Bot {
   return bot;
 }
 
-function statsText(): string {
-  const q = (sql: string, ...a: any[]) => (db.prepare(sql).get(...a) as any).n;
-  const c = scanCache.stats();
-  const sem = scanSemaphore.stats();
-  const uq = userQuota.stats();
-  const day = Math.floor(Date.now() / 1000) - 86400;
+/**
+ * Median time an exempted wallet held before selling.
+ *
+ * Per wallet, per token: first sell minus first buy. Wallets that never sold are
+ * excluded rather than counted as infinite -- they are still holding, which is
+ * not the same measurement.
+ *
+ * Bounded by what has actually been indexed: trades are only indexed for tokens
+ * someone scanned, so this is a sample of scanned launches, and the sample size
+ * is reported alongside it rather than implied.
+ */
+function exemptedHoldTime(): { medianSeconds: number | null; samples: number } {
+  const rows = db
+    .prepare(
+      `SELECT l.token AS token, l.snipe_exemptions AS ex FROM launches l
+       WHERE l.snipe_exemption_count > 0 AND l.snipe_exemptions IS NOT NULL
+         AND EXISTS (SELECT 1 FROM trades t WHERE t.token = l.token)
+       LIMIT 500`,
+    )
+    .all() as { token: string; ex: string }[];
 
-  const bySource = db
-    .prepare('SELECT source, COUNT(*) n, SUM(cache_hit) hits FROM scan_events WHERE ts >= ? GROUP BY source ORDER BY n DESC')
-    .all(day) as { source: string; n: number; hits: number }[];
+  const holds: number[] = [];
+  const tradeStmt = db.prepare(
+    `SELECT side, trader, recipient, block_time FROM trades WHERE token = ? ORDER BY block_number`,
+  );
 
-  const med = db
-    .prepare("SELECT AVG(duration_ms) n FROM scan_events WHERE ts >= ? AND cache_hit = 0 AND outcome = 'ok'")
-    .get(day) as { n: number | null };
+  for (const row of rows) {
+    let exempt: string[];
+    try {
+      exempt = (JSON.parse(row.ex) as string[]).map((a) => a.toLowerCase());
+    } catch (err) {
+      console.warn(`[stats] unparseable snipe_exemptions for ${row.token}:`, String((err as Error)?.message ?? err).slice(0, 80));
+      continue;
+    }
+    if (!exempt.length) continue;
+    const set = new Set(exempt);
+    const trades = tradeStmt.all(row.token) as
+      { side: string; trader: string; recipient: string; block_time: number }[];
 
-  const L = [
-    '<b>index</b>',
-    `  launches: ${q('SELECT COUNT(*) n FROM launches')}`,
-    `  decoded: ${q('SELECT COUNT(*) n FROM launches WHERE snipe_exemption_count IS NOT NULL')}`,
-    `  trades: ${q('SELECT COUNT(*) n FROM trades')}`,
-    `  scans recorded: ${q('SELECT COUNT(*) n FROM scans')}`,
-    '<b>cache</b>',
-    `  hit rate ${(c.hitRate * 100).toFixed(1)}% (${c.hits}/${c.requests})`,
-    `  ${c.size}/${c.maxEntries} entries · ${c.evictions} evicted`,
-    '<b>limits</b>',
-    `  ${uq.perMinute}/min, ${uq.perHour}/hour per user · ${uq.trackedUsers} users tracked`,
-    `  concurrency ${sem.active}/${sem.limit} · ${sem.queued} queued · peak ${sem.peakQueue}`,
-  ];
-  if (bySource.length) {
-    L.push('<b>requests, last 24h</b>');
-    for (const s of bySource) {
-      L.push(`  ${s.source}: ${s.n} (${s.hits} cached)`);
+    const firstBuy = new Map<string, number>();
+    for (const t of trades) {
+      if (!t.block_time) continue;
+      if (t.side === 'buy' && set.has(t.recipient) && !firstBuy.has(t.recipient)) {
+        firstBuy.set(t.recipient, t.block_time);
+      } else if (t.side === 'sell' && set.has(t.trader)) {
+        const bought = firstBuy.get(t.trader);
+        if (bought !== undefined && t.block_time >= bought) {
+          holds.push(t.block_time - bought);
+          firstBuy.delete(t.trader); // first round trip only
+        }
+      }
     }
   }
-  if (med.n) L.push(`  mean uncached scan: ${Math.round(med.n)}ms`);
-  L.push('', `<i>${DISCLAIMER}</i>`);
-  return L.join('\n');
+
+  if (!holds.length) return { medianSeconds: null, samples: 0 };
+  holds.sort((a, b) => a - b);
+  const mid = holds.length >> 1;
+  const median = holds.length % 2 ? holds[mid]! : Math.round((holds[mid - 1]! + holds[mid]!) / 2);
+  return { medianSeconds: median, samples: holds.length };
+}
+
+function humanDuration(seconds: number): string {
+  if (seconds < 60) return `${seconds}s`;
+  const m = Math.floor(seconds / 60);
+  const s = seconds % 60;
+  if (m < 60) return s ? `${m}m ${s}s` : `${m}m`;
+  const h = Math.floor(m / 60);
+  return `${h}h ${m % 60}m`;
+}
+
+/**
+ * Public counters. Numbers only -- this is shown to anyone who types /stats, and
+ * a line that reads as a pitch has no place in a tool whose whole claim is that
+ * it does not make calls.
+ */
+export function statsText(): string {
+  const q = (sql: string) => (db.prepare(sql).get() as { n: number }).n;
+
+  const launches = q('SELECT COUNT(*) n FROM launches');
+  const decoded = q('SELECT COUNT(*) n FROM launches WHERE snipe_exemption_count IS NOT NULL');
+  const withExempt = q('SELECT COUNT(*) n FROM launches WHERE snipe_exemption_count > 0');
+  const pct = decoded > 0 ? ((withExempt / decoded) * 100).toFixed(1) : '0.0';
+  const hold = exemptedHoldTime();
+  const scans = q('SELECT COUNT(*) n FROM scan_events');
+
+  return [
+    `launches indexed ${launches.toLocaleString()}`,
+    `launches with pre-exempted wallets ${withExempt.toLocaleString()} (${pct}% of ${decoded.toLocaleString()} decoded)`,
+    hold.medianSeconds === null
+      ? 'median hold time of exempted wallets no data yet'
+      : `median hold time of exempted wallets ${humanDuration(hold.medianSeconds)} (n=${hold.samples.toLocaleString()})`,
+    `scans served ${scans.toLocaleString()}`,
+  ].join('\n');
 }
 
 export async function startBot(): Promise<void> {

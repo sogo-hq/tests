@@ -31,9 +31,10 @@ live chain.
 
 | surface | trigger | card |
 |---|---|---|
-| DM | `/scan <address>`, or a bare address | full |
-| Group / supergroup | `/scan <address>` only | compact, sent as a reply |
-| Inline | `@thebot <address>` in any chat | compact |
+| DM | `/scan <address>`, or a bare address | default |
+| Group / supergroup | `/scan <address>` only | default, sent as a reply |
+| Inline | `@thebot <address>` in any chat | default |
+| any of the above | `/full <address>` | the long technical card |
 
 All three go through one entry point (`src/service.ts`), so the cache, the
 per-user quota and the concurrency limit apply identically and no surface can
@@ -119,6 +120,81 @@ is "try again in Ns". The per-minute window — the case users actually hit — 
 never exceed 60 seconds and always reads as `try again in 60s`. The hourly window
 can be nearly an hour, and `try again in 3400s` is not usable, so anything above
 90 seconds is rendered as minutes.
+
+## The card
+
+Concerns first, measurements last. A reader in the first minute of a launch gets
+the part that is actually decidable that early — what was fixed at creation —
+rather than scrolling past a traction block that cannot say anything yet.
+
+```
+VITALS  $GHATS · 47s
+
+🚩 8 wallets got in tax-free before you could
+🚩 same ticker as the asset it trades against
+🚩 deployer launched 91 tokens this week
+
+2 buyers · both already sold · 0.00%
+
+@vitalscheck_bot · not financial advice
+```
+
+```
+VITALS  $TOKEN · 20m
+
+no concerns raised · 6 of 8 checked · 2 undetermined
+
+38 buyers · 3 sold · 12.4%
+buyers 12 → 38 in 20 min
+
+@vitalscheck_bot · not financial advice
+```
+
+At most three flags, highest severity first; a fourth becomes `+N more · /full`.
+**Undetermined is never hidden** — it appears beside the checked count, or on the
+overflow line when the three flag slots are full.
+
+There is no grade and no score. There is also no "clean", "safe" or "looks good":
+the absence of a raised flag is not an all-clear, it means the checks that ran
+found nothing, which is why the card states how many ran and how many could not
+be determined.
+
+The traction *verdict* is gone entirely. A label like `TRACTION none` was what
+made a seconds-old launch read as a judgement when it was really an absence of
+data; raw counts carry the same information without pretending to a conclusion.
+
+**Every flag carries a second register.** The plain line is what the card shows;
+the technical wording still exists and appears in `/full`.
+
+| technical | plain |
+|---|---|
+| `8 wallets pre-exempted from the opening tax` | 8 wallets got in tax-free before you could |
+| `ticker matches its pair asset NVDA` | same ticker as the asset it trades against |
+| `name collides with 11 tokens after homoglyph normalisation` | 11 other tokens use this exact ticker |
+| `deployer launched 331 other tokens in 7d` | deployer launched 331 tokens this week |
+| `creator tax 100 bps vs 90 bps median` | creator takes 1% of every trade |
+| `only 20% of deployer's priors alive at +24h` | 4 of deployer's last 5 tokens died in 24h |
+| `buyback enabled — 5-year linear vest` | creator locked fees into a 5-year buyback |
+| `custom pair NVDA — inherits that asset's risk` | priced in NVDA, not ETH — inherits its risk |
+
+### Built to be forwarded
+
+The card is the unit of distribution: someone reads it and sends it to a group.
+So it is sent with **no `parse_mode` at all** — no tags to strip, no `&amp;`
+where an ampersand belongs, and a copy-paste of what is on screen is exactly what
+was rendered. That also removes the injection surface entirely, since there is no
+markup for an attacker-controlled ticker to break out of. Angle brackets are
+stripped from tickers anyway, so a token called `<b>` cannot even *look* like it
+carries formatting.
+
+Under 12 lines so it never truncates in a Telegram preview, footer always last,
+and the same shape on all three surfaces — DM, group and inline.
+
+### /full
+
+Renders exactly the previous card, unchanged: the technical wording of every
+flag, the traction block, early mode, phase, pair and links. Nothing was lost;
+it stopped being the default.
 
 ## Ticker impersonating the pair asset
 

@@ -1,6 +1,6 @@
 import { isAddress, getAddress } from 'viem';
 import { scanToken, type ScanResult } from './scan.js';
-import { renderCard, renderCompactCard, renderCompactNotFound, compactMeta, type CompactMeta } from './card.js';
+import { renderCard, renderDefaultCard, renderDefaultNotFound, compactMeta, type CompactMeta } from './card.js';
 import { scanCache, type CachedScan } from './cache.js';
 import { userQuota, floodQuota, scanSemaphore, SlotTimeout, formatRetry } from './quota.js';
 import { db } from './db.js';
@@ -16,8 +16,8 @@ export type ScanSource = 'dm' | 'group' | 'inline' | 'cli';
 export const SCAN_FAILED = 'scan failed, try again';
 
 export type ScanOutcome =
-  | { kind: 'ok'; card: string; compact: string; meta: CompactMeta; cacheHit: boolean; durationMs: number }
-  | { kind: 'not_found'; card: string; compact: string; meta: CompactMeta; cacheHit: boolean; durationMs: number }
+  | { kind: 'ok'; defaultCard: string; fullCard: string; meta: CompactMeta; cacheHit: boolean; durationMs: number }
+  | { kind: 'not_found'; defaultCard: string; fullCard: string; meta: CompactMeta; cacheHit: boolean; durationMs: number }
   | { kind: 'rate_limited'; retryAfterSec: number; window: 'minute' | 'hour'; message: string }
   | { kind: 'busy'; message: string }
   | { kind: 'error'; message: string };
@@ -131,13 +131,15 @@ export function looksLikeTxHash(raw: string): boolean {
   return TX_HASH_RE.test(raw);
 }
 
-function fromCache(hit: CachedScan): { card: string; compact: string; meta: CompactMeta } {
-  return { card: hit.card, compact: hit.compact, meta: hit.meta };
+function fromCache(hit: CachedScan): { defaultCard: string; fullCard: string; meta: CompactMeta } {
+  return { defaultCard: hit.defaultCard, fullCard: hit.fullCard, meta: hit.meta };
 }
 
 interface RenderedScan {
-  card: string;
-  compact: string;
+  /** Plain-text card shown by default on every surface. */
+  defaultCard: string;
+  /** Today's HTML card, shown only for /full. */
+  fullCard: string;
   meta: CompactMeta;
   scanId?: number;
 }
@@ -162,10 +164,10 @@ const inFlight = new Map<string, Promise<RenderedScan>>();
 
 function render(token: string, result: Awaited<ReturnType<typeof scanToken>>, botUsername?: string): RenderedScan {
   if (!result) {
-    const compact = renderCompactNotFound(token, botUsername);
+    const notFound = renderDefaultNotFound(token, botUsername);
     return {
-      card: compact,
-      compact,
+      defaultCard: notFound,
+      fullCard: notFound,
       meta: {
         symbol: null, traction: 'unknown', flagsRaised: 0, flagsTotal: 0,
         flagsUnknown: 0, topFlag: null, notFound: true, early: false, ageSeconds: 0,
@@ -174,8 +176,8 @@ function render(token: string, result: Awaited<ReturnType<typeof scanToken>>, bo
     };
   }
   return {
-    card: renderCard(result),
-    compact: renderCompactCard(result, botUsername),
+    defaultCard: renderDefaultCard(result, botUsername),
+    fullCard: renderCard(result),
     meta: compactMeta(result),
     scanId: result.scanId,
   };
@@ -205,8 +207,8 @@ function sharedScan(token: string, userId?: number, botUsername?: string): Promi
       // while the other has real traction -- so it gets a much shorter life than
       // the settled card that follows it.
       scanCache.set(token, {
-        card: rendered.card,
-        compact: rendered.compact,
+        defaultCard: rendered.defaultCard,
+        fullCard: rendered.fullCard,
         meta: rendered.meta,
         ttlMs: earlyTtlFor(rendered.meta),
       });
@@ -365,8 +367,8 @@ export async function performScan(req: ScanRequest): Promise<ScanOutcome> {
     logEvent(req, false, d, kind, rendered.scanId, rendered.meta.notFound ? undefined : rendered.meta);
     return {
       kind,
-      card: rendered.card,
-      compact: rendered.compact,
+      defaultCard: rendered.defaultCard,
+      fullCard: rendered.fullCard,
       meta: rendered.meta,
       cacheHit: false,
       durationMs: d,
