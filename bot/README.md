@@ -211,6 +211,32 @@ too. Ranked **above** a plain name collision: colliding with some other launch i
 common noise, whereas wearing the ticker of the asset on the other side of your
 own pool is aimed at the person about to trade it.
 
+## The hold-time figure
+
+`/stats` reports the median time an exempted wallet held before selling. It is
+the number most likely to be quoted out of context, so two things are pinned
+down.
+
+**The unit is the (token, exempted wallet) pair**, not the sell transaction:
+first sell minus first buy, one observation per pair. A wallet that sells three
+times contributes once. The same wallet across two tokens is two observations. A
+wallet that never sold is excluded rather than counted as infinite — it is still
+holding, which is a different measurement — and a sell whose buy fell outside the
+indexed window cannot be measured at all.
+
+**Below 30 observations the median is not published**, and the line reads
+`not enough data yet (n=7)` instead. Thirty is the conventional floor for
+treating a sample as more than anecdote. It matters most right after a redeploy:
+trades are only indexed for tokens someone scanned, so `n` climbs through 1, 2, 3
+as the index warms, and without a floor every one of those values would publish
+as a median — during exactly the window when someone might see the figure for the
+first time.
+
+That scan-driven bound is the real limit on this number, and it is larger than it
+looks: on the current index 183 launches carry exempted wallets but only seven
+have any trade history. The pair count is always printed beside the median for
+that reason.
+
 ## Surviving a redeploy
 
 The container has no persistent volume, so every deploy starts from an empty
@@ -625,6 +651,7 @@ Tables: `launches`, `trades`, `scans`, `rechecks`, `token_peaks`, `cursors`.
 | `RPC_RATE_PER_SEC` | `10` | client-side pacing |
 | `MIN_INDEX_ROWS_FOR_NEGATIVE` | `1000` | rows required before an index-backed negative is asserted |
 | `RECOVERY_STALE_SECONDS` | `21600` | index age past which boot rebuilds it |
+| `MIN_HOLD_SAMPLES` | `30` | observations required before the median hold time is published |
 | `SCAN_CACHE_TTL_MS` | `60000` | rendered-card cache TTL |
 | `SCAN_CACHE_MAX` | `500` | cache entry cap |
 | `SCANS_PER_MINUTE` | `10` | per-user quota |

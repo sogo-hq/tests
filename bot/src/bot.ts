@@ -395,30 +395,60 @@ export function createBot(token = TELEGRAM_BOT_TOKEN): Bot {
 }
 
 /**
- * Median time an exempted wallet held before selling.
+ * Below this many observations the median is not published.
  *
- * Per wallet, per token: first sell minus first buy. Wallets that never sold are
- * excluded rather than counted as infinite -- they are still holding, which is
- * not the same measurement.
- *
- * Bounded by what has actually been indexed: trades are only indexed for tokens
- * someone scanned, so this is a sample of scanned launches, and the sample size
- * is reported alongside it rather than implied.
+ * Thirty is the conventional floor for treating a sample as more than anecdote,
+ * and this figure is the one most likely to be quoted out of context. It matters
+ * most right after a redeploy: trades are only indexed for tokens someone
+ * scanned, so n climbs through 1, 2, 3 as the index warms, and without a floor
+ * every one of those values would publish as a median.
  */
-function exemptedHoldTime(): { medianSeconds: number | null; samples: number } {
+const MIN_HOLD_SAMPLES = Number(process.env.MIN_HOLD_SAMPLES || 30);
+
+export interface HoldTime {
+  medianSeconds: number | null;
+  /**
+   * Exempted-wallet-to-token pairs with at least one sell. One pair contributes
+   * at most one observation -- its first round trip -- so this is a count of
+   * distinct wallets caught selling, not of sell transactions.
+   */
+  pairs: number;
+}
+
+/**
+ * Median time an exempted wallet held a token before selling it.
+ *
+ * The unit is the (token, exempted wallet) pair: first sell minus first buy, one
+ * observation per pair. A wallet that never sold is excluded rather than counted
+ * as infinite -- it is still holding, which is a different measurement. A pair
+ * whose buy fell outside the indexed window cannot be measured either, since
+ * there is no start time to subtract.
+ *
+ * Drawn entirely from `trades`, which is only populated for tokens someone
+ * scanned. That is the real bound on this figure: on the current index 183
+ * launches carry exempted wallets but only a handful have any trade history at
+ * all, so the population is far smaller than the launch count suggests. The
+ * pair count is always reported beside the median for exactly that reason.
+ */
+export function exemptedHoldTime(): HoldTime {
+  // Only launches that both carry exemptions and have a sell recorded -- a token
+  // with no sell can contribute no pair, so there is nothing to scan it for.
   const rows = db
     .prepare(
-      `SELECT l.token AS token, l.snipe_exemptions AS ex FROM launches l
-       WHERE l.snipe_exemption_count > 0 AND l.snipe_exemptions IS NOT NULL
-         AND EXISTS (SELECT 1 FROM trades t WHERE t.token = l.token)
-       LIMIT 500`,
+      `SELECT l.token AS token, l.snipe_exemptions AS ex
+       FROM launches l
+       WHERE l.snipe_exemption_count > 0
+         AND l.snipe_exemptions IS NOT NULL
+         AND EXISTS (SELECT 1 FROM trades t WHERE t.token = l.token AND t.side = 'sell')`,
     )
     .all() as { token: string; ex: string }[];
 
-  const holds: number[] = [];
   const tradeStmt = db.prepare(
-    `SELECT side, trader, recipient, block_time FROM trades WHERE token = ? ORDER BY block_number`,
+    `SELECT side, trader, recipient, block_time FROM trades
+     WHERE token = ? ORDER BY block_number, log_index`,
   );
+
+  const holds: number[] = [];
 
   for (const row of rows) {
     let exempt: string[];
@@ -433,26 +463,39 @@ function exemptedHoldTime(): { medianSeconds: number | null; samples: number } {
     const trades = tradeStmt.all(row.token) as
       { side: string; trader: string; recipient: string; block_time: number }[];
 
-    const firstBuy = new Map<string, number>();
+    // first buy per exempted wallet, consumed by that wallet's first sell
+    const openedAt = new Map<string, number>();
     for (const t of trades) {
       if (!t.block_time) continue;
-      if (t.side === 'buy' && set.has(t.recipient) && !firstBuy.has(t.recipient)) {
-        firstBuy.set(t.recipient, t.block_time);
-      } else if (t.side === 'sell' && set.has(t.trader)) {
-        const bought = firstBuy.get(t.trader);
-        if (bought !== undefined && t.block_time >= bought) {
-          holds.push(t.block_time - bought);
-          firstBuy.delete(t.trader); // first round trip only
+      if (t.side === 'buy') {
+        // the recipient is who ends up holding, which is the wallet the
+        // exemption was granted to
+        if (set.has(t.recipient) && !openedAt.has(t.recipient)) {
+          openedAt.set(t.recipient, t.block_time);
+        }
+      } else if (set.has(t.trader)) {
+        const opened = openedAt.get(t.trader);
+        if (opened !== undefined && t.block_time >= opened) {
+          holds.push(t.block_time - opened);
+          openedAt.delete(t.trader); // one observation per pair
         }
       }
     }
   }
 
-  if (!holds.length) return { medianSeconds: null, samples: 0 };
+  if (!holds.length) return { medianSeconds: null, pairs: 0 };
   holds.sort((a, b) => a - b);
   const mid = holds.length >> 1;
   const median = holds.length % 2 ? holds[mid]! : Math.round((holds[mid - 1]! + holds[mid]!) / 2);
-  return { medianSeconds: median, samples: holds.length };
+  return { medianSeconds: median, pairs: holds.length };
+}
+
+/** The /stats line for the hold time, floor applied. */
+export function holdTimeLine(hold: HoldTime): string {
+  if (hold.pairs < MIN_HOLD_SAMPLES) {
+    return `median hold time of exempted wallets not enough data yet (n=${hold.pairs})`;
+  }
+  return `median hold time of exempted wallets ${humanDuration(hold.medianSeconds!)} (n=${hold.pairs.toLocaleString()})`;
 }
 
 function humanDuration(seconds: number): string {
@@ -484,9 +527,7 @@ export function statsText(): string {
     ...(cov.recovering ? ['index rebuilding after restart — counts below are incomplete'] : []),
     `launches indexed ${launches.toLocaleString()}`,
     `launches with pre-exempted wallets ${withExempt.toLocaleString()} (${pct}% of ${decoded.toLocaleString()} decoded)`,
-    hold.medianSeconds === null
-      ? 'median hold time of exempted wallets no data yet'
-      : `median hold time of exempted wallets ${humanDuration(hold.medianSeconds)} (n=${hold.samples.toLocaleString()})`,
+    holdTimeLine(hold),
     `scans served ${scans.toLocaleString()}`,
   ].join('\n');
 }
