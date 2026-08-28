@@ -110,6 +110,16 @@ ok('an early scan still queues its +1h/+6h/+24h/+7d rechecks');
     calls.push({ method, payload });
     return { ok: true, result: true };
   });
+
+  // Warm the shared cache first. Inline carries a 10s deadline, and under a busy
+  // RPC an uncached scan can exceed it -- the handler then correctly answers on
+  // the transient path with cache_time 0, which is a different assertion than
+  // the one this test is making. Warming removes the race without weakening it.
+  const { performScan } = await import('../dist/service.js');
+  const warm = await performScan({ token: r.reads.token, source: 'inline', botUsername: 'vitalscheck_bot' });
+  assert.equal(warm.kind, 'ok', `could not warm the cache: ${warm.kind}`);
+  assert.equal(warm.meta.early, true, 'the token must still be inside the early window');
+
   await bot.handleUpdate({
     update_id: 1,
     inline_query: { id: 'q1', from: { id: 8801, is_bot: false, first_name: 'U' }, query: r.reads.token, offset: '' },
