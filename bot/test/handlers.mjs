@@ -259,9 +259,26 @@ ok('/stats renders four public counters, numbers only');
 await bot.handleUpdate(msg('private', '/help', -401));
 c = drain();
 assert.equal(c.length, 1);
-assert.ok(c[0].payload.text.includes('@vitalscheck_bot'), '/help names the bot for inline usage');
-assert.ok(!c[0].payload.text.includes('BOTNAME'), 'BOTNAME placeholder substituted');
-ok('/help renders with the bot username substituted');
+const help = c[0].payload.text;
+assert.ok(help.includes('@vitalscheck_bot'), '/help names the bot for inline usage');
+assert.ok(!help.includes('BOTNAME'), 'BOTNAME placeholder substituted');
+// plain text: no parse_mode, so any tag would render literally and any entity
+// would survive a copy-paste as "&lt;"
+assert.equal(c[0].payload.parse_mode, undefined, '/help is sent as plain text');
+// actual HTML tags, not the literal angle brackets in "/scan <token address>"
+const htmlTag = /<\/?(b|i|u|s|a|em|strong|code|pre|span|tg-spoiler)\b[^>]*>/i;
+assert.ok(!htmlTag.test(help), `/help still carries markup: ${help.match(htmlTag)?.[0]}`);
+assert.ok(!/&(amp|lt|gt|quot);/.test(help), '/help carries an HTML entity');
+assert.ok(help.includes('/scan <token address>'), 'angle brackets survive as themselves');
+// the contact block, last and unlinked — Telegram autolinks bare handles
+const tail = help.trimEnd().split('\n').slice(-3);
+assert.deepEqual(tail, [
+  'checkvitals.xyz',
+  '@vitalsofficial — every change lands here first',
+  "@siriusthemaster — dev, tell me what's broken",
+]);
+assert.equal(c[0].payload.link_preview_options?.is_disabled, true, 'the domain must not spawn a preview card');
+ok('/help is plain text and ends with the contact block');
 
 console.log('\nAll handler checks passed.');
 process.exit(0);

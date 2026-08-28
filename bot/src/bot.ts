@@ -28,25 +28,37 @@ function quotaIdentity(ctx: Context): number | undefined {
 
 const EXAMPLE = '0x147Bbaa458Ab7Cd11E1E478B87f08FE5A42A9E67';
 
+/**
+ * Plain text, like every card the bot sends.
+ *
+ * No parse_mode at all: Telegram autolinks bare @handles and bare domains on
+ * its own, so the contact block needs no markup, and dropping the tags means a
+ * copy-paste of /help is what was on screen rather than a mess of entities.
+ * The previous version was the last HTML message left in the bot.
+ */
 const HELP = [
-  '<b>VITALS</b> — pons v2 launch scanner, Robinhood Chain',
+  'VITALS — pons v2 launch scanner, Robinhood Chain',
   '',
-  'Send <code>/scan &lt;token address&gt;</code> for a card of what the chain shows.',
+  'Send /scan <token address> for a card of what the chain shows.',
   '',
   'Works three ways, same card on each:',
-  '  • <b>DM</b> — <code>/scan &lt;address&gt;</code>, or just paste an address',
-  '  • <b>Groups</b> — <code>/scan &lt;address&gt;</code>',
-  `  • <b>Inline</b> — type <code>@BOTNAME &lt;address&gt;</code> in any chat`,
+  '  • DM — /scan <address>, or just paste an address',
+  '  • Groups — /scan <address>',
+  '  • Inline — type @BOTNAME <address> in any chat',
   '',
-  '<code>/full &lt;address&gt;</code> adds the technical detail behind every line.',
-  '<code>/stats</code> shows what has been indexed.',
+  '/full <address> adds the technical detail behind every line.',
+  '/stats shows what has been indexed.',
   '',
   'The card leads with concerns — the things fixed at creation, which are',
   'readable the second a token exists — and puts the counts underneath. There',
   'is no grade and no score. The absence of a raised flag is not an all-clear:',
   'the card says how many checks ran and how many could not be determined.',
   '',
-  `<i>${DISCLAIMER}</i>`,
+  DISCLAIMER,
+  '',
+  'checkvitals.xyz',
+  '@vitalsofficial — every change lands here first',
+  '@siriusthemaster — dev, tell me what\'s broken',
 ].join('\n');
 
 /**
@@ -397,7 +409,8 @@ export function createBot(token = TELEGRAM_BOT_TOKEN): Bot {
 
   bot.command(['start', 'help'], (ctx) =>
     ctx.reply(HELP.replace(/BOTNAME/g, usernameOf(ctx) ?? 'bot'), {
-      parse_mode: 'HTML',
+      // No preview: the footer carries a domain, and a link card would push the
+      // text off the first screen.
       link_preview_options: { is_disabled: true },
     }),
   );
