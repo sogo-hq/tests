@@ -300,7 +300,9 @@ export function computeFlags(opts: {
       state: 'raised',
       detail: `matches ${collisionCount} existing pons token${collisionCount === 1 ? '' : 's'}${ex ? ` (${ex})` : ''} after homoglyph normalisation`,
       compactDetail: `name collides with ${collisionCount} token${collisionCount === 1 ? '' : 's'} after homoglyph normalisation`,
-      plain: `${collisionCount} other token${collisionCount === 1 ? '' : 's'} use this exact ticker`,
+      plain: collisionCount === 1
+        ? '1 other token uses this exact ticker'
+        : `${collisionCount} other tokens use this exact ticker`,
       severity: 70,
     });
   } else {

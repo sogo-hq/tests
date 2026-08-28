@@ -60,9 +60,12 @@ ok('/full renders early mode; the default card carries no traction verdict');
 const m = compactMeta(r);
 assert.equal(m.early, true);
 assert.equal(m.traction, 'early');
-assert.match(inlineDescription(m), /too early for traction/);
-assert.doesNotMatch(inlineDescription(m), /traction none/);
-ok('inline description reports early, not a traction verdict');
+// the inline preview carries no traction verdict at any age -- the language
+// moved to concerns-and-checks along with the card it previews
+const d = inlineDescription(m);
+assert.doesNotMatch(d, /traction/i, `inline description carried a verdict: ${d}`);
+assert.match(d, /concern/);
+ok(`inline description carries no traction verdict: "${d}"`);
 
 // ---- what it stored --------------------------------------------------------
 const row = db.prepare('SELECT * FROM scans WHERE id = ?').get(r.scanId);
@@ -117,7 +120,9 @@ ok('an early scan still queues its +1h/+6h/+24h/+7d rechecks');
   assert.equal(answer.payload.cache_time, expected,
     `early inline answer cache_time was ${answer.payload.cache_time}s, expected ${expected}s — 60s would keep serving a stale "launched Ns ago" to every user`);
   const text = answer.payload.results[0].input_message_content.message_text;
-  assert.match(text, /too early for traction/);
+  // inline sends the same default card as every other surface
+  assert.match(text, /^VITALS  /, `inline message_text was: ${text.split('\n')[0]}`);
+  assert.ok(!/<[a-z/]/i.test(text), 'inline message_text is plain text');
   ok(`inline answer for an early token caches for ${answer.payload.cache_time}s, not 60s`);
 }
 
