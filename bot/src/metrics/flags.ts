@@ -2,6 +2,11 @@ import { db, normaliseKey } from '../db.js';
 import { isNativePair } from '../reads.js';
 import { clamp, MAX_TICKER, MAX_SAMPLE } from '../text.js';
 import { indexCoverage, coverageReason } from '../coverage.js';
+import {
+  concentrationThreshold,
+  MIN_HOLDERS_FOR_SHARE,
+  type Concentration,
+} from './concentration.js';
 
 export type FlagState = 'clean' | 'raised' | 'unknown';
 
@@ -42,6 +47,8 @@ export interface FlagResult {
   deployerMedianPeakMcap: number | null;
   deployerSurvival24h: number | null;
   nameCollision: boolean;
+  /** The concentration reading this result was built from, for the card. */
+  concentration: Concentration | null;
 }
 
 /** Basis points as a percentage, trimmed: 100 -> "1", 250 -> "2.5". */
@@ -67,6 +74,8 @@ export function computeFlags(opts: {
   pairToken: string;
   pairSymbol: string | null;
   scannedAt: number;
+  /** Read from the chain, so it is passed in rather than queried here. */
+  concentration?: Concentration | null;
 }): FlagResult {
   const token = opts.token.toLowerCase();
   const deployer = opts.deployer.toLowerCase();
@@ -406,6 +415,75 @@ export function computeFlags(opts: {
     severity: custom ? 35 : 0,
   });
 
+  // ---------------------------------------------------------------- flag 9
+  // How much of the circulating supply the top five wallets hold.
+  //
+  // Two things keep this from becoming noise. First, the top five of five or
+  // fewer holders is 100% by arithmetic, so below six holders there is nothing
+  // to measure and the answer is undetermined rather than a raised flag on
+  // every young launch. Second, the threshold is a percentile of what the index
+  // has actually recorded for tokens with a comparable holder count -- top-five
+  // share falls mechanically as holders rise, so one pooled threshold would
+  // flag every small token and no large one. Both the threshold and the sample
+  // behind it are printed in /full so the reader can audit the rule rather than
+  // trust it.
+  const conc = opts.concentration ?? null;
+  const thr = conc ? concentrationThreshold(conc.holders, opts.token) : null;
+  const shareStr = conc ? `${conc.top5Share.toFixed(1)}%` : null;
+
+  if (!conc) {
+    flags.push({
+      key: 'holder_concentration',
+      label: 'Holder concentration',
+      state: 'unknown',
+      detail: 'top 5 holder share could not be read',
+      compactDetail: 'top 5 holder share undetermined',
+      plain: 'top 5 wallet share undetermined',
+      severity: 1,
+    });
+  } else if (conc.holders < MIN_HOLDERS_FOR_SHARE) {
+    // Stated as arithmetic, not as a finding: with this many holders the top
+    // five ARE the holders, so the ratio cannot distinguish anything.
+    flags.push({
+      key: 'holder_concentration',
+      label: 'Holder concentration',
+      state: 'unknown',
+      detail: `${conc.holders} holder${conc.holders === 1 ? '' : 's'} — too few for a top-5 share to mean anything (it is 100% by arithmetic below ${MIN_HOLDERS_FOR_SHARE})`,
+      compactDetail: `${conc.holders} holders — too few to measure concentration`,
+      plain: `only ${conc.holders} holder${conc.holders === 1 ? '' : 's'} so far`,
+      severity: 2,
+    });
+  } else if (!thr || thr.threshold === null) {
+    // The share is a real measurement, but there is no distribution to judge it
+    // against yet. Reported as a number, never as an all-clear.
+    const n = thr?.n ?? 0;
+    flags.push({
+      key: 'holder_concentration',
+      label: 'Holder concentration',
+      state: 'unknown',
+      detail: `top 5 wallets hold ${shareStr} of circulating (${conc.holders} holders) — no threshold yet for ${thr?.band.label ?? 'this holder count'} (n=${n})`,
+      compactDetail: `top 5 hold ${shareStr}, no threshold yet (n=${n})`,
+      plain: `top 5 wallets hold ${shareStr} (no reference yet)`,
+      severity: 3,
+    });
+  } else {
+    const over = conc.top5Share >= thr.threshold;
+    const audit = `threshold ${thr.threshold.toFixed(1)}% — ${thr.percentile}th percentile of ${thr.n.toLocaleString()} launches with ${thr.band.label}`;
+    flags.push({
+      key: 'holder_concentration',
+      label: 'Holder concentration',
+      state: over ? 'raised' : 'clean',
+      detail: `top 5 wallets hold ${shareStr} of circulating (${conc.holders} holders) — ${audit}`,
+      compactDetail: over
+        ? `top 5 wallets hold ${shareStr} (over ${thr.threshold.toFixed(1)}%)`
+        : `top 5 wallets hold ${shareStr}`,
+      plain: over
+        ? `top 5 wallets hold ${shareStr} of supply`
+        : `top 5 wallets hold ${shareStr}`,
+      severity: over ? 60 : 0,
+    });
+  }
+
   const raised = flags.filter((f) => f.state === 'raised').length;
   const unknown = flags.filter((f) => f.state === 'unknown').length;
   const worst = flags
@@ -432,6 +510,7 @@ export function computeFlags(opts: {
     deployerLaunches7d: launches7d,
     deployerMedianPeakMcap: deployerMedianPeak,
     deployerSurvival24h: survival,
+    concentration: opts.concentration ?? null,
     nameCollision: collisionCount > 0,
   };
 }

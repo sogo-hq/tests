@@ -70,6 +70,15 @@ export function makeScan(over = {}) {
       deployerMedianPeakMcap: null,
       deployerSurvival24h: null,
       nameCollision: false,
+      // null unless a test supplies one: an unreadable concentration is the
+      // default state, and the card must be correct in it.
+      concentration: over.concentration ?? null,
+    },
+    benchmark: {
+      bucket: over.benchmarkBucket ?? { key: 'to30m', fromSeconds: 300, toSeconds: 1800, label: '5-30m' },
+      median: 'benchmarkMedian' in over ? over.benchmarkMedian : null,
+      n: over.benchmarkN ?? 0,
+      windowMinutes: over.windowMinutes ?? Math.min(30, ageSeconds / 60),
     },
   };
 }

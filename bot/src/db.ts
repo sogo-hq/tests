@@ -144,6 +144,20 @@ CREATE TABLE IF NOT EXISTS rechecks (
 );
 CREATE INDEX IF NOT EXISTS idx_rechecks_due ON rechecks(completed_at, due_at);
 
+-- Holder concentration observations, one per token, refreshed on every scan.
+-- The distribution these rows form is where the concentration threshold comes
+-- from; no threshold is hardcoded anywhere. Tokens with too few holders for the
+-- top-five share to mean anything are never recorded, so they cannot drag a
+-- band's percentile to the 100% every tiny launch reports by arithmetic.
+CREATE TABLE IF NOT EXISTS holder_snapshots (
+  token       TEXT PRIMARY KEY,
+  top5_share  REAL NOT NULL,
+  holders     INTEGER NOT NULL,
+  band        TEXT NOT NULL,
+  measured_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_holder_snapshots_band ON holder_snapshots(band, top5_share);
+
 -- Running peak market cap per token, updated by every recheck.
 CREATE TABLE IF NOT EXISTS token_peaks (
   token     TEXT PRIMARY KEY,

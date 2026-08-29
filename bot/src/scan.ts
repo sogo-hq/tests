@@ -7,6 +7,9 @@ import { indexOneCurve } from './indexer/trades.js';
 import { fetchLaunchCalldata } from './indexer/exemptions.js';
 import { computeTraction, type TractionMetrics } from './metrics/traction.js';
 import { computeFlags, type FlagResult } from './metrics/flags.js';
+import { buyerBenchmark, type BuyerBenchmark } from './metrics/benchmark.js';
+import { readConcentration, recordConcentration, type Concentration } from './metrics/concentration.js';
+import { isRateLimit } from './ratelimit.js';
 import { TokenLaunched } from './abi.js';
 import {
   FACTORY,
@@ -34,6 +37,11 @@ export interface ScanResult {
   reads: TokenReads;
   traction: TractionMetrics;
   flags: FlagResult;
+  /**
+   * What the buyer count means next to launches of the same age. A raw count
+   * tells a reader nothing about whether a launch is early or already over.
+   */
+  benchmark: BuyerBenchmark;
   launchBlock: number;
   launchedAt: number;
   ageSeconds: number;
@@ -162,6 +170,23 @@ async function scanTokenInner(token: string, requestedBy?: number): Promise<Scan
     Number(head),
     reads.graduationThreshold,
   );
+
+  // Holder concentration, read from the token's whole Transfer history. Filtered
+  // by address this is cheap even over a long life. A limit or a dead transport
+  // still propagates -- the one answer this must never give is a confident low
+  // number -- but an ordinary read failure leaves the check undetermined rather
+  // than failing a scan that is otherwise complete.
+  let concentration: Concentration | null = null;
+  try {
+    concentration = await readConcentration(reads.token, reads.curve, BigInt(launch.block), head);
+  } catch (err: any) {
+    if (isRateLimit(err) || err?.name === 'TimeoutError') throw err;
+    console.warn(`[scan] holder concentration unreadable for ${reads.token}:`, String(err?.shortMessage ?? err?.message ?? err).slice(0, 140));
+  }
+  // Recorded before the threshold is taken; the threshold query excludes this
+  // token so a launch can never be part of the distribution it is judged against.
+  if (concentration) recordConcentration(reads.token, concentration, scannedAt);
+
   const flags = computeFlags({
     token: reads.token,
     deployer: reads.deployer,
@@ -172,6 +197,7 @@ async function scanTokenInner(token: string, requestedBy?: number): Promise<Scan
     pairToken: reads.pairToken,
     pairSymbol: reads.pairSymbol,
     scannedAt,
+    concentration,
   });
 
   // -------------------------------------------------------------------------
@@ -232,6 +258,17 @@ async function scanTokenInner(token: string, requestedBy?: number): Promise<Scan
     : EARLY_WINDOW_SECONDS + EARLY_DRIFT_MARGIN_SECONDS;
   const isEarly = ageSeconds < earlyThreshold;
 
+  // Measured over the same window on both sides -- this token's own observed
+  // window -- so the comparison is like for like rather than this token at two
+  // minutes against everyone else's eventual totals. Computed before the early
+  // return so both paths carry it.
+  const benchmark = buyerBenchmark({
+    ageSeconds,
+    windowMinutes: traction.windowMinutes,
+    excludeToken: reads.token,
+    now: scannedAt,
+  });
+
   const creationRow = db
     .prepare('SELECT entry_point, launch_buy_amount, launch_buy_recipient, snipe_exemption_count FROM launches WHERE token = ?')
     .get(reads.token.toLowerCase()) as
@@ -268,6 +305,7 @@ async function scanTokenInner(token: string, requestedBy?: number): Promise<Scan
         reads,
         traction,
         flags,
+        benchmark,
         launchBlock: launch.block,
         launchedAt: launchedAtExact,
         ageSeconds,
@@ -336,6 +374,7 @@ async function scanTokenInner(token: string, requestedBy?: number): Promise<Scan
     reads,
     traction,
     flags,
+    benchmark,
     launchBlock: launch.block,
     launchedAt: launchedAtExact,
     ageSeconds,

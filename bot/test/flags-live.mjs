@@ -36,12 +36,17 @@ assert.match(renderCardText(r), /Ticker vs pair asset/);
 assert.match(renderDefaultCard(r, 'b'), /same ticker as the asset it trades against/);
 ok('appears on both the full card (technical) and the default card (plain English)');
 
-// ---- 2. a normal token is clean, and the flag count moved to 8 -------------
+// ---- 2. a normal token is clean, and the flag count moved to 9 -------------
+// Nine since holder concentration was added as check 09.
 const normal = await scanToken('0xd384722f6adfe7d79E8e6623896DF199afD31B76');
 assert.equal(normal.flags.flags.find((f) => f.key === 'pair_ticker').state, 'clean');
-assert.equal(normal.flags.total, 8, 'the flag set is now 8');
-assert.equal(r.flags.total, 8);
-ok('an ETH-paired token is clean; the flag set is 8 for both');
+assert.equal(normal.flags.total, 9, 'the flag set is now 9');
+assert.equal(r.flags.total, 9);
+assert.ok(
+  normal.flags.flags.some((f) => f.key === 'holder_concentration'),
+  'check 09 must be present in the set every card counts against',
+);
+ok('an ETH-paired token is clean on the ticker check; the flag set is 9 for both');
 
 // ---- 3. the comparison is homoglyph-normalised, like the collision flag ----
 assert.equal(normaliseKey('NVDA'), normaliseKey('NVDА'), 'Cyrillic А must fold onto Latin A');

@@ -553,5 +553,84 @@ await bot.handleUpdate(inline(SOL, 9500));
 }
 
 
+// ===========================================================================
+// The benchmarked buyer count and holder concentration, on all three surfaces
+// ===========================================================================
+{
+  const { renderDefaultCard, renderCard, buyerLine, concentrationLine } = await import('../dist/card.js');
+  const { makeScan } = await import('./fixtures.mjs');
+
+  // --- the shapes the feedback asked for, exactly ---------------------------
+  assert.equal(
+    buyerLine(makeScan({ buyers: 5, benchmarkMedian: 3, benchmarkN: 412 })),
+    '5 buyers \u2014 median at this age is 3',
+  );
+  assert.equal(
+    buyerLine(makeScan({ buyers: 38, benchmarkMedian: 12, benchmarkN: 412 })),
+    '38 buyers \u2014 median at this age is 12',
+  );
+  assert.equal(buyerLine(makeScan({ buyers: 5, benchmarkMedian: null, benchmarkN: 12 })), '5 buyers');
+  ok('buyer benchmark renders as "N buyers — median at this age is M", and as "N buyers" below the floor');
+
+  // --- it reaches every surface --------------------------------------------
+  const withBoth = makeScan({
+    ageSeconds: 1200, symbol: 'TOKEN', buyers: 38, roundTrippers: 3, progressPct: 12.4,
+    windowMinutes: 20, flagsTotal: 9, benchmarkMedian: 12, benchmarkN: 412,
+    concentration: { top5Share: 44.2, holders: 23, circulating: 1n },
+    flags: [{ key: 'c', label: 'c', state: 'raised', detail: 'd', compactDetail: 'c', plain: 'a concern', severity: 9 }],
+  });
+
+  const dmCard = renderDefaultCard(withBoth, 'vitalscheck_bot');
+  assert.match(dmCard, /38 buyers \u2014 median at this age is 12/, 'DM card carries the comparison');
+  assert.match(dmCard, /top 5 wallets hold 44% \u00b7 23 holders/, 'DM card carries concentration');
+
+  // the group surface renders the same card through the same path
+  scanCache.sweep();
+  await bot.handleUpdate(msg('group', `/scan ${TOKEN}`, -800));
+  const gc = drain();
+  const groupText = gc[gc.length - 1].payload.text;
+  assert.ok(/\d+ buyers?|no buyers yet/.test(groupText), `group card lost the buyer line:\n${groupText}`);
+
+  // /full carries the reference point and the audit trail
+  const full = renderCard(withBoth);
+  assert.match(full, /median for 5-30m launches over the same 20 min: 12 \(n=412\)/,
+    'the reference point must be auditable in /full');
+  ok('the benchmark reaches DM, group and /full');
+
+  // --- concentration is auditable and never a confident low number ----------
+  const { computeFlags } = await import('../dist/metrics/flags.js');
+  const flagOf = (concentration) => computeFlags({
+    token: '0x' + '11'.repeat(20), deployer: '0x' + '22'.repeat(20), name: 'T', symbol: 'T',
+    creatorTaxBps: 0, buybackEnabled: false,
+    pairToken: '0x0000000000000000000000000000000000000000', pairSymbol: 'ETH',
+    scannedAt: 1_000_000, concentration,
+  }).flags.find((f) => f.key === 'holder_concentration');
+
+  assert.equal(flagOf(null).state, 'unknown', 'an unreadable share is undetermined');
+  assert.equal(flagOf({ top5Share: 100, holders: 4, circulating: 1n }).state, 'unknown',
+    'four holders cannot produce a meaningful top-5 share');
+  const measured = flagOf({ top5Share: 44.2, holders: 23, circulating: 1n });
+  assert.equal(measured.state, 'unknown', 'with no distribution behind it there is no threshold to cross');
+  assert.match(measured.detail, /no threshold yet/);
+  assert.ok(!/\bclean\b|\bsafe\b|looks good/i.test(measured.detail + measured.plain),
+    'undetermined must never be worded as an all-clear');
+  ok('holder concentration is undetermined when it cannot be judged, on every surface');
+
+  // --- inline carries it too ------------------------------------------------
+  scanCache.sweep();
+  await bot.handleUpdate(inline(TOKEN, 9700));
+  const ic = drain();
+  const article = ic[0].payload.results[0];
+  assert.ok(/buyer|no buyers/.test(article.input_message_content.message_text),
+    `inline result lost the buyer line: ${article.input_message_content.message_text.slice(0, 120)}`);
+  ok('inline carries the same card, buyer line included');
+
+  // --- and the image mirrors the order --------------------------------------
+  const { renderCardPng } = await import('../dist/image.js');
+  const png = renderCardPng(withBoth);
+  assert.ok(Buffer.isBuffer(png) && png.length > 1000, 'the PNG still renders with the new lines');
+  ok(`the PNG renders the reordered card (${(png.length / 1024).toFixed(0)}KB)`);
+}
+
 console.log('\nAll handler checks passed.');
 process.exit(0);

@@ -42,6 +42,24 @@ export const LAUNCH_LOCKER = '0x267444D099b10fB5Ed7c3Cc7B7c767AdcA574952' as con
  */
 export const LAUNCH_FORWARDER = '0xe33E9E479dF8802cb0866d5d05258bEc4cF62948' as const;
 
+/** The conventional burn sink. Burned supply is held by nobody. */
+export const BURN_ADDRESS = '0x000000000000000000000000000000000000dEaD' as const;
+
+/**
+ * Addresses that hold token balances without being holders.
+ *
+ * One list, used by every measurement that counts holders or divides by
+ * circulating supply. Two copies of this drifted once already: the holder count
+ * excluded the protocol contracts while the concentration read did not, which
+ * put locked and escrowed supply into the top five and inflated the share on
+ * every launch that uses them.
+ */
+export const NON_HOLDER_ADDRESSES: readonly string[] = [
+  FACTORY, MEME_HOOK, FEE_ESCROW, BUYBACK_VAULT, LAUNCH_LOCKER, LAUNCH_FORWARDER,
+  BURN_ADDRESS,
+  '0x0000000000000000000000000000000000000000',
+].map((a) => a.toLowerCase());
+
 /** Measured across 10,000 blocks: 5,000 blocks per 500 seconds. */
 export const BLOCK_TIME_SECONDS = 0.1;
 export const BLOCKS_PER_MINUTE = Math.round(60 / BLOCK_TIME_SECONDS); // 600

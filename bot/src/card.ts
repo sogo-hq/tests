@@ -4,6 +4,8 @@ import type { FlagResult } from './metrics/flags.js';
 import { DISCLAIMER, EXPLORER_URL } from './config.js';
 import { clamp, clampMessage, MAX_NAME, MAX_TICKER, TELEGRAM_MAX_MESSAGE } from './text.js';
 import { EARLY_WINDOW_SECONDS } from './config.js';
+import { MIN_HOLDERS_FOR_SHARE } from './metrics/concentration.js';
+import { MIN_BENCHMARK_SAMPLES } from './metrics/benchmark.js';
 
 export { TELEGRAM_MAX_MESSAGE };
 
@@ -228,6 +230,14 @@ export function renderCard(r: ScanResult): string {
     : '';
   L.push(`<b>TRACTION  ${t.label}</b>${windowNote}`);
   L.push(`  unique buyers, first ${num(t.windowMinutes, 0)} min: <b>${t.uniqueBuyers30m}</b>`);
+  // The reference point, with the sample behind it, so the comparison on the
+  // default card can be audited rather than taken on trust.
+  const b = r.benchmark;
+  L.push(
+    b.median === null
+      ? `  median for ${esc(b.bucket.label)} launches: not enough data yet (n=${b.n}, need ${MIN_BENCHMARK_SAMPLES})`
+      : `  median for ${esc(b.bucket.label)} launches over the same ${num(b.windowMinutes, 0)} min: ${b.median} (n=${b.n.toLocaleString()})`,
+  );
   L.push(`  buyer growth: ${t.uniqueBuyers10m} at +10 min → ${t.uniqueBuyers30m} at +${num(t.windowMinutes, 0)} min${t.buyerGrowthRatio !== null ? ` (${ratioStr(t.buyerGrowthRatio)}x)` : ''}`);
   L.push(`  buy/sell tx: ${t.buyTxCount}/${t.sellTxCount}${t.buySellRatio !== null ? ` (${ratioStr(t.buySellRatio)}:1)` : t.buyTxCount ? ' (no sells)' : ''}`);
   L.push(`  median buy: ${fmtUnits(t.medianBuySize, k.pairDecimals)} ${esc(quote)}`);
@@ -428,6 +438,66 @@ export function activityLine(r: ScanResult): string {
 }
 
 /**
+ * The buyer count with something to measure it against.
+ *
+ * "5 buyers" is not actionable: a reader cannot tell whether that is a fast
+ * start or a launch that is already over. The reference point is the median for
+ * launches given the same amount of time, and it is stated as a comparison and
+ * nothing more. No word here may read as a verdict -- not "above average", not
+ * "strong", not "healthy". The two numbers sit side by side and the reader
+ * decides what they mean.
+ *
+ * Below the sample floor the count prints alone. A median of four launches
+ * would be an anecdote presented as a reference, which is worse than no
+ * reference at all.
+ */
+export function buyerLine(r: ScanResult): string {
+  const buyers = r.traction.uniqueBuyers30m;
+  const head = buyers === 0 ? 'no buyers yet' : `${buyers} buyer${buyers === 1 ? '' : 's'}`;
+  const m = r.benchmark.median;
+  if (m === null) return head;
+  return `${head} \u2014 median at this age is ${m}`;
+}
+
+/**
+ * Top-five holder share, stated only when it is a measurement.
+ *
+ * With five holders or fewer the top five hold 100% by arithmetic, so the line
+ * is absent rather than reporting a ratio that cannot distinguish anything. Its
+ * absence is not an all-clear: the check still appears in the flag block as
+ * undetermined, and /full says why.
+ */
+/**
+ * What happened to the buyers, and how far the launch has come.
+ *
+ * The buyer count itself has moved up into its own benchmarked line, so this
+ * carries only what is left: how many of them are already out, and progress
+ * toward graduation. `activityLine` keeps the older combined phrasing for the
+ * image, which renders one line rather than three.
+ */
+export function sellingLine(r: ScanResult): string {
+  const t = r.traction;
+  const buyers = t.uniqueBuyers30m;
+  const progress = `${formatProgress(r.reads.progressPct)}% to graduation`;
+  if (buyers === 0) return progress;
+  const sold =
+    t.roundTrippers === 0
+      ? 'none sold yet'
+      : t.roundTrippers >= buyers
+        ? buyers === 2
+          ? 'both already sold'
+          : 'all already sold'
+        : `${t.roundTrippers} of ${buyers} sold`;
+  return `${sold} \u00b7 ${progress}`;
+}
+
+export function concentrationLine(r: ScanResult): string | null {
+  const c = r.flags.concentration;
+  if (!c || c.holders < MIN_HOLDERS_FOR_SHARE) return null;
+  return `top 5 wallets hold ${c.top5Share.toFixed(0)}% \u00b7 ${c.holders} holders`;
+}
+
+/**
  * Buyer growth, only once there is a second point in time to compare against.
  *
  * Below ten minutes there is no +10min reading to grow from, so the line is
@@ -478,8 +548,14 @@ export function renderDefaultCard(r: ScanResult, botUsername?: string): string {
     L.push(parts.join(' \u00b7 '));
   }
 
+  // Concerns, then the one number a reader can act on, then who holds it, then
+  // the rest. The first line after the flags is the most decision-relevant fact
+  // available: a buyer count that finally means something next to its peers.
   L.push('');
-  L.push(activityLine(r));
+  L.push(buyerLine(r));
+  const conc = concentrationLine(r);
+  if (conc) L.push(conc);
+  L.push(sellingLine(r));
   const growth = growthLine(r);
   if (growth) L.push(growth);
 

@@ -24,7 +24,8 @@ test('concerns-raised card matches the specified shape exactly', () => {
     '🚩 same ticker as the asset it trades against',
     '🚩 deployer launched 91 tokens this week',
     '',
-    '2 buyers · both already sold · 0.00%',
+    '2 buyers',
+    'both already sold · 0.00% to graduation',
     '',
     '@vitalscheck_bot · not financial advice',
   ]);
@@ -42,7 +43,8 @@ test('nothing-raised card matches the specified shape exactly', () => {
     '',
     'no concerns raised · 6 of 8 checked · 2 undetermined',
     '',
-    '38 buyers · 3 sold · 12.4%',
+    '38 buyers',
+    '3 of 38 sold · 12.4% to graduation',
     'buyers 12 → 38 in 20 min',
     '',
     '@vitalscheck_bot · not financial advice',
@@ -161,13 +163,79 @@ test('the footer is always the last line and names the bot', () => {
   assert.equal(nf[nf.length - 1], '@vitalscheck_bot · not financial advice');
 });
 
-// ------------------------------------------------------------- activity line
-test('activity line reads naturally at every buyer count', () => {
-  const line = (over) => renderDefaultCard(makeScan(over), 'b').split('\n').find((l) => /buyer|no buyers/.test(l));
-  assert.match(line({ buyers: 0, roundTrippers: 0, progressPct: 0 }), /^no buyers yet · 0\.00%$/);
-  assert.match(line({ buyers: 1, roundTrippers: 0, progressPct: 1 }), /^1 buyer · 0 sold · 1%$/);
-  assert.match(line({ buyers: 2, roundTrippers: 2, progressPct: 0 }), /^2 buyers · both already sold · 0\.00%$/);
-  assert.match(line({ buyers: 9, roundTrippers: 9, progressPct: 5.5 }), /^9 buyers · all already sold · 5\.5%$/);
+// ------------------------------------------------- buyer line and what follows
+test('the buyer count stands alone, with what happened to them on the next line', () => {
+  const lines = (over) => renderDefaultCard(makeScan(over), 'b').split('\n');
+  const buyer = (over) => lines(over).find((l) => /^\d+ buyer|^no buyers/.test(l));
+  const rest = (over) => lines(over).find((l) => /to graduation$/.test(l));
+
+  assert.equal(buyer({ buyers: 0, roundTrippers: 0, progressPct: 0 }), 'no buyers yet');
+  assert.equal(rest({ buyers: 0, roundTrippers: 0, progressPct: 0 }), '0.00% to graduation');
+  assert.equal(buyer({ buyers: 1, roundTrippers: 0, progressPct: 1 }), '1 buyer');
+  assert.equal(rest({ buyers: 1, roundTrippers: 0, progressPct: 1 }), 'none sold yet \u00b7 1% to graduation');
+  assert.equal(rest({ buyers: 2, roundTrippers: 2, progressPct: 0 }), 'both already sold \u00b7 0.00% to graduation');
+  assert.equal(rest({ buyers: 9, roundTrippers: 9, progressPct: 5.5 }), 'all already sold \u00b7 5.5% to graduation');
+  assert.equal(rest({ buyers: 9, roundTrippers: 3, progressPct: 5.5 }), '3 of 9 sold \u00b7 5.5% to graduation');
+});
+
+test('the buyer count carries its reference point, and only above the floor', () => {
+  const buyer = (over) =>
+    renderDefaultCard(makeScan(over), 'b').split('\n').find((l) => /^\d+ buyer|^no buyers/.test(l));
+
+  // below the floor the count stands alone -- a median of twelve launches would
+  // be an anecdote presented as a reference
+  assert.equal(buyer({ buyers: 5, benchmarkMedian: null, benchmarkN: 12 }), '5 buyers');
+  assert.equal(buyer({ buyers: 5, benchmarkMedian: 3, benchmarkN: 412 }), '5 buyers \u2014 median at this age is 3');
+  assert.equal(buyer({ buyers: 38, benchmarkMedian: 12, benchmarkN: 412 }), '38 buyers \u2014 median at this age is 12');
+  assert.equal(buyer({ buyers: 0, benchmarkMedian: 3, benchmarkN: 412 }), 'no buyers yet \u2014 median at this age is 3');
+});
+
+test('the comparison never reads as a verdict', () => {
+  const VERDICT = /\b(above|below) average\b|\bstrong\b|\bhealthy\b|\bweak\b|\bgood\b|\bbad\b|\bpoor\b|\bsolid\b|\boutperform/i;
+  for (const median of [0, 1, 3, 12, 500]) {
+    for (const buyers of [0, 1, 5, 38, 900]) {
+      const card = renderDefaultCard(makeScan({ buyers, benchmarkMedian: median, benchmarkN: 412 }), 'b');
+      assert.ok(!VERDICT.test(card), `a verdict word reached the card at ${buyers} vs ${median}`);
+    }
+  }
+});
+
+test('holder concentration appears only when it is a measurement', () => {
+  const conc = (over) =>
+    renderDefaultCard(makeScan(over), 'b').split('\n').find((l) => /top 5 wallets/.test(l));
+
+  // unreadable, and below the arithmetic floor: absent from the card, because a
+  // top-5 share of five or fewer holders is 100% whatever the distribution is
+  assert.equal(conc({}), undefined);
+  assert.equal(conc({ concentration: { top5Share: 100, holders: 1, circulating: 1n } }), undefined);
+  assert.equal(conc({ concentration: { top5Share: 100, holders: 5, circulating: 1n } }), undefined);
+
+  assert.equal(
+    conc({ concentration: { top5Share: 44.2, holders: 23, circulating: 1n } }),
+    'top 5 wallets hold 44% \u00b7 23 holders',
+  );
+});
+
+test('card order: concerns, then the buyer count, then concentration, then the rest', () => {
+  const r = makeScan({
+    ageSeconds: 1200, symbol: 'TOKEN', buyers: 38, roundTrippers: 3, progressPct: 12.4,
+    windowMinutes: 20, flagsTotal: 9, benchmarkMedian: 12, benchmarkN: 412,
+    concentration: { top5Share: 44.2, holders: 23, circulating: 1n },
+    flags: [f('snipe', '8 wallets got in tax-free before you could', 108)],
+  });
+  r.traction.uniqueBuyers10m = 12;
+  assert.deepEqual(renderDefaultCard(r, 'vitalscheck_bot').split('\n'), [
+    'VITALS  $TOKEN \u00b7 20m',
+    '',
+    '\ud83d\udea9 8 wallets got in tax-free before you could',
+    '',
+    '38 buyers \u2014 median at this age is 12',
+    'top 5 wallets hold 44% \u00b7 23 holders',
+    '3 of 38 sold \u00b7 12.4% to graduation',
+    'buyers 12 \u2192 38 in 20 min',
+    '',
+    '@vitalscheck_bot \u00b7 not financial advice',
+  ]);
 });
 
 test('buyer growth appears only once there are two points in time', () => {

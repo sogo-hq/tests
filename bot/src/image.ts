@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 import type { ScanResult } from './scan.js';
 import {
-  defaultTicker, headerAge, activityLine, growthLine, MAX_DEFAULT_FLAGS,
+  defaultTicker, headerAge, buyerLine, concentrationLine, sellingLine, growthLine, MAX_DEFAULT_FLAGS,
 } from './card.js';
 
 /**
@@ -202,11 +202,24 @@ export function cardSvg(r: ScanResult, renderedAt = new Date()): string {
   }
 
   // --- what was measured ----------------------------------------------------
-  const activity = activityLine(r);
-  parts.push(text(PAD, 490, activity, { size: fitSize(activity, CONTENT_W, 30, 18), fill: INK }));
+  // Same order as the text card: the benchmarked buyer count first, because it
+  // is the one measurement a reader can act on, then who holds the supply, then
+  // the rest. The buyer count leads at full size; the supporting lines are dim.
+  const buyers = buyerLine(r);
+  parts.push(text(PAD, 466, buyers, { size: fitSize(buyers, CONTENT_W, 30, 18), fill: INK }));
+
+  let my = 498;
+  const conc = concentrationLine(r);
+  if (conc) {
+    parts.push(text(PAD, my, conc, { size: fitSize(conc, CONTENT_W, 24, 14), fill: DIM }));
+    my += 28;
+  }
+  const selling = sellingLine(r);
+  parts.push(text(PAD, my, selling, { size: fitSize(selling, CONTENT_W, 24, 14), fill: DIM }));
+  my += 28;
   const growth = growthLine(r);
-  if (growth) {
-    parts.push(text(PAD, 524, growth, { size: fitSize(growth, CONTENT_W, 24, 14), fill: DIM }));
+  if (growth && my <= 548) {
+    parts.push(text(PAD, my, growth, { size: fitSize(growth, CONTENT_W, 24, 14), fill: DIM }));
   }
 
   // --- footer ---------------------------------------------------------------

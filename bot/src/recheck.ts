@@ -12,6 +12,7 @@ import {
   BUYBACK_VAULT,
   LAUNCH_LOCKER,
   LAUNCH_FORWARDER,
+  NON_HOLDER_ADDRESSES,
 } from './config.js';
 import { isRateLimit } from './ratelimit.js';
 
@@ -19,11 +20,7 @@ const Transfer = parseAbiItem('event Transfer(address indexed from,address index
 const ZERO = '0x0000000000000000000000000000000000000000';
 
 /** Protocol-owned addresses that hold balances but are not holders. */
-const PROTOCOL = new Set(
-  [FACTORY, MEME_HOOK, FEE_ESCROW, BUYBACK_VAULT, LAUNCH_LOCKER, LAUNCH_FORWARDER, ZERO].map((a) =>
-    a.toLowerCase(),
-  ),
-);
+const PROTOCOL = new Set(NON_HOLDER_ADDRESSES);
 
 /**
  * Count holders by replaying Transfer events and summing balances.
