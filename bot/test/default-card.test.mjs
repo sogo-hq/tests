@@ -190,6 +190,23 @@ test('the buyer count carries its reference point, and only above the floor', ()
   assert.equal(buyer({ buyers: 0, benchmarkMedian: 3, benchmarkN: 412 }), 'no buyers yet \u2014 median at this age is 3');
 });
 
+test('"at this age" is claimed only when the measurement really was at that age', () => {
+  const buyer = (over) =>
+    renderDefaultCard(makeScan(over), 'b').split('\n').find((l) => /^\d+ buyer|^no buyers/.test(l));
+
+  // a young token: the window IS its life, so "at this age" is literally true
+  assert.equal(
+    buyer({ ageSeconds: 120, windowMinutes: 2, buyers: 5, benchmarkMedian: 3, benchmarkN: 412 }),
+    '5 buyers \u2014 median at this age is 3',
+  );
+  // past the 30-minute cap the count is of the first 30 minutes, not of "now",
+  // and the line must say so rather than describe a comparison never made
+  assert.equal(
+    buyer({ ageSeconds: 86400, windowMinutes: 30, buyers: 87, benchmarkMedian: 4, benchmarkN: 412 }),
+    '87 buyers \u2014 median in the first 30 min is 4',
+  );
+});
+
 test('the comparison never reads as a verdict', () => {
   const VERDICT = /\b(above|below) average\b|\bstrong\b|\bhealthy\b|\bweak\b|\bgood\b|\bbad\b|\bpoor\b|\bsolid\b|\boutperform/i;
   for (const median of [0, 1, 3, 12, 500]) {
@@ -214,6 +231,25 @@ test('holder concentration appears only when it is a measurement', () => {
     conc({ concentration: { top5Share: 44.2, holders: 23, circulating: 1n } }),
     'top 5 wallets hold 44% \u00b7 23 holders',
   );
+});
+
+test('the card is bounded at 13 lines with every optional line rendering', () => {
+  const r = makeScan({
+    ageSeconds: 1200, symbol: 'TOKEN', buyers: 38, roundTrippers: 3, progressPct: 12.4,
+    windowMinutes: 20, flagsTotal: 9, benchmarkMedian: 12, benchmarkN: 412,
+    concentration: { top5Share: 44.2, holders: 23, circulating: 1n },
+    flags: [
+      f('a', 'first concern', 100), f('b', 'second concern', 90), f('c', 'third concern', 80),
+      f('d', 'fourth concern', 70), f('e', 'undetermined one', 1, 'unknown'),
+    ],
+  });
+  r.traction.uniqueBuyers10m = 12;
+  const lines = renderDefaultCard(r, 'vitalscheck_bot').split('\n');
+  // header, blank, 3 flags, "+N more", blank, buyers, concentration, sold,
+  // growth, blank, footer. This card is forwarded into groups, so the ceiling
+  // is deliberate rather than incidental.
+  assert.equal(lines.length, 13, lines.join('\n'));
+  assert.equal(lines[lines.length - 1], '@vitalscheck_bot \u00b7 not financial advice');
 });
 
 test('card order: concerns, then the buyer count, then concentration, then the rest', () => {

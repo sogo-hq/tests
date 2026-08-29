@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  renderCard, renderCardText,
+  renderCard, renderCardText, renderDefaultCard,
   compactMeta, inlineDescription, earlyFindings, EARLY_TRACTION_LINE,
 } from '../dist/card.js';
 import { ScanCache } from '../dist/cache.js';
@@ -28,6 +28,26 @@ test('early full card: header, replacement line, no traction block', () => {
   assert.match(text, /re-scan in 2 minutes/);
   assert.doesNotMatch(text, /^TRACTION/m);
   assert.ok(text.trim().endsWith('Signals and flags only. Not financial advice.'));
+});
+
+test('the early full card and the default card cannot contradict each other', () => {
+  // Two renderings of one scan. /full saying only "traction unavailable" read as
+  // though nothing had been measured, while the default card was showing a
+  // buyer count and its reference point.
+  const r = makeScan({
+    ageSeconds: 47, buyers: 2, windowMinutes: 47 / 60, benchmarkMedian: 1, benchmarkN: 412,
+    concentration: { top5Share: 44.2, holders: 23, circulating: 1n },
+  });
+  const full = renderCardText(r);
+  assert.ok(full.includes(EARLY_TRACTION_LINE), 'the traction LABEL is still withheld');
+  assert.match(full, /2 buyers — median at this age is 1/, 'but the count it does have is stated');
+  assert.match(full, /top 5 wallets hold 44% · 23 holders/);
+
+  const dflt = renderDefaultCard(r, 'b');
+  for (const line of ['2 buyers — median at this age is 1', 'top 5 wallets hold 44% · 23 holders']) {
+    assert.ok(dflt.includes(line), `default card lost "${line}"`);
+    assert.ok(full.includes(line), `early full card lost "${line}"`);
+  }
 });
 
 test('early full card shows what IS fixed at creation', () => {

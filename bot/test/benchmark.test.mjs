@@ -25,11 +25,24 @@ function inTempDb(body, env = {}) {
       const NOW = 1_000_000;
       let tx = 0;
       // BLOCKS_PER_MINUTE is 600 on this chain.
-      const launch = (token, ageSeconds) => db.prepare(
-        \`INSERT INTO launches (token, curve, deployer, pair_token, launch_config_id,
-            graduation_threshold, block_number, tx_hash, launched_at)
-          VALUES (?,?,?,?,0,'0',1000,?,?)\`
-      ).run(token, A(99), A(98), A(0), '0xtx' + token, NOW - ageSeconds);
+      //
+      // A launch is only in the population because somebody scanned it -- that
+      // is what put its trades in the index -- so the seed records the scan
+      // too. \`indexedMinutes\` is how much of the window that scan reached:
+      // a token last scanned at five minutes old has five minutes of history
+      // however old it is now.
+      const launch = (token, ageSeconds, indexedMinutes = 30) => {
+        db.prepare(
+          \`INSERT INTO launches (token, curve, deployer, pair_token, launch_config_id,
+              graduation_threshold, block_number, tx_hash, launched_at)
+            VALUES (?,?,?,?,0,'0',1000,?,?)\`
+        ).run(token, A(99), A(98), A(0), '0xtx' + token, NOW - ageSeconds);
+        // a scan cannot reach further into a launch's life than the launch has lived\n        const reach = Math.min(indexedMinutes * 60, ageSeconds);\n        const scannedAt = NOW - ageSeconds + Math.round(reach);
+        db.prepare(
+          \`INSERT INTO scans (token, curve, deployer, scanned_at, scanned_block)
+            VALUES (?,?,?,?,1)\`
+        ).run(token, A(99), A(98), scannedAt);
+      };
       /** A buy by \`wallet\` \`minutes\` after that token's launch block. */
       const buy = (token, wallet, minutes) => db.prepare(
         \`INSERT INTO trades (tx_hash, log_index, token, curve, side, trader, recipient,
@@ -137,6 +150,66 @@ test('the scanned token is never in the population it is compared against', () =
   const b = JSON.parse(out);
   assert.equal(b.withSelf, 31);
   assert.equal(b.excluded, 30, 'a launch must not be part of its own reference point');
+});
+
+test('a launch scanned before the window closed is not counted as a full measurement', () => {
+  const out = inTempDb(`
+    // 31 launches fully indexed, plus 5 last scanned at 5 minutes old
+    for (let i = 1; i <= 31; i++) { launch(A(i), 86400); buy(A(i), A(2000 + i), 1); }
+    for (let i = 50; i < 55; i++) { launch(A(i), 86400, 5); buy(A(i), A(2000 + i), 1); }
+    const b = buyerBenchmark({ ageSeconds: 86400, windowMinutes: 30, excludeToken: A(999), now: NOW });
+    const short = buyerBenchmark({ ageSeconds: 300, windowMinutes: 5, excludeToken: A(999), now: NOW });
+    console.log(JSON.stringify({ full: b.n, short: short.n }));
+  `);
+  const b = JSON.parse(out);
+  assert.equal(b.full, 31, 'five minutes of history is not a thirty-minute measurement');
+  assert.equal(b.short, 36, 'but it is a complete five-minute one');
+});
+
+test('a scanned launch with no trades at all is a real zero, not an absence', () => {
+  const out = inTempDb(`
+    for (let i = 1; i <= 15; i++) { launch(A(i), 86400); buy(A(i), A(2000 + i), 1); }
+    // sixteen launches somebody scanned that never traded -- selecting on the
+    // trades table would drop these and push the median from 0 up to 1
+    for (let i = 60; i < 76; i++) launch(A(i), 86400);
+    const b = buyerBenchmark({ ageSeconds: 86400, windowMinutes: 30, excludeToken: A(999), now: NOW });
+    console.log(JSON.stringify({ n: b.n, median: b.median }));
+  `);
+  const b = JSON.parse(out);
+  assert.equal(b.n, 31);
+  assert.equal(b.median, 0, 'a population of 16 zeros and 15 ones has a median of 0');
+});
+
+test('a launch nobody scanned is not in the population at all', () => {
+  const out = inTempDb(`
+    for (let i = 1; i <= 31; i++) { launch(A(i), 86400); buy(A(i), A(2000 + i), 1); }
+    // backfilled but never scanned: its window was never looked at, so it is
+    // neither a zero nor a measurement
+    db.prepare(\`INSERT INTO launches (token, curve, deployer, pair_token, launch_config_id,
+        graduation_threshold, block_number, tx_hash, launched_at) VALUES (?,?,?,?,0,'0',1000,?,?)\`)
+      .run(A(500), A(99), A(98), A(0), '0xtxunscanned', NOW - 86400);
+    const b = buyerBenchmark({ ageSeconds: 86400, windowMinutes: 30, excludeToken: A(999), now: NOW });
+    console.log(JSON.stringify({ n: b.n }));
+  `);
+  assert.equal(JSON.parse(out).n, 31);
+});
+
+test('measuredAtAge is true only while the window is the token\'s whole life', () => {
+  const out = inTempDb(`
+    const young = buyerBenchmark({ ageSeconds: 120, windowMinutes: 2, excludeToken: A(9), now: NOW });
+    const atCap = buyerBenchmark({ ageSeconds: 1800, windowMinutes: 30, excludeToken: A(9), now: NOW });
+    const old = buyerBenchmark({ ageSeconds: 86400, windowMinutes: 30, excludeToken: A(9), now: NOW });
+    console.log(JSON.stringify({ young: young.measuredAtAge, atCap: atCap.measuredAtAge, old: old.measuredAtAge }));
+  `);
+  const b = JSON.parse(out);
+  assert.equal(b.young, true, 'a two-minute-old token really was measured at its age');
+  assert.equal(b.atCap, true, 'so was one exactly at the cap');
+  assert.equal(b.old, false, 'a day-old token was measured over its first 30 min, not at its age');
+});
+
+test('a malformed sample floor falls back rather than switching the floor off', () => {
+  const out = inTempDb(`console.log(String(MIN_BENCHMARK_SAMPLES));`, { MIN_BENCHMARK_SAMPLES: 'not-a-number' });
+  assert.equal(out.trim(), '30', 'Number("not-a-number") is NaN and n < NaN is false — the floor would vanish');
 });
 
 test('a zero-length window publishes nothing', () => {

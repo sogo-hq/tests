@@ -29,7 +29,12 @@ for (const t of tokens) {
   if (BANNED.test(compText)) problems.push('banned language in compact card');
 
   const cl = compText.split('\n');
-  if (cl.length > 12) problems.push(`default card ${cl.length} lines`);
+  // 13 is the maximum the renderer can produce: header, blank, three flags, the
+  // "+N more" line, blank, the benchmarked buyer count, concentration, what
+  // happened to those buyers, growth, blank, footer. It grew by one when
+  // concentration was added; anything past that is a regression in a card whose
+  // whole point is being readable when forwarded into a group.
+  if (cl.length > 13) problems.push(`default card ${cl.length} lines`);
   if (cl.filter((l) => l.startsWith('🚩')).length > 3) problems.push('more than 3 flag lines');
   if (!/^VITALS /.test(cl[0])) problems.push('default card header malformed');
   if (/<[a-z/]/i.test(comp)) problems.push('markup in the default card');

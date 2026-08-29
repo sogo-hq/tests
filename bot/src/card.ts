@@ -168,6 +168,13 @@ function renderEarlyCard(r: ScanResult): string {
   L.push(`phase ${esc(k.phaseName)} · pair ${esc(quote)}`);
   L.push('');
   L.push(EARLY_TRACTION_LINE);
+  // What IS measurable this early, stated so the two renderings of one scan
+  // cannot contradict each other: the default card shows this buyer count, and
+  // a /full that said only "traction unavailable" read as though nothing at all
+  // had been measured. The traction *label* is what the line above withholds.
+  L.push(`  ${esc(buyerLine(r))}`);
+  const earlyConc = concentrationLine(r);
+  if (earlyConc) L.push(`  ${esc(earlyConc)}`);
   L.push('');
 
   L.push(`<b>FIXED AT CREATION</b>`);
@@ -233,11 +240,16 @@ export function renderCard(r: ScanResult): string {
   // The reference point, with the sample behind it, so the comparison on the
   // default card can be audited rather than taken on trust.
   const b = r.benchmark;
+  // Says what was actually measured and over what population. The age band
+  // describes this token; the median describes every launch whose first
+  // ${window} minutes the index has seen, which is not the same set and must
+  // not be labelled as though it were.
   L.push(
     b.median === null
-      ? `  median for ${esc(b.bucket.label)} launches: not enough data yet (n=${b.n}, need ${MIN_BENCHMARK_SAMPLES})`
-      : `  median for ${esc(b.bucket.label)} launches over the same ${num(b.windowMinutes, 0)} min: ${b.median} (n=${b.n.toLocaleString()})`,
+      ? `  buyer benchmark: not enough data yet (n=${b.n}, need ${MIN_BENCHMARK_SAMPLES})`
+      : `  buyer benchmark: ${b.median} — median over the same first ${num(b.windowMinutes, 0)} min, across ${b.n.toLocaleString()} indexed launches that reached it`,
   );
+  L.push(`  age band: ${esc(b.bucket.label)}${b.measuredAtAge ? '' : ` (buyers counted over the first ${num(b.windowMinutes, 0)} min, not the full age)`}`);
   L.push(`  buyer growth: ${t.uniqueBuyers10m} at +10 min → ${t.uniqueBuyers30m} at +${num(t.windowMinutes, 0)} min${t.buyerGrowthRatio !== null ? ` (${ratioStr(t.buyerGrowthRatio)}x)` : ''}`);
   L.push(`  buy/sell tx: ${t.buyTxCount}/${t.sellTxCount}${t.buySellRatio !== null ? ` (${ratioStr(t.buySellRatio)}:1)` : t.buyTxCount ? ' (no sells)' : ''}`);
   L.push(`  median buy: ${fmtUnits(t.medianBuySize, k.pairDecimals)} ${esc(quote)}`);
@@ -454,9 +466,16 @@ export function activityLine(r: ScanResult): string {
 export function buyerLine(r: ScanResult): string {
   const buyers = r.traction.uniqueBuyers30m;
   const head = buyers === 0 ? 'no buyers yet' : `${buyers} buyer${buyers === 1 ? '' : 's'}`;
-  const m = r.benchmark.median;
-  if (m === null) return head;
-  return `${head} \u2014 median at this age is ${m}`;
+  const b = r.benchmark;
+  if (b.median === null) return head;
+  // "at this age" is only true while the window IS the token's life. Past the
+  // 30-minute cap the count -- and so the median beside it -- is a measurement
+  // of the first 30 minutes, and saying "at this age" would describe a
+  // comparison that was never made.
+  const ref = b.measuredAtAge
+    ? 'median at this age'
+    : `median in the first ${Math.round(b.windowMinutes)} min`;
+  return `${head} \u2014 ${ref} is ${b.median}`;
 }
 
 /**

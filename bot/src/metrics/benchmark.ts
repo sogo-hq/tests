@@ -1,5 +1,5 @@
 import { db } from '../db.js';
-import { BLOCKS_PER_MINUTE } from '../config.js';
+import { BLOCKS_PER_MINUTE, WINDOW_30_MIN_BLOCKS } from '../config.js';
 
 /**
  * What a buyer count means, measured against the launches around it.
@@ -43,16 +43,31 @@ export function bucketFor(ageSeconds: number): AgeBucket {
  * of four launches is an anecdote wearing a statistic's clothes, and this is a
  * number that will be screenshotted out of context.
  */
-export const MIN_BENCHMARK_SAMPLES = Number(process.env.MIN_BENCHMARK_SAMPLES || 30);
+export const MIN_BENCHMARK_SAMPLES = (() => {
+  // Number('abc') is NaN, and `n < NaN` is false -- a typo in the environment
+  // would have silently switched the floor off and published a median of two.
+  const raw = Number(process.env.MIN_BENCHMARK_SAMPLES);
+  return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 30;
+})();
+
+/** The longest window any traction metric is defined over. */
+const MAX_WINDOW_MINUTES = WINDOW_30_MIN_BLOCKS / BLOCKS_PER_MINUTE;
 
 export interface BuyerBenchmark {
+  /** The age band this token is in. Describes the token, not the population. */
   bucket: AgeBucket;
-  /** Median unique buyers over the same window, across the bucket. Null below the floor. */
+  /** Median unique buyers over the same window. Null below the floor. */
   median: number | null;
-  /** Launches behind the median. Always reported, so a thin bucket is visible. */
+  /** Launches behind the median. Always reported, so a thin sample is visible. */
   n: number;
   /** The window both sides were measured over, in minutes. */
   windowMinutes: number;
+  /**
+   * True when the window is the token's whole life so far, which is what lets
+   * the card say "at this age". Once a token passes the 30-minute cap the
+   * measurement is no longer taken at its age and the card must not claim it is.
+   */
+  measuredAtAge: boolean;
 }
 
 interface CountRow {
@@ -68,10 +83,11 @@ interface CountRow {
  * eligible if it actually lived that long; one that is younger than the window
  * has not had the chance and would drag the median down for no reason.
  *
- * The population is launches with indexed trades, which means launches somebody
- * has scanned: `indexOneCurve` runs on scan, not on backfill. That is a real
- * and severe bound early in an index's life, which is exactly what the sample
- * floor and the always-reported `n` exist to make visible.
+ * The population is launches somebody has scanned, because `indexOneCurve` runs
+ * on scan and not on backfill. That is a real and severe bound early in an
+ * index's life, and it is self-selected -- these are the launches people asked
+ * about. The sample floor and the always-reported `n` exist to make that bound
+ * visible rather than to pretend it away.
  */
 export function buyerBenchmark(opts: {
   ageSeconds: number;
@@ -85,10 +101,27 @@ export function buyerBenchmark(opts: {
   const windowSeconds = Math.round(windowMinutes * 60);
   const now = opts.now ?? Math.floor(Date.now() / 1000);
 
-  if (windowBlocks <= 0) return { bucket, median: null, n: 0, windowMinutes };
+  const measuredAtAge = windowMinutes >= Math.max(0, opts.ageSeconds) / 60 - 0.001
+    && windowMinutes < MAX_WINDOW_MINUTES + 0.001
+    && opts.ageSeconds / 60 <= MAX_WINDOW_MINUTES + 0.001;
 
-  // LEFT JOIN, not an inner join on buys: a launch that had trades but no buy
-  // inside the window is a real zero and has to stay in the population.
+  if (windowBlocks <= 0) return { bucket, median: null, n: 0, windowMinutes, measuredAtAge };
+
+  // The population is launches somebody has SCANNED, not launches with trades.
+  // indexOneCurve runs on every scan, so a scanned token with no trade rows had
+  // its window looked at and found empty -- a real zero. Selecting on `trades`
+  // instead dropped those launches entirely and biased the median upward, which
+  // on a card that exists to say whether a launch is dead is the wrong
+  // direction to be wrong in.
+  //
+  // A scan only indexes up to min(launch + 30 min, head at that moment), so a
+  // token last scanned at five minutes old has five minutes of history however
+  // old it is now. Counting that as a thirty-minute measurement would publish a
+  // truncated number as a complete one, so eligibility is the indexed extent,
+  // not the launch's age.
+  //
+  // LEFT JOIN, not an inner join on buys: a launch with trades but no buy inside
+  // the window is also a real zero.
   const rows = db
     .prepare(
       `SELECT COUNT(DISTINCT CASE
@@ -97,19 +130,25 @@ export function buyerBenchmark(opts: {
                  AND t.block_number <= l.block_number + ?
                 THEN t.recipient END) AS buyers
          FROM launches l
-         JOIN (SELECT DISTINCT token FROM trades) ht ON ht.token = l.token
+         JOIN (SELECT token, MAX(scanned_at) AS last_scan FROM scans GROUP BY token) sc
+           ON sc.token = l.token
          LEFT JOIN trades t ON t.token = l.token
         WHERE l.token <> ?
-          AND (? - l.launched_at) >= ?
+          AND MIN(?, MAX(0, sc.last_scan - l.launched_at)) >= ?
         GROUP BY l.token`,
     )
-    .all(windowBlocks, opts.excludeToken.toLowerCase(), now, windowSeconds) as CountRow[];
+    .all(
+      windowBlocks,
+      opts.excludeToken.toLowerCase(),
+      Math.round(MAX_WINDOW_MINUTES * 60),
+      windowSeconds,
+    ) as CountRow[];
 
   const counts = rows.map((r) => r.buyers).sort((a, b) => a - b);
   if (counts.length < MIN_BENCHMARK_SAMPLES) {
-    return { bucket, median: null, n: counts.length, windowMinutes };
+    return { bucket, median: null, n: counts.length, windowMinutes, measuredAtAge };
   }
   const mid = counts.length >> 1;
   const median = counts.length % 2 ? counts[mid]! : Math.round((counts[mid - 1]! + counts[mid]!) / 2);
-  return { bucket, median, n: counts.length, windowMinutes };
+  return { bucket, median, n: counts.length, windowMinutes, measuredAtAge };
 }

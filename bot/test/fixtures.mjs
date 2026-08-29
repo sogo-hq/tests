@@ -79,6 +79,9 @@ export function makeScan(over = {}) {
       median: 'benchmarkMedian' in over ? over.benchmarkMedian : null,
       n: over.benchmarkN ?? 0,
       windowMinutes: over.windowMinutes ?? Math.min(30, ageSeconds / 60),
+      // derived as production does: the window is the token's life until the
+      // 30-minute cap, and only then can the card say "at this age"
+      measuredAtAge: 'measuredAtAge' in over ? over.measuredAtAge : ageSeconds / 60 <= 30.001,
     },
   };
 }
