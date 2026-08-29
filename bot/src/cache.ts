@@ -159,6 +159,17 @@ export class ScanCache {
     return true;
   }
 
+  /**
+   * Forget one token.
+   *
+   * `sweep()` only drops entries that have expired, so it cannot be used to
+   * force a miss -- several tests called it expecting exactly that and were
+   * quietly measuring cache hits instead.
+   */
+  drop(token: string): boolean {
+    return this.map.delete(this.key(token));
+  }
+
   /** Drop expired entries. Bounds memory when traffic goes quiet. */
   sweep(): number {
     const now = Date.now();

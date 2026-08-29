@@ -584,12 +584,18 @@ await bot.handleUpdate(inline(SOL, 9500));
   assert.match(dmCard, /38 buyers \u2014 median at this age is 12/, 'DM card carries the comparison');
   assert.match(dmCard, /top 5 wallets hold 44% \u00b7 23 holders/, 'DM card carries concentration');
 
-  // the group surface renders the same card through the same path
-  scanCache.sweep();
+  // The group surface renders the same card through the same path.
+  //
+  // Asserted as a WHOLE LINE, not a substring: "buyers 48 → 48 in 30 min" is the
+  // growth line and contains the word, so a substring match passed with the
+  // buyer line deleted outright -- which is exactly what happened when a review
+  // agent removed it from the build.
+  scanCache.drop(TOKEN);
   await bot.handleUpdate(msg('group', `/scan ${TOKEN}`, -800));
   const gc = drain();
   const groupText = gc[gc.length - 1].payload.text;
-  assert.ok(/\d+ buyers?|no buyers yet/.test(groupText), `group card lost the buyer line:\n${groupText}`);
+  const groupBuyerLine = groupText.split('\n').find((l) => /^(\d[\d,]* buyers?|no buyers yet)\b/.test(l));
+  assert.ok(groupBuyerLine, `group card lost the buyer line:\n${groupText}`);
 
   // /full carries the reference point and the audit trail
   const full = renderCard(withBoth);
@@ -618,19 +624,34 @@ await bot.handleUpdate(inline(SOL, 9500));
   ok('holder concentration is undetermined when it cannot be judged, on every surface');
 
   // --- inline carries it too ------------------------------------------------
-  scanCache.sweep();
   await bot.handleUpdate(inline(TOKEN, 9700));
   const ic = drain();
   const article = ic[0].payload.results[0];
-  assert.ok(/buyer|no buyers/.test(article.input_message_content.message_text),
-    `inline result lost the buyer line: ${article.input_message_content.message_text.slice(0, 120)}`);
-  ok('inline carries the same card, buyer line included');
+  const inlineText = article.input_message_content.message_text;
+  const inlineBuyerLine = inlineText.split('\n').find((l) => /^(\d[\d,]* buyers?|no buyers yet)\b/.test(l));
+  assert.ok(inlineBuyerLine, `inline result lost the buyer line:\n${inlineText}`);
+  ok(`inline carries the same card, buyer line included: "${inlineBuyerLine}"`);
 
   // --- and the image mirrors the order --------------------------------------
-  const { renderCardPng } = await import('../dist/image.js');
+  // Asserted on the SVG the PNG is rasterised from, because a byte length tells
+  // you nothing about whether the lines are present or in the right order: the
+  // image half of this change was previously "tested" by `png.length > 1000`.
+  const { renderCardPng, cardSvg } = await import('../dist/image.js');
+  const svg = cardSvg(withBoth);
+  const texts = [...svg.matchAll(/<text[^>]*>([^<]*)<\/text>/g)].map((m) => m[1]);
+  const idx = (re) => texts.findIndex((t) => re.test(t));
+  const iBuyers = idx(/^38 buyers/);
+  const iConc = idx(/top 5 wallets/);
+  const iSold = idx(/to graduation$/);
+  assert.ok(iBuyers >= 0, `the PNG lost the buyer line: ${JSON.stringify(texts)}`);
+  assert.ok(/median at this age is 12/.test(texts[iBuyers]), `the PNG lost the comparison: ${texts[iBuyers]}`);
+  assert.ok(iConc > iBuyers, 'concentration must follow the buyer count in the image too');
+  assert.ok(iSold > iConc, 'and the rest must follow concentration');
+
   const png = renderCardPng(withBoth);
-  assert.ok(Buffer.isBuffer(png) && png.length > 1000, 'the PNG still renders with the new lines');
-  ok(`the PNG renders the reordered card (${(png.length / 1024).toFixed(0)}KB)`);
+  assert.ok(Buffer.isBuffer(png) && png.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])),
+    'and it still rasterises to a real PNG');
+  ok(`the PNG renders the reordered card in order (${(png.length / 1024).toFixed(0)}KB)`);
 }
 
 console.log('\nAll handler checks passed.');

@@ -41,6 +41,22 @@ const CASES = {
     ageSeconds: 90, symbol: 'A'.repeat(40), buyers: 5, roundTrippers: 1,
     flagsTotal: 8, flags: [f('x', 'a concern', 50)],
   }),
+  // Every case above leaves benchmarkMedian and concentration unset, so the
+  // sweeps below -- banned language, palette, provenance -- had never once
+  // rendered the buyer comparison or the top-5 share. A verdict word or a
+  // colour that implies one could have reached the image unseen.
+  'benchmark and concentration': makeScan({
+    ageSeconds: 1200, symbol: 'BOTH', buyers: 38, roundTrippers: 3, progressPct: 12.4,
+    windowMinutes: 20, flagsTotal: 9, benchmarkMedian: 12, benchmarkN: 412,
+    concentration: { top5Share: 44.2, holders: 23, circulating: 1n },
+    flags: [f('snipe', '8 wallets got in tax-free before you could', 108)],
+  }),
+  'benchmark below the floor': makeScan({
+    ageSeconds: 47, symbol: 'THIN', buyers: 5, roundTrippers: 0, flagsTotal: 9,
+    benchmarkMedian: null, benchmarkN: 12,
+    concentration: { top5Share: 100, holders: 3, circulating: 1n },
+    flags: [],
+  }),
 };
 
 for (const [name, scan] of Object.entries(CASES)) {

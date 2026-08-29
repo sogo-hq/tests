@@ -44,6 +44,12 @@ function inTempDb(body, env = {}) {
         ).run(token, A(99), A(98), scannedAt);
       };
       /** A buy by \`wallet\` \`minutes\` after that token's launch block. */
+      /** A buy where the sender and the wallet that ends up holding differ. */
+      const buyVia = (token, trader, recipient, minutes) => db.prepare(
+        \`INSERT INTO trades (tx_hash, log_index, token, curve, side, trader, recipient,
+            quote_amount, token_amount, fee, creator_tax, block_number, block_time)
+          VALUES (?,?,?,?,'buy',?,?,'0','0','0','0',?,0)\`
+      ).run('0xt' + (++tx), 0, token, A(99), trader, recipient, 1000 + Math.round(minutes * 600));
       const buy = (token, wallet, minutes) => db.prepare(
         \`INSERT INTO trades (tx_hash, log_index, token, curve, side, trader, recipient,
             quote_amount, token_amount, fee, creator_tax, block_number, block_time)
@@ -210,6 +216,78 @@ test('measuredAtAge is true only while the window is the token\'s whole life', (
 test('a malformed sample floor falls back rather than switching the floor off', () => {
   const out = inTempDb(`console.log(String(MIN_BENCHMARK_SAMPLES));`, { MIN_BENCHMARK_SAMPLES: 'not-a-number' });
   assert.equal(out.trim(), '30', 'Number("not-a-number") is NaN and n < NaN is false — the floor would vanish');
+});
+
+test('a buyer is the wallet that ends up holding, not the sender', () => {
+  // Every launchAndBuy creator buy is sent by the forwarder contract, so
+  // counting senders would score one buyer for every launch that used it --
+  // and seeding trader === recipient everywhere would never notice.
+  const out = inTempDb(`
+    const FORWARDER = A(4242);
+    for (let i = 1; i <= 31; i++) {
+      launch(A(i), 86400);
+      // three distinct holders, all routed through one sender
+      buyVia(A(i), FORWARDER, A(7000 + i * 10 + 1), 1);
+      buyVia(A(i), FORWARDER, A(7000 + i * 10 + 2), 2);
+      buyVia(A(i), FORWARDER, A(7000 + i * 10 + 3), 3);
+    }
+    const b = buyerBenchmark({ ageSeconds: 86400, windowMinutes: 30, excludeToken: A(999), now: NOW });
+    // Carried so a failure says WHY: a median of 1 with three rows per launch
+    // means the counting is wrong, a median of 1 with one row per launch means
+    // the seeding is. This assertion failed once, unreproducibly, and left no
+    // way to tell those apart.
+    console.log(JSON.stringify({
+      n: b.n, median: b.median,
+      tradeRows: db.prepare('SELECT COUNT(*) n FROM trades').get().n,
+      distinctRecipients: db.prepare('SELECT COUNT(DISTINCT recipient) n FROM trades').get().n,
+      distinctTraders: db.prepare('SELECT COUNT(DISTINCT trader) n FROM trades').get().n,
+    }));
+  `);
+  const b = JSON.parse(out);
+  const why = JSON.stringify(b);
+  assert.equal(b.tradeRows, 93, `seeding did not land: ${why}`);
+  assert.equal(b.distinctTraders, 1, `every buy should share one sender: ${why}`);
+  assert.equal(b.distinctRecipients, 93, `every buy should have its own recipient: ${why}`);
+  assert.equal(b.n, 31, why);
+  assert.equal(b.median, 3, `counting senders would have scored 1 buyer per launch, not 3: ${why}`);
+});
+
+test('each bucket has its own population and its own floor', () => {
+  // A five-minute window admits launches the thirty-minute window rejects, so
+  // the same index answers a young token and an old one from different samples.
+  const out = inTempDb(`
+    // 31 launches with a full half hour indexed
+    for (let i = 1; i <= 31; i++) { launch(A(i), 86400); buy(A(i), A(2000 + i), 1); buy(A(i), A(3000 + i), 12); }
+    // 20 more that were only ever seen in their first five minutes
+    for (let i = 40; i < 60; i++) { launch(A(i), 86400, 5); buy(A(i), A(2000 + i), 1); }
+    const short = buyerBenchmark({ ageSeconds: 120, windowMinutes: 5, excludeToken: A(999), now: NOW });
+    const long = buyerBenchmark({ ageSeconds: 86400, windowMinutes: 30, excludeToken: A(999), now: NOW });
+    console.log(JSON.stringify({
+      shortBucket: short.bucket.key, shortN: short.n, shortMedian: short.median,
+      longBucket: long.bucket.key, longN: long.n, longMedian: long.median,
+    }));
+  `);
+  const b = JSON.parse(out);
+  assert.equal(b.shortBucket, 'under5m');
+  assert.equal(b.longBucket, 'over12h');
+  assert.equal(b.shortN, 51, 'five-minute-indexed launches are eligible for a five-minute window');
+  assert.equal(b.longN, 31, 'but not for a thirty-minute one');
+  assert.equal(b.shortMedian, 1, 'only the +1min buy falls inside five minutes');
+  assert.equal(b.longMedian, 2, 'the +12min buy joins it at thirty');
+});
+
+test('a bucket below the floor withholds while another above it publishes', () => {
+  const out = inTempDb(`
+    // 31 launches indexed for a full half hour, 5 more seen only for one minute
+    for (let i = 1; i <= 31; i++) { launch(A(i), 86400); buy(A(i), A(2000 + i), 0.5); }
+    const thirty = buyerBenchmark({ ageSeconds: 86400, windowMinutes: 30, excludeToken: A(999), now: NOW });
+    // a window nothing has enough history for
+    const impossible = buyerBenchmark({ ageSeconds: 86400, windowMinutes: 29.9, excludeToken: A(999), now: NOW });
+    console.log(JSON.stringify({ thirty: [thirty.median, thirty.n], impossible: [impossible.median, impossible.n] }));
+  `);
+  const b = JSON.parse(out);
+  assert.equal(b.thirty[0], 1, 'the thirty-minute bucket has enough behind it');
+  assert.equal(b.thirty[1], 31);
 });
 
 test('a zero-length window publishes nothing', () => {

@@ -53,10 +53,42 @@ assert.ok(retryMs < 50, `retry took ${retryMs}ms`);
 ok(`retry served from cache in ${retryMs}ms — the message was honest`);
 
 // --- 5. a generous deadline does not interfere ------------------------------
-scanCache.sweep();
-const fine = await performScan({ token: '0xa73da07580d3c6b1648b9de217c666e2a63ccb00', source: 'inline', userId: 31338, deadlineMs: 10_000 });
-assert.ok(['ok', 'not_found'].includes(fine.kind), `expected a real result, got ${fine.kind}`);
-ok(`10s deadline (the inline setting) completes normally: ${fine.kind}`);
+// The launch row is indexed first, deliberately. On a completely cold index
+// findLaunch walks the factory's logs backwards and a scan measured 21s against
+// this node -- so a 10s deadline there is not testing whether the deadline
+// interferes, it is testing how long a cold log search takes. That cost is real
+// and is what recovery's boot backfill exists to pay down; it is asserted
+// separately below rather than folded into this one.
+const FINE_TOKEN = '0xa73da07580d3c6b1648b9de217c666e2a63ccb00';
+await performScan({ token: FINE_TOKEN, source: 'dm', userId: 31339 });
+// sweep() only drops EXPIRED entries, so it cannot force a miss -- using it
+// here measured a cache hit and proved nothing about the deadline at all.
+scanCache.drop(FINE_TOKEN);
+
+const t2 = Date.now();
+const fine = await performScan({ token: FINE_TOKEN, source: 'inline', userId: 31338, deadlineMs: 10_000 });
+const fineMs = Date.now() - t2;
+assert.ok(['ok', 'not_found'].includes(fine.kind), `expected a real result, got ${fine.kind} in ${fineMs}ms`);
+assert.equal(fine.cacheHit, false, 'this must exercise a real scan, not a cache hit');
+ok(`10s deadline (the inline setting) completes normally on an indexed launch: ${fine.kind} in ${fineMs}ms`);
+
+// --- 6. and a cold index is reported, never silently slow --------------------
+// No persistent volume means the index is empty after every deploy, so this is
+// the state a real container boots in. The scan does not fail, it exceeds the
+// inline deadline and says so -- which is the honest answer, and the reason the
+// message is "try again in a moment" rather than "scan failed".
+{
+  const cold = await performScan({
+    token: '0x0feca3b3a7be814212310eaa0a94682dc3a2af03',
+    source: 'inline', userId: 31340, deadlineMs: 50,
+  });
+  assert.ok(['busy', 'ok', 'not_found'].includes(cold.kind), `unexpected kind ${cold.kind}`);
+  if (cold.kind === 'busy') {
+    assert.match(cold.message, /still indexing|try again/i, `a deadline must explain itself: ${cold.message}`);
+    assert.ok(!/failed/i.test(cold.message), 'a deadline is not a failure');
+  }
+  ok(`an unindexed launch under a tight deadline reports "${cold.kind}", never a failure`);
+}
 
 console.log('\nAll deadline checks passed.');
 process.exit(0);
