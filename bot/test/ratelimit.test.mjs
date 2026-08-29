@@ -118,3 +118,40 @@ test('a rate limit is not mistaken for a range that is too wide', async () => {
   // five levels, so amplification would show as dozens of attempts.
   assert.ok(hits <= 8, `one refusal became ${hits} requests in ${Date.now() - started}ms`);
 });
+
+
+/**
+ * The other half of that fix: excluding rate limits must not disable the
+ * splitting getLogsAdaptive exists to do. This node really does refuse wide
+ * ranges, and that refusal still has to be answered by narrowing.
+ */
+test('a range that is genuinely too wide is still split', async () => {
+  let calls = 0;
+  let widest = 0;
+  const saved = globalThis.fetch;
+  globalThis.fetch = async (input, init) => {
+    const body = JSON.parse(String(init?.body ?? '{}'));
+    if (body.method !== 'eth_getLogs') {
+      return new Response(JSON.stringify({ jsonrpc: '2.0', id: body.id, result: null }),
+        { headers: { 'content-type': 'application/json' } });
+    }
+    calls++;
+    const span = Number(BigInt(body.params[0].toBlock)) - Number(BigInt(body.params[0].fromBlock));
+    if (span > 5_000) {
+      widest = Math.max(widest, span);
+      return new Response(JSON.stringify({ jsonrpc: '2.0', id: body.id,
+        error: { code: -32000, message: 'query exceeds max block range' } }),
+        { headers: { 'content-type': 'application/json' } });
+    }
+    return new Response(JSON.stringify({ jsonrpc: '2.0', id: body.id, result: [] }),
+      { headers: { 'content-type': 'application/json' } });
+  };
+  try {
+    const { getLogsAdaptive } = await import('../dist/chain.js');
+    const out = await getLogsAdaptive({ address: '0x' + '11'.repeat(20), fromBlock: 1n, toBlock: 40_000n });
+    assert.deepEqual(out, [], 'it completed by narrowing rather than throwing');
+    assert.ok(calls > 8, `only ${calls} requests — it did not split`);
+  } finally {
+    globalThis.fetch = saved;
+  }
+});
