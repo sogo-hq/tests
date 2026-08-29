@@ -252,6 +252,46 @@ test('the card is bounded at 13 lines with every optional line rendering', () =>
   assert.equal(lines[lines.length - 1], '@vitalscheck_bot \u00b7 not financial advice');
 });
 
+test('concentration is stated once, not twice with two roundings', () => {
+  const raised = {
+    key: 'holder_concentration', label: 'Holder concentration', state: 'raised',
+    detail: 'technical', compactDetail: 'x',
+    plain: 'top 5 wallets hold 44% of supply \u00b7 23 holders', severity: 60,
+  };
+  const card = renderDefaultCard(makeScan({
+    ageSeconds: 1200, buyers: 38, windowMinutes: 20, benchmarkMedian: 12, benchmarkN: 412,
+    concentration: { top5Share: 44.2, holders: 23, circulating: 1n }, flags: [raised],
+  }), 'b');
+  const mentions = card.split('\n').filter((l) => /top 5 wallets/.test(l));
+  assert.equal(mentions.length, 1, `stated ${mentions.length} times:\n${card}`);
+  assert.ok(mentions[0].startsWith('\ud83d\udea9'), 'when it is a concern it belongs in the concerns block');
+  assert.ok(mentions[0].includes('23 holders'), 'and it must not lose the holder count in the move');
+
+  // unraised, it keeps its own slot below the buyer count
+  const plainCard = renderDefaultCard(makeScan({
+    ageSeconds: 1200, buyers: 38, windowMinutes: 20, benchmarkMedian: 12, benchmarkN: 412,
+    concentration: { top5Share: 44.2, holders: 23, circulating: 1n },
+  }), 'b');
+  const lines = plainCard.split('\n');
+  assert.equal(lines.filter((l) => /top 5 wallets/.test(l)).length, 1);
+  assert.ok(lines.indexOf('top 5 wallets hold 44% \u00b7 23 holders') > lines.findIndex((l) => /^38 buyers/.test(l)));
+});
+
+test('a window under a minute is never rendered as "0 min"', () => {
+  const buyer = (over) =>
+    renderDefaultCard(makeScan(over), 'b').split('\n').find((l) => /^\d+ buyer|^no buyers/.test(l));
+  // reachable when the host clock runs ahead of block progression: the token
+  // reads as a minute old while only twenty seconds of blocks were observed
+  assert.equal(
+    buyer({ ageSeconds: 60, buyers: 1, windowMinutes: 20 / 60, benchmarkMedian: 1, benchmarkN: 412, measuredAtAge: false }),
+    '1 buyer \u2014 median in the first 20s is 1',
+  );
+  assert.equal(
+    buyer({ ageSeconds: 86400, buyers: 87, windowMinutes: 30, benchmarkMedian: 4, benchmarkN: 412 }),
+    '87 buyers \u2014 median in the first 30 min is 4',
+  );
+});
+
 test('card order: concerns, then the buyer count, then concentration, then the rest', () => {
   const r = makeScan({
     ageSeconds: 1200, symbol: 'TOKEN', buyers: 38, roundTrippers: 3, progressPct: 12.4,

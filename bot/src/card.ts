@@ -247,9 +247,9 @@ export function renderCard(r: ScanResult): string {
   L.push(
     b.median === null
       ? `  buyer benchmark: not enough data yet (n=${b.n}, need ${MIN_BENCHMARK_SAMPLES})`
-      : `  buyer benchmark: ${b.median} — median over the same first ${num(b.windowMinutes, 0)} min, across ${b.n.toLocaleString()} indexed launches that reached it`,
+      : `  buyer benchmark: ${b.median} — median over the same first ${windowLabel(b.windowMinutes)}, across ${b.n.toLocaleString()} indexed launches that reached it`,
   );
-  L.push(`  age band: ${esc(b.bucket.label)}${b.measuredAtAge ? '' : ` (buyers counted over the first ${num(b.windowMinutes, 0)} min, not the full age)`}`);
+  L.push(`  age band: ${esc(b.bucket.label)}${b.measuredAtAge ? '' : ` (buyers counted over the first ${windowLabel(b.windowMinutes)}, not the full age)`}`);
   L.push(`  buyer growth: ${t.uniqueBuyers10m} at +10 min → ${t.uniqueBuyers30m} at +${num(t.windowMinutes, 0)} min${t.buyerGrowthRatio !== null ? ` (${ratioStr(t.buyerGrowthRatio)}x)` : ''}`);
   L.push(`  buy/sell tx: ${t.buyTxCount}/${t.sellTxCount}${t.buySellRatio !== null ? ` (${ratioStr(t.buySellRatio)}:1)` : t.buyTxCount ? ' (no sells)' : ''}`);
   L.push(`  median buy: ${fmtUnits(t.medianBuySize, k.pairDecimals)} ${esc(quote)}`);
@@ -463,6 +463,12 @@ export function activityLine(r: ScanResult): string {
  * would be an anecdote presented as a reference, which is worse than no
  * reference at all.
  */
+/** A window as a reader would say it: "40s", "3 min", "30 min" -- never "0 min". */
+function windowLabel(minutes: number): string {
+  if (minutes < 1) return `${Math.max(1, Math.round(minutes * 60))}s`;
+  return `${Math.round(minutes)} min`;
+}
+
 export function buyerLine(r: ScanResult): string {
   const buyers = r.traction.uniqueBuyers30m;
   const head = buyers === 0 ? 'no buyers yet' : `${buyers} buyer${buyers === 1 ? '' : 's'}`;
@@ -474,7 +480,7 @@ export function buyerLine(r: ScanResult): string {
   // comparison that was never made.
   const ref = b.measuredAtAge
     ? 'median at this age'
-    : `median in the first ${Math.round(b.windowMinutes)} min`;
+    : `median in the first ${windowLabel(b.windowMinutes)}`;
   return `${head} \u2014 ${ref} is ${b.median}`;
 }
 
@@ -513,6 +519,11 @@ export function sellingLine(r: ScanResult): string {
 export function concentrationLine(r: ScanResult): string | null {
   const c = r.flags.concentration;
   if (!c || c.holders < MIN_HOLDERS_FOR_SHARE) return null;
+  // When it is a concern the flag block above already states it, and printing it
+  // again here put the same fact on the card twice with two different roundings
+  // -- "top 5 wallets hold 44.2% of supply" over "top 5 wallets hold 44%".
+  const raised = r.flags.flags.some((f) => f.key === 'holder_concentration' && f.state === 'raised');
+  if (raised) return null;
   return `top 5 wallets hold ${c.top5Share.toFixed(0)}% \u00b7 ${c.holders} holders`;
 }
 

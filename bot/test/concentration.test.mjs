@@ -126,7 +126,9 @@ test('at the floor the threshold comes from the distribution and is auditable', 
   assert.match(r.overDetail, /flagged at \d+\.\d% for 20 holders/, 'the threshold is printed as a share for audit');
   assert.match(r.overDetail, /25\.0% is the least 20 wallets can hold/);
   assert.match(r.overDetail, /90th percentile of 40 launches/);
-  assert.match(r.overPlain, /^top 5 wallets hold \d+\.\d% of supply$/);
+  // Rounded as the card rounds, and carrying the holder count: when this is
+  // raised it is the only line the reader sees about concentration.
+  assert.match(r.overPlain, /^top 5 wallets hold \d+% of supply · \d+ holders$/, r.overPlain);
 });
 
 test('a share the holder count forces cannot be flagged, however low the threshold', () => {

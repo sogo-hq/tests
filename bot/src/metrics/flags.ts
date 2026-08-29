@@ -487,9 +487,11 @@ export function computeFlags(opts: {
       compactDetail: over
         ? `top 5 wallets hold ${shareStr} (over ${thr.thresholdShare.toFixed(1)}%)`
         : `top 5 wallets hold ${shareStr}`,
+      // Rounded as the card rounds, and carrying the holder count, because when
+      // this is raised it is the only place the reader sees either.
       plain: over
-        ? `top 5 wallets hold ${shareStr} of supply`
-        : `top 5 wallets hold ${shareStr}`,
+        ? `top 5 wallets hold ${conc.top5Share.toFixed(0)}% of supply \u00b7 ${conc.holders} holders`
+        : `top 5 wallets hold ${conc.top5Share.toFixed(0)}%`,
       severity: over ? 60 : 0,
     });
   }
