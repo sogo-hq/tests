@@ -1,6 +1,6 @@
 import { Bot, InputFile, type Context } from 'grammy';
 import type { InlineQueryResult } from 'grammy/types';
-import { performScan, scanImage, normaliseToken, looksLikeTxHash, inlineCacheSeconds, SCAN_FAILED, type ScanSource, type ScanOutcome } from './service.js';
+import { performScan, scanImage, normaliseToken, looksLikeTxHash, looksLikeSolanaAddress, inlineCacheSeconds, SCAN_FAILED, type ScanSource, type ScanOutcome } from './service.js';
 import { scanCache, startCacheReporter } from './cache.js';
 import { userQuota, floodQuota, scanSemaphore, startQuotaSweeper, formatRetry } from './quota.js';
 import { inlineDescription } from './card.js';
@@ -18,6 +18,62 @@ const INLINE_DEADLINE_MS = 10_000;
  * unrelated group. Those are keyed on the chat instead.
  */
 const GROUP_ANONYMOUS_BOT_ID = 1087968824;
+
+/** How long a bot-posted prompt survives in a group before it is taken down. */
+const EPHEMERAL_MS = Number(process.env.GROUP_PROMPT_TTL_MS || 20_000);
+
+/** How long a chat's last scanned token stays available to a bare /full. */
+const LAST_TOKEN_TTL_MS = Number(process.env.LAST_TOKEN_TTL_MS || 10 * 60_000);
+
+/**
+ * The last token each chat scanned.
+ *
+ * A user scans something, reads the card, then sends /full -- and used to get
+ * the usage prompt, because the command carried no address. In memory only and
+ * per chat, so it survives a conversation but not a restart.
+ */
+const lastToken = new Map<number, { token: string; at: number }>();
+
+function rememberToken(chatId: number | undefined, token: string): void {
+  if (chatId === undefined) return;
+  lastToken.set(chatId, { token, at: Date.now() });
+  if (lastToken.size > 5_000) {
+    const cutoff = Date.now() - LAST_TOKEN_TTL_MS;
+    for (const [k, v] of lastToken) if (v.at < cutoff) lastToken.delete(k);
+  }
+}
+
+function recallToken(chatId: number | undefined): string | null {
+  if (chatId === undefined) return null;
+  const hit = lastToken.get(chatId);
+  if (!hit) return null;
+  if (Date.now() - hit.at > LAST_TOKEN_TTL_MS) {
+    lastToken.delete(chatId);
+    return null;
+  }
+  return hit.token;
+}
+
+/**
+ * Say something in a group and take it back down.
+ *
+ * A bare /scan used to post the full usage block; in a busy group that fired
+ * fifteen times in one session, which is how bots get removed. In a group the
+ * bot says one line, as a reply so it is attached to whoever asked, and deletes
+ * it shortly after.
+ */
+async function replyEphemeral(ctx: Context, text: string, replyOpts: Record<string, unknown>): Promise<void> {
+  const sent = await ctx.reply(text, { ...replyOpts });
+  const timer = setTimeout(() => {
+    void ctx.api.deleteMessage(sent.chat.id, sent.message_id).catch((err) => {
+      // Deleting needs permission the bot may not have, and the message may
+      // already be gone. Neither is worth failing over, but a persistent
+      // failure means every prompt is staying up and should be visible.
+      console.warn('[group] could not delete a prompt:', String(err?.message ?? err).slice(0, 140));
+    });
+  }, EPHEMERAL_MS);
+  timer.unref?.();
+}
 
 /** The identity the limiters should key on for this update. */
 function quotaIdentity(ctx: Context): number | undefined {
@@ -90,17 +146,34 @@ async function handleScan(ctx: Context, raw: string, full = false): Promise<void
     ? { reply_parameters: { message_id: ctx.msg.message_id, allow_sending_without_reply: true } as const }
     : {};
 
-  const token = normaliseToken(raw);
+  // A bare /full falls back to whatever this chat last scanned.
+  const token = normaliseToken(raw) ?? (full ? recallToken(ctx.chat?.id) : null);
   if (!token) {
-    const hint = looksLikeTxHash(raw)
-      ? 'That is a transaction hash, not a token address.\n'
-      : '';
-    await ctx.reply(
-      `${hint}Send a pons v2 token address:\n/scan ${EXAMPLE}`,
-      { ...replyOpts },
-    );
+    const cmd = full ? 'full' : 'scan';
+    // What went wrong, in one sentence. Same wording on every surface.
+    const lead = looksLikeSolanaAddress(raw)
+      ? "that's a solana address. this bot covers pons v2 on Robinhood Chain."
+      : looksLikeTxHash(raw)
+        ? "that's a transaction hash, not a token address."
+        : null;
+
+    if (isGroup) {
+      // One short line, attached to whoever asked, gone in twenty seconds.
+      // The full usage block posted here fifteen times in one session, which is
+      // how a bot gets removed from a group.
+      await replyEphemeral(ctx, lead ?? `send a pons v2 token address — /${cmd} 0x…`, replyOpts);
+    } else {
+      // A DM is nobody else's timeline, so it keeps the example in full.
+      await ctx.reply(
+        lead
+          ? `${lead}\nSend a pons v2 token address:\n/${cmd} ${EXAMPLE}`
+          : `Send a pons v2 token address:\n/${cmd} ${EXAMPLE}`,
+        {},
+      );
+    }
     return;
   }
+  if (normaliseToken(raw)) rememberToken(ctx.chat?.id, token);
 
   // A cached answer arrives instantly, so the "Scanning..." notice would only
   // flicker. Groups never get the notice at all -- an extra message per scan is
@@ -314,17 +387,21 @@ async function handleInline(ctx: Context): Promise<void> {
   if (!token) {
     // Not an error — an explanation. An empty inline result list just shows a
     // spinner that never resolves, which reads as the bot being broken.
-    const isTx = looksLikeTxHash(q);
+    const isSol = looksLikeSolanaAddress(q);
+    const isTx = !isSol && looksLikeTxHash(q);
+    const lead = isSol
+      ? "that's a solana address. this bot covers pons v2 on Robinhood Chain."
+      : isTx
+        ? "that's a transaction hash, not a token address."
+        : 'That is not a token address.';
     await answerShared([
       article(
-        isTx ? 'invalid-tx' : 'invalid',
-        isTx ? 'That is a transaction hash' : 'Not a token address',
-        'Expected 0x followed by 40 hex characters',
+        isSol ? 'invalid-sol' : isTx ? 'invalid-tx' : 'invalid',
+        isSol ? 'Solana address' : isTx ? 'That is a transaction hash' : 'Not a token address',
+        isSol ? 'this bot covers pons v2 on Robinhood Chain' : 'Expected 0x followed by 40 hex characters',
         [
           'VITALS — pons v2 launch scanner',
-          isTx
-            ? 'That is a transaction hash, not a token address. Expected 0x followed by 40 hex characters, e.g.'
-            : 'That is not a token address. Expected 0x followed by 40 hex characters, e.g.',
+          `${lead} Expected 0x followed by 40 hex characters, e.g.`,
           EXAMPLE,
           `@${usernameOf(ctx) ?? 'the bot'} · not financial advice`,
         ].join('\n'),

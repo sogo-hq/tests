@@ -4,8 +4,13 @@
  * contracts without a bot token. Run: node test/handlers.mjs
  */
 import assert from 'node:assert/strict';
-import { createBot } from '../dist/bot.js';
-import { scanCache } from '../dist/cache.js';
+
+// bot.js reads GROUP_PROMPT_TTL_MS once at module load, so it is set before the
+// dynamic import -- the deletion assertion should not depend on the caller
+// remembering to pass an env var.
+process.env.GROUP_PROMPT_TTL_MS ??= '50';
+const { createBot } = await import('../dist/bot.js');
+const { scanCache } = await import('../dist/cache.js');
 
 const BOT_INFO = {
   id: 42, is_bot: true, first_name: 'VITALS', username: 'vitalscheck_bot',
@@ -279,6 +284,119 @@ assert.deepEqual(tail, [
 ]);
 assert.equal(c[0].payload.link_preview_options?.is_disabled, true, 'the domain must not spawn a preview card');
 ok('/help is plain text and ends with the contact block');
+
+// ===========================================================================
+// Live group testing: four regressions
+// ===========================================================================
+
+// --- 1. a bare /scan must not spam a group ---------------------------------
+{
+  await bot.handleUpdate(msg('group', '/scan', -700));
+  let c6 = drain();
+  assert.equal(c6.length, 1, `bare /scan in a group sent ${c6.length} messages`);
+  const line = c6[0].payload.text;
+  assert.equal(line.split('\n').length, 1, `group prompt must be one line, got:\n${line}`);
+  assert.ok(line.length <= 60, `group prompt is ${line.length} chars, too long for a busy group`);
+  assert.ok(c6[0].payload.reply_parameters?.message_id, 'attached to whoever asked');
+  ok(`bare /scan in a group -> one short line, as a reply: "${line}"`);
+
+  // /scan@botname is the same path
+  await bot.handleUpdate(msg('group', '/scan@vitalscheck_bot', -701));
+  c6 = drain();
+  assert.equal(c6.length, 1);
+  assert.equal(c6[0].payload.text.split('\n').length, 1);
+  ok('bare /scan@botname in a group -> one short line too');
+
+  // and it is taken back down. GROUP_PROMPT_TTL_MS is read at module load, so
+  // this run sets it to 50ms via the env before importing the bot.
+  await new Promise((r) => setTimeout(r, Number(process.env.GROUP_PROMPT_TTL_MS || 20000) + 80));
+  const deletes = drain().filter((x) => x.method === 'deleteMessage');
+  assert.ok(deletes.length >= 2, `expected the group prompts to be deleted, saw ${deletes.length} deleteMessage calls`);
+  ok(`group prompts are deleted after ${process.env.GROUP_PROMPT_TTL_MS}ms`);
+}
+
+// --- DM keeps the fuller prompt --------------------------------------------
+await bot.handleUpdate(msg('private', '/scan', -702));
+{
+  const c7 = drain();
+  assert.equal(c7.length, 1);
+  assert.ok(c7[0].payload.text.split('\n').length > 1, 'a DM keeps the multi-line prompt');
+  ok('bare /scan in a DM -> the fuller prompt, unchanged');
+}
+
+// --- 3. /full remembers the last token scanned in this chat -----------------
+await bot.handleUpdate(msg('private', `/scan ${TOKEN}`, -703));
+drain();
+await bot.handleUpdate(msg('private', '/full', -703));
+{
+  const c8 = drain();
+  const text = c8[c8.length - 1].payload.text;
+  assert.ok(!/send a pons v2 token address/i.test(text), 'bare /full must not fall back to the usage prompt');
+  assert.ok(text.includes('TRACTION') || text.includes('too early for traction'), 'bare /full renders the long card');
+  ok('bare /full renders the last token scanned in that chat');
+}
+
+// memory is per chat, not global
+await bot.handleUpdate(msg('private', '/full', -704));
+{
+  const c9 = drain();
+  assert.ok(/send a pons v2 token address/i.test(c9[c9.length - 1].payload.text),
+    'a chat that has scanned nothing gets the prompt, not another chat\'s token');
+  ok('/full memory is per chat');
+}
+
+// --- 4. solana addresses get told what this bot covers ---------------------
+const SOL = '9BB6NFEcjBCtnNLFko2FqVQBq8HHM13kCyYcdQbgpump';
+for (const [chatType, chatId] of [['private', -705], ['group', -706]]) {
+  await bot.handleUpdate(msg(chatType, `/scan ${SOL}`, chatId));
+  const c10 = drain();
+  assert.equal(c10.length, 1);
+  assert.match(c10[0].payload.text,
+    /that's a solana address\. this bot covers pons v2 on Robinhood Chain\./,
+    `${chatType} did not name the chain`);
+}
+ok('solana address -> named as such, on DM and group');
+
+await bot.handleUpdate(inline(SOL, 9500));
+{
+  const c11 = drain();
+  const r2 = c11[0].payload.results[0];
+  assert.match(r2.title, /Solana/);
+  assert.match(r2.input_message_content.message_text, /that's a solana address/);
+  ok('solana address -> named as such inline too');
+}
+
+// --- 2. a rate limit must never be reported as a failure -------------------
+{
+  const { RpcRateLimited } = await import('../dist/ratelimit.js');
+  const { rateLimitFrom, rateLimitedMessage } = await import('../dist/service.js');
+  const { scanCache } = await import('../dist/cache.js');
+
+  // the classifier sees a limit through viem's wrapping
+  assert.equal(rateLimitFrom(new RpcRateLimited(30)), 30);
+  assert.equal(rateLimitFrom({ shortMessage: 'HTTP request failed', cause: new RpcRateLimited(12) }), 12);
+  assert.equal(rateLimitFrom({ message: 'Rate Limit Hit, limit will reset in 60 seconds' }), 30);
+  assert.equal(rateLimitFrom(new Error('connection reset')), null, 'a real fault stays a fault');
+  assert.match(rateLimitedMessage(30), /^too many scans right now, try again in 30s$/);
+
+  // end to end: the node 429s past its retries and the user is told the truth
+  scanCache.sweep();
+  const saved = globalThis.fetch;
+  globalThis.fetch = async (i, init) => {
+    const u = typeof i === 'string' ? i : (i?.url ?? String(i));
+    if (u.includes('rpc.mainnet')) throw new RpcRateLimited(25);
+    return saved(i, init);
+  };
+  try {
+    await bot.handleUpdate(msg('private', '/scan 0x' + '77'.repeat(20), -800));
+  } finally { globalThis.fetch = saved; }
+  const c12 = drain();
+  const said = c12[c12.length - 1].payload.text;
+  assert.match(said, /too many scans right now/, `a rate limit was reported as: ${said}`);
+  assert.ok(!/scan failed/i.test(said), 'a limit must never read as a failure');
+  ok(`rpc rate limit -> "${said.replace(/^⏳ /, '')}", not "scan failed"`);
+}
+
 
 console.log('\nAll handler checks passed.');
 process.exit(0);

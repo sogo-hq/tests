@@ -3,6 +3,7 @@ import { scanToken, type ScanResult } from './scan.js';
 import { renderCard, renderDefaultCard, renderDefaultNotFound, compactMeta, type CompactMeta } from './card.js';
 import { scanCache, type CachedScan } from './cache.js';
 import { userQuota, floodQuota, scanSemaphore, SlotTimeout, formatRetry } from './quota.js';
+import { RpcRateLimited } from './ratelimit.js';
 import { db } from './db.js';
 import { renderCardPng } from './image.js';
 import { EARLY_CACHE_TTL_MS, EARLY_WINDOW_SECONDS } from './config.js';
@@ -15,6 +16,34 @@ export type ScanSource = 'dm' | 'group' | 'inline' | 'cli';
  * helps nobody and leaks internals.
  */
 export const SCAN_FAILED = 'scan failed, try again';
+
+/** What a user sees when a limit, not a fault, stopped the scan. */
+export function rateLimitedMessage(retryAfterSec: number): string {
+  return `too many scans right now, try again in ${formatRetry(retryAfterSec)}`;
+}
+
+/**
+ * Did this throw come from a limit rather than a fault?
+ *
+ * A rate limit reaching the generic catch was reported as "scan failed, try
+ * again" -- a false error about a token that had scanned fine seconds earlier
+ * for somebody else. A limit is never a failure and must never read as one.
+ */
+export function rateLimitFrom(err: unknown): number | null {
+  if (err instanceof RpcRateLimited) return err.retryAfterSec;
+  // viem wraps transport errors, so the cause chain has to be walked.
+  let cur: any = err;
+  for (let depth = 0; cur && depth < 6; depth++) {
+    if (cur instanceof RpcRateLimited) return cur.retryAfterSec;
+    const msg = String(cur.shortMessage ?? cur.details ?? cur.message ?? '');
+    if (/rate limit|429|too many requests/i.test(msg)) {
+      const m = msg.match(/retry after (\d+)/i);
+      return m ? Number(m[1]) : 30;
+    }
+    cur = cur.cause;
+  }
+  return null;
+}
 
 export type ScanOutcome =
   | { kind: 'ok'; defaultCard: string; fullCard: string; meta: CompactMeta; cacheHit: boolean; durationMs: number }
@@ -157,6 +186,30 @@ export function normaliseToken(raw: string): string | null {
   const m = raw.match(ADDRESS_RE);
   if (!m) return null;
   return isAddress(m[0]) ? getAddress(m[0]) : null;
+}
+
+/**
+ * Base58 as Solana uses it: no 0, O, I or l.
+ *
+ * Solana addresses get pasted here constantly, often with the pump.fun or bonk
+ * vanity suffix, and falling through to the generic prompt teaches the user
+ * nothing. An all-hex string is excluded: 40 hex characters with no zero in
+ * them satisfy the base58 alphabet by accident, and that is an EVM address
+ * missing its prefix, not a Solana one.
+ */
+const BASE58_WORD = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
+const ALL_HEX = /^[0-9a-fA-F]+$/;
+
+export function looksLikeSolanaAddress(raw: string): boolean {
+  for (const word of String(raw).split(/[\s,;]+/)) {
+    if (!BASE58_WORD.test(word)) continue;
+    if (word.startsWith('0x') || word.startsWith('0X')) continue;
+    // the vanity suffixes are decisive on their own
+    if (/(?:pump|bonk)$/i.test(word)) return true;
+    if (ALL_HEX.test(word)) continue;
+    return true;
+  }
+  return false;
 }
 
 /** Did the user paste a transaction hash instead of a token address? */
@@ -350,7 +403,7 @@ export async function performScan(req: ScanRequest): Promise<ScanOutcome> {
         kind: 'rate_limited',
         retryAfterSec: flood.retryAfterSec,
         window: flood.window!,
-        message: `rate limited, try again in ${formatRetry(flood.retryAfterSec)}`,
+        message: rateLimitedMessage(flood.retryAfterSec),
       };
     }
   }
@@ -379,7 +432,7 @@ export async function performScan(req: ScanRequest): Promise<ScanOutcome> {
         kind: 'rate_limited',
         retryAfterSec: decision.retryAfterSec,
         window: decision.window!,
-        message: `rate limited, try again in ${formatRetry(decision.retryAfterSec)}`,
+        message: rateLimitedMessage(decision.retryAfterSec),
       };
     }
   }
@@ -419,9 +472,19 @@ export async function performScan(req: ScanRequest): Promise<ScanOutcome> {
       logEvent(req, false, d, 'timeout');
       return { kind: 'busy', message: 'still indexing, try again in a moment' };
     }
-    // A failed scan is not the user's fault and is not charged to them. The
-    // full error goes to the server log; the user gets a plain sentence.
     if (consumedScanQuota && quotaKey !== undefined) userQuota.refund(quotaKey);
+
+    // A limit is not a fault. Reporting one as "scan failed" tells the user the
+    // token is broken when the only thing that happened is that we asked the
+    // node too often.
+    const retryAfter = rateLimitFrom(err);
+    if (retryAfter !== null) {
+      console.warn(`[scan] rpc rate limited for ${token} (${req.source}), retry after ${retryAfter}s`);
+      logEvent(req, false, d, 'rate_limited_rpc');
+      return { kind: 'rate_limited', retryAfterSec: retryAfter, window: 'minute', message: rateLimitedMessage(retryAfter) };
+    }
+
+    // A genuine failure. Full error to the log, plain sentence to the user.
     console.error(`[scan] failed for ${token} (${req.source}):`, err);
     logEvent(req, false, d, 'error');
     return { kind: 'error', message: SCAN_FAILED };

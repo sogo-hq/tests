@@ -26,6 +26,21 @@ const MAX_429_RETRIES = 6;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /**
+ * The node rate-limited us and retrying did not clear it.
+ *
+ * Thrown rather than returned as a 429 response so callers can tell this apart
+ * from a scan that genuinely failed. Returning the response let viem surface it
+ * as an ordinary request error, which reached the user as "scan failed, try
+ * again" -- a false report about a token that was perfectly fine.
+ */
+export class RpcRateLimited extends Error {
+  constructor(readonly retryAfterSec: number) {
+    super(`rpc rate limited, retry after ${retryAfterSec}s`);
+    this.name = 'RpcRateLimited';
+  }
+}
+
+/**
  * Request priority.
  *
  * An interactive /scan and a bulk backfill share one rate budget, so without
@@ -115,12 +130,15 @@ export function installRateLimit(): void {
       await bucket.acquire();
       const res = await realFetch(input, init);
       if (res.status !== 429) return res;
-      if (attempt >= MAX_429_RETRIES) return res;
 
       const retryAfter = Number(res.headers.get('retry-after'));
       const waitMs = Number.isFinite(retryAfter) && retryAfter > 0
         ? retryAfter * 1000
         : Math.min(30_000, 1000 * 2 ** attempt);
+
+      if (attempt >= MAX_429_RETRIES) {
+        throw new RpcRateLimited(Math.max(1, Math.round(waitMs / 1000)));
+      }
       bucket.penalise();
       await sleep(waitMs + Math.random() * 250);
     }
