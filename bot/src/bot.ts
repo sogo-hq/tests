@@ -1,6 +1,6 @@
 import { Bot, InputFile, type Context } from 'grammy';
 import type { InlineQueryResult } from 'grammy/types';
-import { performScan, scanImage, normaliseToken, looksLikeTxHash, looksLikeSolanaAddress, inlineCacheSeconds, SCAN_FAILED, type ScanSource, type ScanOutcome } from './service.js';
+import { performScan, scanImage, normaliseToken, looksLikeTxHash, looksLikeSolanaAddress, inlineCacheSeconds, rateLimitFrom, rateLimitedMessage, SCAN_FAILED, type ScanSource, type ScanOutcome } from './service.js';
 import { scanCache, startCacheReporter } from './cache.js';
 import { userQuota, floodQuota, scanSemaphore, startQuotaSweeper, formatRetry } from './quota.js';
 import { inlineDescription } from './card.js';
@@ -199,8 +199,21 @@ async function handleScan(ctx: Context, raw: string, full = false): Promise<void
       botUsername: usernameOf(ctx),
     });
   } catch (err) {
-    console.error(`[scan] unexpected failure for ${token} (${source}):`, err);
-    outcome = { kind: 'error', message: SCAN_FAILED };
+    // performScan classifies limits itself, but this is the last line before the
+    // user sees a message and a limit must never reach them as a failure.
+    const retryAfter = rateLimitFrom(err);
+    if (retryAfter !== null) {
+      console.warn(`[scan] rpc rate limited for ${token} (${source}), retry after ${retryAfter}s`);
+      outcome = {
+        kind: 'rate_limited',
+        retryAfterSec: retryAfter,
+        window: 'minute',
+        message: rateLimitedMessage(retryAfter),
+      };
+    } else {
+      console.error(`[scan] unexpected failure for ${token} (${source}):`, err);
+      outcome = { kind: 'error', message: SCAN_FAILED };
+    }
   }
 
   // The image is opt-in and lives behind this button. It is never rendered
