@@ -1,6 +1,6 @@
 import { createPublicClient, defineChain, http } from 'viem';
 import { RPC_URL, CHAIN_ID } from './config.js';
-import { installRateLimit } from './ratelimit.js';
+import { installRateLimit, isRateLimit } from './ratelimit.js';
 
 // Installed before any client is constructed so every RPC request is paced.
 installRateLimit();
@@ -75,6 +75,14 @@ export async function getLogsAdaptive<T extends Record<string, unknown>>(
   try {
     return (await logsClient.getLogs(params as any)) as any[];
   } catch (err: any) {
+    // A rate limit is not a range problem, and halving the range makes it worse:
+    // the two halves are issued in parallel, so a refusal at 18,000 blocks
+    // became up to sixteen simultaneous requests to a node that had already
+    // said no, each burning its own 429 backoff. The substring test below is
+    // what let that happen -- "rate limited" contains "limit" -- so the limit is
+    // classified first and propagated untouched, on every getLogs path in the
+    // product rather than only the background one.
+    if (isRateLimit(err)) throw err;
     const msg = String(err?.details ?? err?.message ?? '');
     const retryable = /timed out|too many|limit|range|exceed/i.test(msg);
     const span = toBlock - fromBlock;

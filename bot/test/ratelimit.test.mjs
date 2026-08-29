@@ -90,3 +90,31 @@ test('an abort during the backoff is still reported as a limit', async () => {
   assert.equal(r.isLimit, true, `abort surfaced as ${r.name}, which reads to the user as "scan failed"`);
   assert.equal(r.classified, 2);
 });
+
+
+/**
+ * getLogsAdaptive halves its range and retries when a query is refused for
+ * being too big. It classified errors by substring, and "rate limited" contains
+ * "limit" -- so a 429 was read as a range problem and the two halves were
+ * issued IN PARALLEL, turning one refusal into up to sixteen simultaneous
+ * requests to a node that had already said no, each burning its own backoff.
+ * This is on every getLogs path in the product, not just the background loop.
+ */
+test('a rate limit is not mistaken for a range that is too wide', async () => {
+  retryAfterHeader = 30;
+  hits = 0;
+  const { getLogsAdaptive } = await import('../dist/chain.js');
+  const started = Date.now();
+  await assert.rejects(
+    () => getLogsAdaptive({
+      address: '0x' + '11'.repeat(20),
+      fromBlock: 1n,
+      toBlock: 40_000n,   // wide enough for four levels of halving
+    }),
+    (err) => isRateLimit(err),
+    'the limit must propagate, not be retried as a range problem',
+  );
+  // One refusal, not a fan-out. Halving to the 2,000-block floor from 40,000 is
+  // five levels, so amplification would show as dozens of attempts.
+  assert.ok(hits <= 8, `one refusal became ${hits} requests in ${Date.now() - started}ms`);
+});

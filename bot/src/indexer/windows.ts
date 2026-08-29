@@ -1,8 +1,8 @@
 import { db } from '../db.js';
-import { bulk } from '../ratelimit.js';
+import { bulk, isRateLimit } from '../ratelimit.js';
 import { client } from '../chain.js';
 import { indexOneCurve, markWindowIndexed } from './trades.js';
-import { readConcentration, recordConcentration } from '../metrics/concentration.js';
+import { readConcentration, recordConcentration, excessConcentration } from '../metrics/concentration.js';
 import { WINDOW_30_MIN_BLOCKS, BLOCKS_PER_MINUTE } from '../config.js';
 import { AGE_BUCKETS, MIN_BENCHMARK_SAMPLES } from '../metrics/benchmark.js';
 import { MIN_CONCENTRATION_SAMPLES, MIN_HOLDERS_FOR_SHARE, concentrationCoverage } from '../metrics/concentration.js';
@@ -223,13 +223,16 @@ export interface WindowPass {
   sample: number;
   /** Holder-distribution observations recorded, for check 09's threshold. */
   concentration: number;
+  /** The node said no and the pass gave up rather than argue with it. */
+  rateLimited: boolean;
 }
 
 /** Read one batch of opening windows. */
 export async function indexWindows(limit = BATCH): Promise<WindowPass> {
   const targets = selectTargets(limit);
   const pass: WindowPass = {
-    attempted: targets.length, indexed: 0, trades: 0, failed: 0, exempt: 0, sample: 0, concentration: 0,
+    attempted: targets.length, indexed: 0, trades: 0, failed: 0, exempt: 0, sample: 0,
+    concentration: 0, rateLimited: false,
   };
   if (!targets.length) return pass;
 
@@ -271,16 +274,30 @@ export async function indexWindows(limit = BATCH): Promise<WindowPass> {
           // launches every pass, forever, and never reach one that counts.
           db.prepare('UPDATE launches SET holders_read_at = ? WHERE token = ?')
             .run(Math.floor(Date.now() / 1000), t.token.toLowerCase());
-          if (c) {
-            const before = concentrationCoverage();
+          // excessConcentration is what decides whether the observation is
+          // recordable at all, so asking it directly beats counting the table
+          // twice per launch to find out.
+          if (c && excessConcentration(c) !== null) {
             recordConcentration(t.token, c);
-            if (concentrationCoverage() > before) pass.concentration++;
+            pass.concentration++;
           }
         } catch (err) {
+          if (isRateLimit(err)) throw err;   // handled once, below
           console.warn(`[windows] ${t.token} holder read failed:`, String((err as any)?.shortMessage ?? (err as Error)?.message ?? err).slice(0, 100));
         }
       }
     } catch (err) {
+      // A limit is not this launch's problem and the next launch will hit it
+      // too. Grinding on would spend the 429 backoff budget once per launch --
+      // a full batch is twenty minutes of a pass arguing with a node that has
+      // already said no. Abandon the pass; the next tick picks up where this
+      // one stopped, and the interactive traffic this yields to is the whole
+      // reason the loop is bulk in the first place.
+      if (isRateLimit(err)) {
+        pass.rateLimited = true;
+        console.warn(`[windows] rate limited after ${pass.indexed} windows; pausing until the next pass`);
+        break;
+      }
       // One unreadable launch must not stop the pass; the row keeps its
       // unmarked state and comes back around next time.
       pass.failed++;
@@ -321,7 +338,8 @@ export function startWindowLoop(intervalMs = 15_000, batch = BATCH): NodeJS.Time
         console.log(
           `[windows] ${plural(pass.indexed, 'window')} read (${pass.exempt} exempt, ${pass.sample} sample), ` +
             `${pass.trades.toLocaleString()} trades, ${plural(pass.concentration, 'holder reading')}` +
-            `${pass.failed ? `, ${pass.failed} unreadable` : ''} — ` +
+            `${pass.failed ? `, ${pass.failed} unreadable` : ''}` +
+            `${pass.rateLimited ? ', paused on a rate limit' : ''} — ` +
             // "remaining" only means the exempt population, which is read to
             // completion. The rest is a target, not a queue: the sample stops
             // when the buckets and check 09 are satisfied, so the unindexed
