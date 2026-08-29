@@ -3,6 +3,8 @@ import type { InlineQueryResult } from 'grammy/types';
 import { performScan, scanImage, normaliseToken, looksLikeTxHash, looksLikeSolanaAddress, inlineCacheSeconds, rateLimitFrom, rateLimitedMessage, SCAN_FAILED, type ScanSource, type ScanOutcome } from './service.js';
 import { scanCache, startCacheReporter } from './cache.js';
 import { userQuota, floodQuota, scanSemaphore, startQuotaSweeper } from './quota.js';
+import { benchmarkCoverageLine } from './metrics/benchmark.js';
+import { concentrationCoverageLine } from './metrics/concentration.js';
 import { inlineDescription } from './card.js';
 import { db } from './db.js';
 import { indexCoverage } from './coverage.js';
@@ -707,6 +709,11 @@ export function statsText(): string {
     `launches indexed ${launches.toLocaleString()}`,
     `launches with pre-exempted wallets ${withExempt.toLocaleString()} (${pct}% of ${decoded.toLocaleString()} decoded)`,
     holdTimeLine(hold),
+    // Whether the comparison on every card is running yet, and on how much. A
+    // feature that is silent for want of data should say so where the numbers
+    // live rather than just not appear.
+    benchmarkCoverageLine(),
+    concentrationCoverageLine(),
     `scans served ${scans.toLocaleString()}`,
   ].join('\n');
 }

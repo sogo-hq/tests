@@ -5,6 +5,7 @@ import { startRecovery } from './recovery.js';
 import { scanToken } from './scan.js';
 import { renderCardText, renderDefaultCard } from './card.js';
 import { runDueRechecks, startRecheckLoop } from './recheck.js';
+import { startWindowLoop, windowBacklog, indexWindows } from './indexer/windows.js';
 import { startBot } from './bot.js';
 import { db } from './db.js';
 import { BACKFILL_DAYS, BLOCKS_PER_DAY } from './config.js';
@@ -176,6 +177,19 @@ async function main(): Promise<void> {
         console.log(`[decode] ${pending.toLocaleString()} launches pending decode; draining in the background at low priority.`);
       }
       startDecodeLoop();
+      // Fills the trade history three shipped features are computed over. Runs
+      // at the same bulk priority as the decoder, and reads only the first
+      // thirty minutes of each launch it picks -- the cap the buyer count
+      // already uses.
+      const backlog = windowBacklog();
+      if (backlog.total) {
+        console.log(
+          `[windows] ${backlog.exempt.toLocaleString()} exempted-wallet launches and ` +
+            `${backlog.total.toLocaleString()} total without an indexed opening window; ` +
+            `reading them in the background at low priority.`,
+        );
+      }
+      startWindowLoop();
       await startBot();
       return;
     }

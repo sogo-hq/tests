@@ -253,6 +253,8 @@ const columnsOf = (table: string) =>
 for (const [table, column, decl] of [
   ['rechecks', 'attempts', 'INTEGER NOT NULL DEFAULT 0'],
   ['holder_snapshots', 'excess', 'REAL NOT NULL DEFAULT 0'],
+  ['launches', 'trades_indexed_to', 'INTEGER'],
+  ['launches', 'holders_read_at', 'INTEGER'],
 ] as const) {
   if (!columnsOf(table).includes(column)) {
     db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${decl}`);
@@ -272,6 +274,20 @@ for (const [table, column, decl] of [
       // Rows below the holder floor could never have been recorded under either
       // rule; if one exists it has no excess to contribute.
       db.exec('DELETE FROM holder_snapshots WHERE holders <= 5');
+    }
+    if (table === 'launches' && column === 'trades_indexed_to') {
+      // How far each launch's trade history has actually been read, in blocks
+      // from its own launch block. Until now this was inferred: a launch was
+      // assumed covered as far as the last scan of it reached. That inference
+      // only works while scanning is the only thing that indexes trades, and it
+      // is about to stop being true. Existing rows are seeded from exactly the
+      // inference they were being judged by, so nothing shifts underfoot.
+      db.exec(`
+        UPDATE launches
+           SET trades_indexed_to = block_number + MIN(18000, MAX(0,
+                 ((SELECT MAX(s.scanned_at) FROM scans s WHERE s.token = launches.token) - launched_at) * 10))
+         WHERE EXISTS (SELECT 1 FROM scans s WHERE s.token = launches.token)
+      `);
     }
   }
 }

@@ -206,3 +206,22 @@ export function concentrationThreshold(
     thresholdShare: floor + threshold * (100 - floor),
   };
 }
+
+
+/** How many holder distributions the threshold has behind it. */
+export function concentrationCoverage(): number {
+  return (db.prepare('SELECT COUNT(*) AS n FROM holder_snapshots').get() as { n: number }).n;
+}
+
+/**
+ * The /stats line for check 09.
+ *
+ * One pooled figure, because the excess measure is scale-free: a six-holder
+ * token and a two-hundred-holder one contribute to the same distribution, so
+ * there are no per-band populations to report separately.
+ */
+export function concentrationCoverageLine(n = concentrationCoverage()): string {
+  return n >= MIN_CONCENTRATION_SAMPLES
+    ? `holder concentration: live (n=${n.toLocaleString()})`
+    : `holder concentration: not enough data yet (n=${n.toLocaleString()})`;
+}

@@ -3,7 +3,7 @@ import { client, getLogsAdaptive } from './chain.js';
 import { interactive } from './ratelimit.js';
 import { db, normaliseKey } from './db.js';
 import { readToken, type TokenReads } from './reads.js';
-import { indexOneCurve } from './indexer/trades.js';
+import { indexOneCurve, markWindowIndexed } from './indexer/trades.js';
 import { fetchLaunchCalldata } from './indexer/exemptions.js';
 import { computeTraction, type TractionMetrics } from './metrics/traction.js';
 import { computeFlags, type FlagResult } from './metrics/flags.js';
@@ -175,6 +175,7 @@ async function scanTokenInner(token: string, requestedBy?: number): Promise<Scan
   // tokens, because that is the window every traction metric is defined over.
   const windowEnd = BigInt(Math.min(launch.block + WINDOW_30_MIN_BLOCKS, Number(head)));
   await indexOneCurve(reads.curve, reads.token, BigInt(launch.block), windowEnd);
+  markWindowIndexed(reads.token, launch.block, Number(windowEnd));
 
   const scannedAt = Math.floor(Date.now() / 1000);
   const traction = computeTraction(

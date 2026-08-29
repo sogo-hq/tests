@@ -1,0 +1,331 @@
+import { db } from '../db.js';
+import { bulk } from '../ratelimit.js';
+import { client } from '../chain.js';
+import { indexOneCurve, markWindowIndexed } from './trades.js';
+import { readConcentration, recordConcentration } from '../metrics/concentration.js';
+import { WINDOW_30_MIN_BLOCKS, BLOCKS_PER_MINUTE } from '../config.js';
+import { AGE_BUCKETS, MIN_BENCHMARK_SAMPLES } from '../metrics/benchmark.js';
+import { MIN_CONCENTRATION_SAMPLES, MIN_HOLDERS_FOR_SHARE, concentrationCoverage } from '../metrics/concentration.js';
+
+/**
+ * Fill in the opening trade window of launches nobody has scanned.
+ *
+ * Trades were only ever indexed as a side effect of somebody scanning a token,
+ * which left three shipped features silent on a live index: the buyer
+ * benchmark, holder concentration's sample, and the /stats median hold time.
+ * Thirteen launches out of eighteen thousand had any trade history at all.
+ *
+ * This is deliberately not a backfill of everything. It reads the first thirty
+ * minutes -- the cap the buyer count already uses, so there is nothing further
+ * worth pulling -- for two populations and no others:
+ *
+ *   1. every launch carrying pre-exempted wallets, because that is exactly the
+ *      population the exempted-wallet hold-time median is computed over;
+ *   2. the most recent launches, until each age bucket the benchmark uses can
+ *      answer from more launches than its floor requires.
+ *
+ * It runs at bulk priority, like the decode drip, so an interactive scan is
+ * always served ahead of it.
+ */
+
+/** Launches read per pass. Bounded so a pass is short and interruptible. */
+const BATCH = Number(process.env.WINDOW_INDEX_BATCH || 25) || 25;
+
+/**
+ * Coverage aimed for per bucket.
+ *
+ * Above the n<30 floor rather than at it: a population sitting exactly on the
+ * threshold drops below it the moment anything is recounted, and a benchmark
+ * that flickers in and out of "live" is worse than one that waits. The floor
+ * itself is untouched -- this fills the population, it does not lower the bar.
+ */
+const TARGET_PER_BUCKET = Math.max(
+  MIN_BENCHMARK_SAMPLES,
+  Number(process.env.WINDOW_INDEX_TARGET || 40) || 40,
+);
+
+interface Candidate {
+  token: string;
+  curve: string;
+  block_number: number;
+  launched_at: number;
+  /** Why it was picked -- and so which of the two reads it still needs. */
+  reason: 'exempt' | 'sample' | 'holders';
+  trades_indexed_to: number | null;
+  holders_read_at: number | null;
+}
+
+/** Launches whose opening window is not yet read to `windowBlocks`. */
+function uncovered(windowBlocks: number, where: string, params: unknown[], limit: number): Candidate[] {
+  return db
+    .prepare(
+      `SELECT token, curve, block_number, launched_at, trades_indexed_to, holders_read_at
+         FROM launches
+        WHERE (trades_indexed_to IS NULL OR trades_indexed_to - block_number < ?)
+          AND ${where}
+        ORDER BY launched_at DESC
+        LIMIT ?`,
+    )
+    .all(windowBlocks, ...params, limit) as Candidate[];
+}
+
+/** How many launches can already answer a window of this many blocks. */
+function coveredCount(windowBlocks: number): number {
+  return (
+    db
+      .prepare(
+        `SELECT COUNT(*) AS n FROM launches
+          WHERE trades_indexed_to IS NOT NULL AND trades_indexed_to - block_number >= ?`,
+      )
+      .get(windowBlocks) as { n: number }
+  ).n;
+}
+
+/**
+ * What to read next.
+ *
+ * Exempted-wallet launches first and without limit: that population is the
+ * whole basis of a published median, so it is filled until it is complete. The
+ * recent sample only tops up buckets that are short, and stops -- there is no
+ * value in reading the eighteen-thousandth launch to compute a median of forty.
+ */
+export function selectTargets(limit = BATCH): Candidate[] {
+  const out: Candidate[] = [];
+
+  const exempt = uncovered(
+    WINDOW_30_MIN_BLOCKS,
+    'snipe_exemption_count > 0',
+    [],
+    limit,
+  ).map((c) => ({ ...c, reason: 'exempt' as const }));
+  out.push(...exempt);
+  if (out.length >= limit) return out.slice(0, limit);
+
+  // Buckets below the thirty-minute cap need only their own span read; the ones
+  // above it need the full window, because that is all the buyer count uses.
+  const shortfall = AGE_BUCKETS.map((b) => {
+    const windowMinutes = Math.min(
+      WINDOW_30_MIN_BLOCKS / BLOCKS_PER_MINUTE,
+      Number.isFinite(b.toSeconds) ? b.toSeconds / 60 : WINDOW_30_MIN_BLOCKS / BLOCKS_PER_MINUTE,
+    );
+    const windowBlocks = Math.round(windowMinutes * BLOCKS_PER_MINUTE);
+    return { windowBlocks, missing: TARGET_PER_BUCKET - coveredCount(windowBlocks) };
+  }).filter((s) => s.missing > 0);
+
+  const seen = new Set(out.map((c) => c.token));
+
+  // Check 09 can only be read for launches whose trades are indexed, because
+  // that is what says a launch might have six holders at all. So when its
+  // threshold is short AND there is nothing left to read for it, the thing that
+  // is actually starved is the trade sample -- stopping it at the benchmark's
+  // target left check 09 stranded twelve observations short with eighteen
+  // thousand launches untouched. Trades are cheap; the holder read is not.
+  const concentrationStarved =
+    concentrationCoverage() < concentrationTarget() && unreadHolderCandidates() === 0;
+
+  if (shortfall.length || concentrationStarved) {
+    // The widest window that is short covers every narrower one too, so reading
+    // for it fills them all at once rather than picking a different launch per
+    // bucket.
+    const widest = shortfall.length
+      ? shortfall.reduce((a, b) => (b.windowBlocks > a.windowBlocks ? b : a))
+      : { windowBlocks: WINDOW_30_MIN_BLOCKS };
+    for (const c of uncovered(widest.windowBlocks, '1 = 1', [], limit + seen.size)) {
+      if (seen.has(c.token)) continue;
+      seen.add(c.token);
+      out.push({ ...c, reason: 'sample' });
+      if (out.length >= limit) return out;
+    }
+  }
+
+  // Check 09's threshold has its own population and its own floor, and it is
+  // NOT filled by any of the above: concentration comes from the token's
+  // Transfer log, not from its trades. Attaching it to trade coverage alone
+  // meant the loop went quiet with two observations recorded and thirty needed,
+  // and the check would have stayed undetermined forever.
+  if (concentrationCoverage() < concentrationTarget()) {
+    // Only launches that plausibly HAVE six holders. Read blind, the yield was
+    // 6%: thirty-two Transfer logs pulled for two usable observations, because
+    // most launches on this chain never reach six holders and the top-five
+    // share there is forced by arithmetic and records nothing. The trades this
+    // loop already indexed say which launches are worth the read -- distinct
+    // buy recipients bounds the pool: a launch nobody bought cannot have six
+    // holders. It is only a bound, not a prediction -- measured against known
+    // holder counts it runs in both directions, 87 buyers on a token with 190
+    // holders and 48 on one with 9, because holders also arrive by transfer and
+    // most buyers here sell out. So the busiest launches are read first, since
+    // those are the ones most likely to still have six holders, rather than the
+    // newest. Measured end to end the yield is about one observation in nine
+    // reads either way -- the ordering is a preference, not a fix, and the real
+    // saving is the pool, which drops 138 of 257 launches outright.
+    const rows = db
+      .prepare(
+        `SELECT l.token, l.curve, l.block_number, l.launched_at, l.trades_indexed_to, l.holders_read_at
+           FROM launches l
+          WHERE l.holders_read_at IS NULL
+            AND l.trades_indexed_to IS NOT NULL
+            AND (SELECT COUNT(DISTINCT t.recipient) FROM trades t
+                  WHERE t.token = l.token AND t.side = 'buy') >= ?
+          ORDER BY (SELECT COUNT(DISTINCT t.recipient) FROM trades t
+                     WHERE t.token = l.token AND t.side = 'buy') DESC,
+                   l.launched_at DESC
+          LIMIT ?`,
+      )
+      .all(MIN_HOLDERS_FOR_SHARE, limit + seen.size) as Candidate[];
+    for (const c of rows) {
+      if (seen.has(c.token)) continue;
+      seen.add(c.token);
+      out.push({ ...c, reason: 'holders' });
+      if (out.length >= limit) break;
+    }
+  }
+  return out;
+}
+
+/** Launches whose trades are indexed, that look big enough to hold six wallets, and are unread. */
+function unreadHolderCandidates(): number {
+  return (
+    db
+      .prepare(
+        `SELECT COUNT(*) AS n FROM launches l
+          WHERE l.holders_read_at IS NULL
+            AND l.trades_indexed_to IS NOT NULL
+            AND (SELECT COUNT(DISTINCT t.recipient) FROM trades t
+                  WHERE t.token = l.token AND t.side = 'buy') >= ?`,
+      )
+      .get(MIN_HOLDERS_FOR_SHARE) as { n: number }
+  ).n;
+}
+
+/** Observations aimed for, above check 09's floor for the same reason as above. */
+function concentrationTarget(): number {
+  return Math.max(MIN_CONCENTRATION_SAMPLES, Number(process.env.WINDOW_INDEX_TARGET || 40) || 40);
+}
+
+export interface WindowPass {
+  attempted: number;
+  indexed: number;
+  trades: number;
+  failed: number;
+  exempt: number;
+  sample: number;
+  /** Holder-distribution observations recorded, for check 09's threshold. */
+  concentration: number;
+}
+
+/** Read one batch of opening windows. */
+export async function indexWindows(limit = BATCH): Promise<WindowPass> {
+  const targets = selectTargets(limit);
+  const pass: WindowPass = {
+    attempted: targets.length, indexed: 0, trades: 0, failed: 0, exempt: 0, sample: 0, concentration: 0,
+  };
+  if (!targets.length) return pass;
+
+  const head = Number(await bulk(() => client.getBlockNumber()));
+
+  for (const t of targets) {
+    // A launch younger than the window has not finished happening yet. Reading
+    // it now would record a partial window as though it were the whole one, so
+    // it is left for a later pass.
+    const windowEnd = t.block_number + WINDOW_30_MIN_BLOCKS;
+    if (windowEnd > head) continue;
+    try {
+      const needsTrades = (t.trades_indexed_to ?? -1) - t.block_number < WINDOW_30_MIN_BLOCKS;
+      if (needsTrades) {
+        const n = await bulk(() => indexOneCurve(t.curve, t.token, BigInt(t.block_number), BigInt(windowEnd)));
+        markWindowIndexed(t.token, t.block_number, windowEnd);
+        pass.indexed++;
+        pass.trades += n;
+        if (t.reason === 'exempt') pass.exempt++;
+        else pass.sample++;
+      }
+
+      // Check 09's threshold is a percentile of recorded holder distributions,
+      // and those are recorded on scan -- which is the same drought this loop
+      // exists to end, but a different source: concentration comes from the
+      // token's Transfer log, not from trades, so indexing trades alone would
+      // have left that check undetermined forever. Measured over the token's
+      // life to date rather than the opening window, because what the threshold
+      // compares is how supply is distributed now.
+      //
+      // Best-effort: a launch whose Transfer log will not read still counts as a
+      // window read. The trades are the primary purpose here.
+      if (t.holders_read_at === null) {
+        try {
+          const c = await bulk(() => readConcentration(t.token, t.curve, BigInt(t.block_number), BigInt(head)));
+          // Marked as read whatever came back. Most launches on this chain have
+          // fewer than six holders, where the top-five share is forced and
+          // records nothing -- without this the loop would pick the same
+          // launches every pass, forever, and never reach one that counts.
+          db.prepare('UPDATE launches SET holders_read_at = ? WHERE token = ?')
+            .run(Math.floor(Date.now() / 1000), t.token.toLowerCase());
+          if (c) {
+            const before = concentrationCoverage();
+            recordConcentration(t.token, c);
+            if (concentrationCoverage() > before) pass.concentration++;
+          }
+        } catch (err) {
+          console.warn(`[windows] ${t.token} holder read failed:`, String((err as any)?.shortMessage ?? (err as Error)?.message ?? err).slice(0, 100));
+        }
+      }
+    } catch (err) {
+      // One unreadable launch must not stop the pass; the row keeps its
+      // unmarked state and comes back around next time.
+      pass.failed++;
+      console.warn(`[windows] ${t.token} unreadable:`, String((err as any)?.shortMessage ?? (err as Error)?.message ?? err).slice(0, 120));
+    }
+  }
+  return pass;
+}
+
+/** Remaining work, for the log line. */
+export function windowBacklog(): { exempt: number; total: number } {
+  const q = (where: string) =>
+    (db
+      .prepare(
+        `SELECT COUNT(*) AS n FROM launches
+          WHERE (trades_indexed_to IS NULL OR trades_indexed_to - block_number < ?) AND ${where}`,
+      )
+      .get(WINDOW_30_MIN_BLOCKS) as { n: number }).n;
+  return { exempt: q('snipe_exemption_count > 0'), total: q('1 = 1') };
+}
+
+/**
+ * Long-running drip, paced like the decode loop.
+ *
+ * Every pass is bounded and every request inside it is bulk, so the loop is
+ * invisible to anyone using the bot: a scan issued mid-pass is served first.
+ */
+export function startWindowLoop(intervalMs = 15_000, batch = BATCH): NodeJS.Timeout {
+  let running = false;
+  const tick = async () => {
+    if (running) return;
+    running = true;
+    try {
+      const pass = await indexWindows(batch);
+      if (pass.indexed || pass.failed) {
+        const left = windowBacklog();
+        const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+        console.log(
+          `[windows] ${plural(pass.indexed, 'window')} read (${pass.exempt} exempt, ${pass.sample} sample), ` +
+            `${pass.trades.toLocaleString()} trades, ${plural(pass.concentration, 'holder reading')}` +
+            `${pass.failed ? `, ${pass.failed} unreadable` : ''} — ` +
+            // "remaining" only means the exempt population, which is read to
+            // completion. The rest is a target, not a queue: the sample stops
+            // when the buckets and check 09 are satisfied, so the unindexed
+            // count is context, not a backlog anyone is working through.
+            `${plural(left.exempt, 'exempt launch', 'exempt launches')} left, ` +
+            `${left.total.toLocaleString()} unindexed`,
+        );
+      }
+    } catch (err) {
+      console.error('[windows] loop error:', err);
+    } finally {
+      running = false;
+    }
+  };
+  void tick();
+  const timer = setInterval(tick, intervalMs);
+  timer.unref?.();
+  return timer;
+}

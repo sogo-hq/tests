@@ -93,13 +93,12 @@ export function buyerBenchmark(opts: {
   ageSeconds: number;
   windowMinutes: number;
   excludeToken: string;
+  /** Unused since coverage became a recorded fact; kept so callers need not change. */
   now?: number;
 }): BuyerBenchmark {
   const bucket = bucketFor(opts.ageSeconds);
   const windowMinutes = Math.max(0, opts.windowMinutes);
   const windowBlocks = Math.round(windowMinutes * BLOCKS_PER_MINUTE);
-  const windowSeconds = Math.round(windowMinutes * 60);
-  const now = opts.now ?? Math.floor(Date.now() / 1000);
 
   const measuredAtAge = windowMinutes >= Math.max(0, opts.ageSeconds) / 60 - 0.001
     && windowMinutes < MAX_WINDOW_MINUTES + 0.001
@@ -107,18 +106,17 @@ export function buyerBenchmark(opts: {
 
   if (windowBlocks <= 0) return { bucket, median: null, n: 0, windowMinutes, measuredAtAge };
 
-  // The population is launches somebody has SCANNED, not launches with trades.
-  // indexOneCurve runs on every scan, so a scanned token with no trade rows had
-  // its window looked at and found empty -- a real zero. Selecting on `trades`
-  // instead dropped those launches entirely and biased the median upward, which
-  // on a card that exists to say whether a launch is dead is the wrong
-  // direction to be wrong in.
+  // The population is launches whose opening window has actually been READ.
+  // A launch that was read and had no buys is a real zero and belongs here;
+  // selecting on the trades table instead dropped those and biased the median
+  // upward, which on a card that exists to say whether a launch is dead is the
+  // wrong direction to be wrong in.
   //
-  // A scan only indexes up to min(launch + 30 min, head at that moment), so a
-  // token last scanned at five minutes old has five minutes of history however
-  // old it is now. Counting that as a thirty-minute measurement would publish a
-  // truncated number as a complete one, so eligibility is the indexed extent,
-  // not the launch's age.
+  // Coverage is a recorded fact, not an inference. It used to be derived from
+  // how old a launch was when it was last scanned, which held only while
+  // scanning was the only thing that indexed trades -- the background window
+  // indexer now covers launches nobody has scanned, and every one of them would
+  // have been invisible to this query.
   //
   // LEFT JOIN, not an inner join on buys: a launch with trades but no buy inside
   // the window is also a real zero.
@@ -130,19 +128,13 @@ export function buyerBenchmark(opts: {
                  AND t.block_number <= l.block_number + ?
                 THEN t.recipient END) AS buyers
          FROM launches l
-         JOIN (SELECT token, MAX(scanned_at) AS last_scan FROM scans GROUP BY token) sc
-           ON sc.token = l.token
          LEFT JOIN trades t ON t.token = l.token
         WHERE l.token <> ?
-          AND MIN(?, MAX(0, sc.last_scan - l.launched_at)) >= ?
+          AND l.trades_indexed_to IS NOT NULL
+          AND l.trades_indexed_to - l.block_number >= ?
         GROUP BY l.token`,
     )
-    .all(
-      windowBlocks,
-      opts.excludeToken.toLowerCase(),
-      Math.round(MAX_WINDOW_MINUTES * 60),
-      windowSeconds,
-    ) as CountRow[];
+    .all(windowBlocks, opts.excludeToken.toLowerCase(), windowBlocks) as CountRow[];
 
   const counts = rows.map((r) => r.buyers).sort((a, b) => a - b);
   if (counts.length < MIN_BENCHMARK_SAMPLES) {
@@ -151,4 +143,47 @@ export function buyerBenchmark(opts: {
   const mid = counts.length >> 1;
   const median = counts.length % 2 ? counts[mid]! : Math.round((counts[mid - 1]! + counts[mid]!) / 2);
   return { bucket, median, n: counts.length, windowMinutes, measuredAtAge };
+}
+
+
+export interface BucketCoverage {
+  bucket: AgeBucket;
+  /** Launches whose opening window has been read far enough to answer this bucket. */
+  n: number;
+  /** The window a launch must cover to count, in minutes. */
+  windowMinutes: number;
+}
+
+/**
+ * How many launches each bucket can currently answer from.
+ *
+ * A bucket's window is the longest measurement it has to serve: the whole
+ * bucket for the two below the thirty-minute cap, and thirty minutes for the
+ * three above it, since the buyer count never looks further than that. So one
+ * fully indexed launch answers every bucket, and a partially indexed one
+ * answers only the short ones -- which is the distinction this reports.
+ */
+export function benchmarkCoverage(): BucketCoverage[] {
+  const stmt = db.prepare(
+    `SELECT COUNT(*) AS n FROM launches
+      WHERE trades_indexed_to IS NOT NULL
+        AND trades_indexed_to - block_number >= ?`,
+  );
+  return AGE_BUCKETS.map((bucket) => {
+    const windowMinutes = Math.min(
+      MAX_WINDOW_MINUTES,
+      Number.isFinite(bucket.toSeconds) ? bucket.toSeconds / 60 : MAX_WINDOW_MINUTES,
+    );
+    const n = (stmt.get(Math.round(windowMinutes * BLOCKS_PER_MINUTE)) as { n: number }).n;
+    return { bucket, n, windowMinutes };
+  });
+}
+
+/** The /stats line: live once every bucket clears the floor, and honest before that. */
+export function benchmarkCoverageLine(coverage = benchmarkCoverage()): string {
+  const lowest = coverage.reduce((min, c) => Math.min(min, c.n), Infinity);
+  const n = Number.isFinite(lowest) ? lowest : 0;
+  return n >= MIN_BENCHMARK_SAMPLES
+    ? `buyer benchmark: live (n=${n.toLocaleString()} per bucket)`
+    : `buyer benchmark: not enough data yet (n=${n.toLocaleString()})`;
 }

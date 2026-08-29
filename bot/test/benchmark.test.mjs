@@ -37,11 +37,14 @@ function inTempDb(body, env = {}) {
               graduation_threshold, block_number, tx_hash, launched_at)
             VALUES (?,?,?,?,0,'0',1000,?,?)\`
         ).run(token, A(99), A(98), A(0), '0xtx' + token, NOW - ageSeconds);
-        // a scan cannot reach further into a launch's life than the launch has lived\n        const reach = Math.min(indexedMinutes * 60, ageSeconds);\n        const scannedAt = NOW - ageSeconds + Math.round(reach);
-        db.prepare(
-          \`INSERT INTO scans (token, curve, deployer, scanned_at, scanned_block)
-            VALUES (?,?,?,?,1)\`
-        ).run(token, A(99), A(98), scannedAt);
+        // Coverage is a recorded fact now, not an inference from when the token
+        // was last scanned: the background window indexer reads launches nobody
+        // has scanned, and every one of them would be invisible to an inference
+        // built on the scans table. A launch cannot be covered further into its
+        // life than it has lived.
+        const reach = Math.min(indexedMinutes * 60, ageSeconds);
+        db.prepare('UPDATE launches SET trades_indexed_to = ? WHERE token = ?')
+          .run(1000 + Math.round((reach / 60) * 600), token);
       };
       /** A buy by \`wallet\` \`minutes\` after that token's launch block. */
       /** A buy where the sender and the wallet that ends up holding differ. */

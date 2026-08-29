@@ -114,6 +114,24 @@ export async function indexTrades(
 }
 
 /** Index one token's curve -- the /scan hot path. */
+/**
+ * Record how far a launch's own trade history has been read.
+ *
+ * Only ever advances, and only from the launch block: a recheck indexes a much
+ * later range and establishes nothing about the opening window, so it must not
+ * touch this. What the benchmark asks of a launch is whether its FIRST N
+ * minutes were read, which is a different question from whether anything about
+ * it was read at all.
+ */
+export function markWindowIndexed(token: string, launchBlock: number, indexedTo: number): void {
+  if (indexedTo < launchBlock) return;
+  db.prepare(
+    `UPDATE launches
+        SET trades_indexed_to = MAX(COALESCE(trades_indexed_to, 0), ?)
+      WHERE token = ?`,
+  ).run(indexedTo, token.toLowerCase());
+}
+
 export async function indexOneCurve(
   curve: string,
   token: string,
