@@ -55,6 +55,17 @@ interface Candidate {
   holders_read_at: number | null;
 }
 
+/**
+ * Seconds a launch must have lived before its opening window can be read.
+ *
+ * A launch younger than the window has not finished happening yet, and reading
+ * it would record a partial window as a whole one. Excluded in SQL rather than
+ * skipped in the loop: selection orders newest-first, so on a live chain the
+ * youngest launches are exactly the ones it picks, and skipping them later
+ * meant every pass chose the same unreadable batch and indexed nothing at all.
+ */
+const MIN_AGE_SECONDS = (WINDOW_30_MIN_BLOCKS / BLOCKS_PER_MINUTE) * 60;
+
 /** Launches whose opening window is not yet read to `windowBlocks`. */
 function uncovered(windowBlocks: number, where: string, params: unknown[], limit: number): Candidate[] {
   return db
@@ -62,11 +73,12 @@ function uncovered(windowBlocks: number, where: string, params: unknown[], limit
       `SELECT token, curve, block_number, launched_at, trades_indexed_to, holders_read_at
          FROM launches
         WHERE (trades_indexed_to IS NULL OR trades_indexed_to - block_number < ?)
+          AND launched_at <= ?
           AND ${where}
         ORDER BY launched_at DESC
         LIMIT ?`,
     )
-    .all(windowBlocks, ...params, limit) as Candidate[];
+    .all(windowBlocks, Math.floor(Date.now() / 1000) - MIN_AGE_SECONDS, ...params, limit) as Candidate[];
 }
 
 /** How many launches can already answer a window of this many blocks. */

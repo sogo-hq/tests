@@ -279,3 +279,28 @@ test('a starved check 09 keeps the trade sample running', () => {
   assert.deepEqual(r.beforeReasons, ['sample']);
   assert.equal(r.after, 0, 'and it must stop the moment nothing is short');
 });
+
+test('a launch too young to have a full window is never picked', () => {
+  // Selection is newest-first, so on a live chain the youngest launches are
+  // exactly the ones it reaches for -- and a launch minutes old has no
+  // thirty-minute window to read. Skipping them inside the pass instead of
+  // excluding them here meant every pass chose the same unreadable batch and
+  // indexed nothing, forever.
+  const out = inTempDb(`
+    const REAL_NOW = Math.floor(Date.now() / 1000);
+    // twenty launches five minutes old, and five that are a day old
+    for (let i = 1; i <= 20; i++)
+      db.prepare(\`INSERT INTO launches (token, curve, deployer, pair_token, launch_config_id,
+          graduation_threshold, block_number, tx_hash, launched_at, snipe_exemption_count)
+        VALUES (?,?,?,?,0,'0',?,?,?,0)\`).run(A(i), A(900000 + i), A(98), A(0), 1000 + i * 100, '0xy' + i, REAL_NOW - 300);
+    for (let i = 50; i < 55; i++)
+      db.prepare(\`INSERT INTO launches (token, curve, deployer, pair_token, launch_config_id,
+          graduation_threshold, block_number, tx_hash, launched_at, snipe_exemption_count)
+        VALUES (?,?,?,?,0,'0',?,?,?,0)\`).run(A(i), A(900000 + i), A(98), A(0), 1000 + i * 100, '0xy' + i, REAL_NOW - 86400);
+    const picked = W.selectTargets(25);
+    console.log(JSON.stringify({ n: picked.length, ids: picked.map((p) => parseInt(p.token.slice(2), 10)) }));
+  `);
+  const r = JSON.parse(out);
+  assert.equal(r.n, 5, `only the launches old enough to have a full window: got ${JSON.stringify(r.ids)}`);
+  assert.ok(r.ids.every((i) => i >= 50), 'the five-minute-old ones must not be picked');
+});

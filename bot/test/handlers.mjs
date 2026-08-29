@@ -267,9 +267,17 @@ assert.match(stats, /^launches indexed [\d,]+$/m);
 assert.match(stats, /^launches with pre-exempted wallets [\d,]+ \(/m);
 assert.match(stats, /^median hold time of exempted wallets /m);
 assert.match(stats, /^scans served [\d,]+$/m);
-assert.equal(stats.split('\n').length, 4, '/stats is four counter lines and nothing else');
+// Whether each derived figure is running yet, and on how much. A feature that
+// is silent for want of data should say so where the numbers live rather than
+// simply not appear -- and it must never claim to be live below its floor.
+assert.match(stats, /^buyer benchmark: (live \(n=[\d,]+ per bucket\)|not enough data yet \(n=[\d,]+\))$/m);
+assert.match(stats, /^holder concentration: (live \(n=[\d,]+\)|not enough data yet \(n=[\d,]+\))$/m);
+assert.equal(stats.split('\n').length, 6, '/stats is six counter lines and nothing else');
 assert.ok(!/<[a-z/]/i.test(stats), '/stats is plain text');
-ok('/stats renders four public counters, numbers only');
+// The whole point of this file is that it never reads as a pitch.
+assert.ok(!/\b(strong|healthy|good|great|best|safe|clean|opportunity)\b/i.test(stats),
+  `/stats must stay counters: ${stats}`);
+ok('/stats renders six public counters, numbers only');
 
 // --- /help renders ----------------------------------------------------------
 await bot.handleUpdate(msg('private', '/help', -401));
