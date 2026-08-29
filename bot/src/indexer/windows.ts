@@ -94,11 +94,34 @@ function coveredCount(windowBlocks: number): number {
 }
 
 /**
+ * The most launches the sample will ever read.
+ *
+ * The sample is target-driven, but one of those targets is check 09, whose
+ * yield is roughly one usable observation per nine reads -- so a chain where
+ * launches rarely reach six holders could pull the sample through every launch
+ * in the index chasing a threshold it will never fill. Measured need is around
+ * eight hundred launches for forty observations; this is generous against that
+ * and, more importantly, finite. Reaching it is reported rather than passed
+ * over in silence.
+ */
+const SAMPLE_CEILING = Math.max(
+  TARGET_PER_BUCKET,
+  Number(process.env.WINDOW_SAMPLE_CEILING || 2_000) || 2_000,
+);
+
+/** Launches whose opening window has been read, at any depth. */
+function sampledSoFar(): number {
+  return (
+    db.prepare('SELECT COUNT(*) AS n FROM launches WHERE trades_indexed_to IS NOT NULL').get() as { n: number }
+  ).n;
+}
+
+/**
  * What to read next.
  *
- * Exempted-wallet launches first and without limit: that population is the
- * whole basis of a published median, so it is filled until it is complete. The
- * recent sample only tops up buckets that are short, and stops -- there is no
+ * Exempted-wallet launches first, and that population is read to completion
+ * across passes rather than sampled -- it is the whole basis of a published
+ * median. The recent sample only tops up what is short, and stops: there is no
  * value in reading the eighteen-thousandth launch to compute a median of forty.
  */
 export function selectTargets(limit = BATCH): Candidate[] {
@@ -132,8 +155,11 @@ export function selectTargets(limit = BATCH): Candidate[] {
   // is actually starved is the trade sample -- stopping it at the benchmark's
   // target left check 09 stranded twelve observations short with eighteen
   // thousand launches untouched. Trades are cheap; the holder read is not.
+  const sampled = sampledSoFar();
   const concentrationStarved =
-    concentrationCoverage() < concentrationTarget() && unreadHolderCandidates() === 0;
+    concentrationCoverage() < concentrationTarget() &&
+    unreadHolderCandidates() === 0 &&
+    sampled < SAMPLE_CEILING;
 
   if (shortfall.length || concentrationStarved) {
     // The widest window that is short covers every narrower one too, so reading
@@ -308,6 +334,19 @@ export async function indexWindows(limit = BATCH): Promise<WindowPass> {
 }
 
 /** Remaining work, for the log line. */
+/**
+ * Whether the sample has stopped because it ran out of room rather than because
+ * it was satisfied. Worth saying out loud: check 09 stays undetermined and the
+ * reason is not obvious from any other number.
+ */
+export function sampleCeilingReached(): boolean {
+  return (
+    concentrationCoverage() < concentrationTarget() &&
+    unreadHolderCandidates() === 0 &&
+    sampledSoFar() >= SAMPLE_CEILING
+  );
+}
+
 export function windowBacklog(): { exempt: number; total: number } {
   const q = (where: string) =>
     (db
@@ -327,11 +366,20 @@ export function windowBacklog(): { exempt: number; total: number } {
  */
 export function startWindowLoop(intervalMs = 15_000, batch = BATCH): NodeJS.Timeout {
   let running = false;
+  let ceilingReported = false;
   const tick = async () => {
     if (running) return;
     running = true;
     try {
       const pass = await indexWindows(batch);
+      if (!pass.attempted && sampleCeilingReached() && !ceilingReported) {
+        ceilingReported = true;
+        console.log(
+          `[windows] sample ceiling of ${SAMPLE_CEILING.toLocaleString()} launches reached with ` +
+            `${concentrationCoverage()} of ${concentrationTarget()} holder observations; ` +
+            `holder concentration stays undetermined until more launches reach six holders.`,
+        );
+      }
       if (pass.indexed || pass.failed) {
         const left = windowBacklog();
         const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;

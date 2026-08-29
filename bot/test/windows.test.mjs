@@ -304,3 +304,35 @@ test('a launch too young to have a full window is never picked', () => {
   assert.equal(r.n, 5, `only the launches old enough to have a full window: got ${JSON.stringify(r.ids)}`);
   assert.ok(r.ids.every((i) => i >= 50), 'the five-minute-old ones must not be picked');
 });
+
+test('the sample has a ceiling, so a threshold it cannot fill does not run away', () => {
+  // The sample is target-driven, and one of its targets is check 09, whose
+  // yield is about one usable observation per nine reads. On a chain where
+  // launches rarely reach six holders that target is never met, and without a
+  // ceiling the sample would chase it through every launch in the index --
+  // exactly the "index everything" this loop exists not to do.
+  const out = inTempDb(`
+    // every bucket satisfied (45 > the target of 40), every one of those
+    // launches too small to contribute a holder observation, and a hundred more
+    // waiting. Only check 09 is short, and it is the ceiling that stops it.
+    for (let i = 1; i <= 45; i++) { launch(i, { coveredMinutes: 30 }); buys(A(i), 2); }
+    for (let i = 500; i < 600; i++) launch(i);
+    const belowCeiling = W.selectTargets(25).length;
+    const ceilingHit = W.sampleCeilingReached();
+    console.log(JSON.stringify({ belowCeiling, ceilingHit }));
+  `, { WINDOW_SAMPLE_CEILING: '45' });
+  const r = JSON.parse(out);
+  assert.equal(r.belowCeiling, 0, 'at the ceiling the sample stops even though check 09 is short');
+  assert.equal(r.ceilingHit, true, 'and it says so, because the reason is not visible anywhere else');
+});
+
+test('below the ceiling a starved check 09 still pulls the sample along', () => {
+  const out = inTempDb(`
+    for (let i = 1; i <= 45; i++) { launch(i, { coveredMinutes: 30 }); buys(A(i), 2); }
+    for (let i = 500; i < 600; i++) launch(i);
+    console.log(JSON.stringify({ picked: W.selectTargets(25).length, ceiling: W.sampleCeilingReached() }));
+  `, { WINDOW_SAMPLE_CEILING: '2000' });
+  const r = JSON.parse(out);
+  assert.equal(r.picked, 25, 'there is still room, so it keeps looking for candidates');
+  assert.equal(r.ceiling, false);
+});
