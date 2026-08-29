@@ -153,10 +153,12 @@ CREATE TABLE IF NOT EXISTS holder_snapshots (
   token       TEXT PRIMARY KEY,
   top5_share  REAL NOT NULL,
   holders     INTEGER NOT NULL,
-  band        TEXT NOT NULL,
+  -- How far past the most even distribution this holder count allows, 0-1.
+  -- Scale-free, so one distribution serves every holder count; the raw share is
+  -- not comparable between a six-holder token and a two-hundred-holder one.
+  excess      REAL NOT NULL,
   measured_at INTEGER NOT NULL
 );
-CREATE INDEX IF NOT EXISTS idx_holder_snapshots_band ON holder_snapshots(band, top5_share);
 
 -- Running peak market cap per token, updated by every recheck.
 CREATE TABLE IF NOT EXISTS token_peaks (
@@ -245,12 +247,39 @@ const CONFUSABLES: Record<string, string> = {
  * a deploy. Adding a column that already exists is an error, not a no-op, so it
  * is checked first.
  */
-for (const [table, column, decl] of [['rechecks', 'attempts', 'INTEGER NOT NULL DEFAULT 0']] as const) {
-  const cols = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
-  if (!cols.some((c) => c.name === column)) {
+const columnsOf = (table: string) =>
+  (db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).map((c) => c.name);
+
+for (const [table, column, decl] of [
+  ['rechecks', 'attempts', 'INTEGER NOT NULL DEFAULT 0'],
+  ['holder_snapshots', 'excess', 'REAL NOT NULL DEFAULT 0'],
+] as const) {
+  if (!columnsOf(table).includes(column)) {
     db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${decl}`);
   }
 }
+
+/**
+ * Columns removed after the first release.
+ *
+ * `holder_snapshots.band` held the holder band a token was judged in, back when
+ * the concentration threshold was a percentile of raw top-5 shares taken within
+ * a band. That measure was wrong in both directions and was replaced by
+ * `excess`; the column is NOT NULL with no default, so leaving it in place makes
+ * every insert fail on a database that predates the change.
+ */
+for (const stale of ['idx_holder_snapshots_band']) {
+  // An index over the column has to go first: SQLite refuses the drop while
+  // anything still references it.
+  db.exec(`DROP INDEX IF EXISTS ${stale}`);
+}
+for (const [table, column] of [['holder_snapshots', 'band']] as const) {
+  if (columnsOf(table).includes(column)) db.exec(`ALTER TABLE ${table} DROP COLUMN ${column}`);
+}
+
+// Indexes last: these name columns the migrations above may have just added, and
+// CREATE INDEX on a column that does not exist yet throws at module load.
+db.exec('CREATE INDEX IF NOT EXISTS idx_holder_snapshots_excess ON holder_snapshots(excess)');
 
 export function normaliseKey(input: string | null | undefined): string {
   if (!input) return '';

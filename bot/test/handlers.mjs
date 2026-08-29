@@ -593,8 +593,9 @@ await bot.handleUpdate(inline(SOL, 9500));
 
   // /full carries the reference point and the audit trail
   const full = renderCard(withBoth);
-  assert.match(full, /median for 5-30m launches over the same 20 min: 12 \(n=412\)/,
-    'the reference point must be auditable in /full');
+  assert.match(full, /buyer benchmark: 12 — median over the same first 20 min, across 412 indexed launches that reached it/,
+    'the reference point must say what it measured and over which set');
+  assert.match(full, /age band: 5-30m/, 'the age band describes this token, separately from the population');
   ok('the benchmark reaches DM, group and /full');
 
   // --- concentration is auditable and never a confident low number ----------

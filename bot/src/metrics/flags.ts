@@ -4,7 +4,10 @@ import { clamp, MAX_TICKER, MAX_SAMPLE } from '../text.js';
 import { indexCoverage, coverageReason } from '../coverage.js';
 import {
   concentrationThreshold,
+  excessConcentration,
+  arithmeticFloor,
   MIN_HOLDERS_FOR_SHARE,
+  MIN_CONCENTRATION_SAMPLES,
   type Concentration,
 } from './concentration.js';
 
@@ -453,7 +456,7 @@ export function computeFlags(opts: {
       plain: `only ${conc.holders} holder${conc.holders === 1 ? '' : 's'} so far`,
       severity: 2,
     });
-  } else if (!thr || thr.threshold === null) {
+  } else if (!thr || thr.threshold === null || thr.thresholdShare === null) {
     // The share is a real measurement, but there is no distribution to judge it
     // against yet. Reported as a number, never as an all-clear.
     const n = thr?.n ?? 0;
@@ -461,21 +464,28 @@ export function computeFlags(opts: {
       key: 'holder_concentration',
       label: 'Holder concentration',
       state: 'unknown',
-      detail: `top 5 wallets hold ${shareStr} of circulating (${conc.holders} holders) — no threshold yet for ${thr?.band.label ?? 'this holder count'} (n=${n})`,
+      detail: `top 5 wallets hold ${shareStr} of circulating (${conc.holders} holders, ${arithmeticFloor(conc.holders).toFixed(1)}% is the least ${conc.holders} wallets can hold) — no threshold yet (n=${n}, need ${MIN_CONCENTRATION_SAMPLES})`,
       compactDetail: `top 5 hold ${shareStr}, no threshold yet (n=${n})`,
       plain: `top 5 wallets hold ${shareStr} (no reference yet)`,
       severity: 3,
     });
   } else {
-    const over = conc.top5Share >= thr.threshold;
-    const audit = `threshold ${thr.threshold.toFixed(1)}% — ${thr.percentile}th percentile of ${thr.n.toLocaleString()} launches with ${thr.band.label}`;
+    // Judged on the excess, not the raw share. Reported as a share, because
+    // that is the number on the card and the one a reader can check.
+    const excess = excessConcentration(conc) ?? 0;
+    const over = excess >= thr.threshold;
+    const floor = arithmeticFloor(conc.holders);
+    const audit =
+      `flagged at ${thr.thresholdShare.toFixed(1)}% for ${conc.holders} holders ` +
+      `(${floor.toFixed(1)}% is the least ${conc.holders} wallets can hold; ` +
+      `${thr.percentile}th percentile of ${thr.n.toLocaleString()} launches)`;
     flags.push({
       key: 'holder_concentration',
       label: 'Holder concentration',
       state: over ? 'raised' : 'clean',
       detail: `top 5 wallets hold ${shareStr} of circulating (${conc.holders} holders) — ${audit}`,
       compactDetail: over
-        ? `top 5 wallets hold ${shareStr} (over ${thr.threshold.toFixed(1)}%)`
+        ? `top 5 wallets hold ${shareStr} (over ${thr.thresholdShare.toFixed(1)}%)`
         : `top 5 wallets hold ${shareStr}`,
       plain: over
         ? `top 5 wallets hold ${shareStr} of supply`

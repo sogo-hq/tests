@@ -29,6 +29,10 @@ function inTempDb(body, env = {}) {
       /** Record an observation the way a scan would. */
       const obs = (token, share, holders) =>
         C.recordConcentration(token, { top5Share: share, holders, circulating: 100n }, 1);
+      /** The most even share this many wallets can produce. */
+      const floorOf = (h) => C.arithmeticFloor(h);
+      /** A share that sits a given fraction of the way from that floor to 100%. */
+      const atExcess = (h, e) => floorOf(h) + e * (100 - floorOf(h));
       const flagFor = (concentration) => computeFlags({
         token: A(1), deployer: A(2), name: 'T', symbol: 'T', creatorTaxBps: 0,
         buybackEnabled: false, pairToken: '0x0000000000000000000000000000000000000000',
@@ -82,50 +86,80 @@ test('a measurable share with no distribution behind it is undetermined, not cle
 
 test('at the floor the threshold comes from the distribution and is auditable', () => {
   const out = inTempDb(`
-    // 40 observations, shares 1..40 in the 21-100 band. 90th percentile by
-    // nearest rank is the 36th smallest, which is 36.
-    for (let i = 1; i <= 40; i++) obs(A(100 + i), i, 30);
-    const t = C.concentrationThreshold(30);
-    const under = flagFor({ top5Share: 35, holders: 30, circulating: 100n });
-    const over = flagFor({ top5Share: 36, holders: 30, circulating: 100n });
+    // 40 observations spread evenly across the excess range. The 90th
+    // percentile by nearest rank is the 36th smallest.
+    for (let i = 1; i <= 40; i++) obs(A(100 + i), atExcess(20, i / 40), 20);
+    const t = C.concentrationThreshold(20);
+    const under = flagFor({ top5Share: atExcess(20, 35 / 40) - 0.5, holders: 20, circulating: 100n });
+    const over = flagFor({ top5Share: atExcess(20, 36 / 40) + 0.5, holders: 20, circulating: 100n });
     console.log(JSON.stringify({
-      threshold: t.threshold, n: t.n, pct: t.percentile, band: t.band.key,
-      under: under.state, underDetail: under.detail,
-      over: over.state, overDetail: over.detail, overPlain: over.plain,
+      n: t.n, pct: t.percentile, threshold: t.threshold, thresholdShare: t.thresholdShare,
+      under: under.state, over: over.state, overDetail: over.detail, overPlain: over.plain,
     }));
   `);
   const r = JSON.parse(out);
-  assert.equal(r.threshold, 36, 'nearest-rank 90th percentile of 1..40');
   assert.equal(r.n, 40);
   assert.equal(r.pct, 90);
-  assert.equal(r.band, '21-100');
+  assert.ok(Math.abs(r.threshold - 36 / 40) < 1e-9, `nearest-rank 90th of 40, got ${r.threshold}`);
   assert.equal(r.under, 'clean', 'below the threshold the check ran and found nothing');
   assert.equal(r.over, 'raised');
-  assert.match(r.overDetail, /threshold 36\.0%/, 'the threshold is printed for audit');
-  assert.match(r.overDetail, /90th percentile of 40 launches with 21-100 holders/);
-  assert.match(r.overPlain, /^top 5 wallets hold 36\.0% of supply$/);
+  assert.match(r.overDetail, /flagged at \d+\.\d% for 20 holders/, 'the threshold is printed as a share for audit');
+  assert.match(r.overDetail, /25\.0% is the least 20 wallets can hold/);
+  assert.match(r.overDetail, /90th percentile of 40 launches/);
+  assert.match(r.overPlain, /^top 5 wallets hold \d+\.\d% of supply$/);
 });
 
-test('the threshold is taken within a holder band, not pooled', () => {
+test('a share the holder count forces cannot be flagged, however low the threshold', () => {
+  // The exact case that made the raw-share threshold wrong: 45 ordinary
+  // observations from 12-20 holder tokens put the threshold at 60% of supply,
+  // and a six-holder token distributed as evenly as six wallets physically can
+  // be holds 83.3% -- it was raised on arithmetic.
   const out = inTempDb(`
-    // a small-holder band full of near-100% shares, and a large-holder band of low ones
-    for (let i = 1; i <= 40; i++) obs(A(100 + i), 95 + (i % 5), 10);
-    for (let i = 1; i <= 40; i++) obs(A(200 + i), 20 + (i % 10), 300);
-    const small = C.concentrationThreshold(10);
-    const large = C.concentrationThreshold(300);
-    console.log(JSON.stringify({ small: small.threshold, large: large.threshold, sn: small.n, ln: large.n }));
+    for (let i = 0; i < 45; i++) obs(A(100 + i), [40, 45, 50, 55, 60][i % 5], 12 + (i % 9));
+    const even = flagFor({ top5Share: floorOf(6), holders: 6, circulating: 100n });
+    const allOfIt = flagFor({ top5Share: 100, holders: 6, circulating: 100n });
+    console.log(JSON.stringify({ even: even.state, evenDetail: even.detail, allOfIt: allOfIt.state }));
   `);
   const r = JSON.parse(out);
-  assert.equal(r.sn, 40);
-  assert.equal(r.ln, 40);
-  assert.ok(r.small > 90, `small-holder threshold should sit near 100, got ${r.small}`);
-  assert.ok(r.large < 40, `large-holder threshold should be far lower, got ${r.large}`);
-  assert.ok(r.small > r.large, 'a pooled threshold would flag every small token and no large one');
+  assert.equal(r.even, 'clean', 'the most even distribution six wallets allow is not a concern');
+  assert.match(r.evenDetail, /83\.3% is the least 6 wallets can hold/, 'and it says why');
+  assert.equal(r.allOfIt, 'raised', 'one wallet holding everything still is');
+});
+
+test('forced shares from tiny launches cannot bury real concentration', () => {
+  // The mirror of the case above: 24 observations from 6-8 holder tokens at
+  // their forced 75-100%, and the raw-share threshold went to 99% -- a
+  // twenty-holder token whose top five held 96% came back clean.
+  const out = inTempDb(`
+    for (let i = 0; i < 24; i++) obs(A(200 + i), 75 + (i % 26), 6 + (i % 3));
+    for (let i = 0; i < 6; i++) obs(A(300 + i), 38 + i * 4, 15 + i);
+    const f = flagFor({ top5Share: 96, holders: 20, circulating: 100n });
+    console.log(JSON.stringify({ state: f.state, detail: f.detail }));
+  `);
+  const r = JSON.parse(out);
+  assert.equal(r.state, 'raised', 'five wallets holding 96% of a twenty-holder supply is the finding');
+  assert.match(r.detail, /top 5 wallets hold 96\.0%/);
+});
+
+test('excess is scale-free: the same distribution shape scores the same at any size', () => {
+  const out = inTempDb(`
+    const halfway = [6, 10, 20, 100, 500].map((h) => ({
+      h, e: C.excessConcentration({ top5Share: atExcess(h, 0.5), holders: h, circulating: 1n }),
+    }));
+    const forced = [6, 10, 20, 100].map((h) => ({
+      h, e: C.excessConcentration({ top5Share: floorOf(h), holders: h, circulating: 1n }),
+    }));
+    console.log(JSON.stringify({ halfway, forced, tooFew: C.excessConcentration({ top5Share: 100, holders: 5, circulating: 1n }) }));
+  `);
+  const r = JSON.parse(out);
+  for (const { h, e } of r.halfway) assert.ok(Math.abs(e - 0.5) < 1e-9, `${h} holders scored ${e}, not 0.5`);
+  for (const { h, e } of r.forced) assert.equal(e, 0, `${h} holders at their floor scored ${e}, not 0`);
+  assert.equal(r.tooFew, null, 'five holders have no excess to measure');
 });
 
 test('a token is never part of the distribution it is judged against', () => {
   const out = inTempDb(`
-    for (let i = 1; i <= 40; i++) obs(A(100 + i), i, 30);
+    for (let i = 1; i <= 40; i++) obs(A(100 + i), atExcess(30, i / 40), 30);
     const all = C.concentrationThreshold(30);
     const self = C.concentrationThreshold(30, A(140));
     console.log(JSON.stringify({ all: all.n, self: self.n }));
@@ -144,7 +178,15 @@ test('observations below the holder floor are never recorded', () => {
   `);
   const r = JSON.parse(out);
   assert.equal(r.floor, 6);
-  assert.equal(r.n, 5, 'a forced 100% would drag every band percentile to 100 and flag nothing');
+  assert.equal(r.n, 5, 'three holders have no excess to contribute');
+});
+
+test('a malformed sample floor or percentile falls back rather than switching off', () => {
+  const out = inTempDb(
+    `console.log(JSON.stringify([C.MIN_CONCENTRATION_SAMPLES, C.CONCENTRATION_PERCENTILE]));`,
+    { MIN_CONCENTRATION_SAMPLES: 'thirty', CONCENTRATION_PERCENTILE: '' },
+  );
+  assert.deepEqual(JSON.parse(out), [30, 90], 'NaN comparisons are all false — the floor would vanish');
 });
 
 test('an observation is one row per token, refreshed not appended', () => {
