@@ -13,6 +13,7 @@ import {
   LAUNCH_LOCKER,
   LAUNCH_FORWARDER,
 } from './config.js';
+import { isRateLimit } from './ratelimit.js';
 
 const Transfer = parseAbiItem('event Transfer(address indexed from,address indexed to,uint256 value)');
 const ZERO = '0x0000000000000000000000000000000000000000';
@@ -66,6 +67,8 @@ export interface RecheckRow {
   token: string;
   offset_hours: number;
   due_at: number;
+  /** How many times a transient failure has put this row back in the queue. */
+  attempts?: number;
 }
 
 /** Run one recheck: record whether the early signal turned into anything. */
@@ -127,11 +130,18 @@ export async function runRecheck(row: RecheckRow): Promise<void> {
       row.id,
     );
   } catch (err: any) {
-    db.prepare('UPDATE rechecks SET completed_at = ?, error = ? WHERE id = ?').run(
-      now,
-      String(err?.shortMessage ?? err?.message ?? err).slice(0, 300),
-      row.id,
-    );
+    const msg = String(err?.shortMessage ?? err?.message ?? err).slice(0, 300);
+    // A rate limit measured nothing, so recording it as a completed recheck
+    // permanently destroys that scan's observation -- completed_at is never
+    // cleared anywhere, and nothing re-arms the row. Rechecks run four at a
+    // time against the same node, so a whole batch failing together is the
+    // expected shape of a limit, not an edge case. Put it back in the queue.
+    if ((isRateLimit(err) || err?.name === 'TimeoutError') && (row.attempts ?? 0) < 5) {
+      db.prepare('UPDATE rechecks SET due_at = ?, attempts = attempts + 1, error = ? WHERE id = ?')
+        .run(now + 300, msg, row.id);
+      return;
+    }
+    db.prepare('UPDATE rechecks SET completed_at = ?, error = ? WHERE id = ?').run(now, msg, row.id);
   }
 }
 
@@ -140,7 +150,7 @@ export async function runDueRechecks(limit = 50): Promise<number> {
   const now = Math.floor(Date.now() / 1000);
   const due = db
     .prepare(
-      `SELECT id, scan_id, token, offset_hours, due_at FROM rechecks
+      `SELECT id, scan_id, token, offset_hours, due_at, attempts FROM rechecks
        WHERE completed_at IS NULL AND due_at <= ? ORDER BY due_at ASC LIMIT ?`,
     )
     .all(now, limit) as RecheckRow[];

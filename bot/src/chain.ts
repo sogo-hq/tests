@@ -28,8 +28,11 @@ export const robinhoodChain = defineChain({
  * across a full seven-day backfill. Throughput is recovered with request
  * concurrency instead, which the node handles fine.
  */
+/** Exported so the 429 backoff budget can be asserted to fit inside it. */
+export const TRANSPORT_TIMEOUT_MS = 60_000;
+
 const transport = () =>
-  http(RPC_URL, { batch: false, retryCount: 3, retryDelay: 300, timeout: 60_000 });
+  http(RPC_URL, { batch: false, retryCount: 3, retryDelay: 300, timeout: TRANSPORT_TIMEOUT_MS });
 
 export const client = createPublicClient({ chain: robinhoodChain, transport: transport() });
 

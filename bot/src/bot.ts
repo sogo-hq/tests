@@ -2,7 +2,7 @@ import { Bot, InputFile, type Context } from 'grammy';
 import type { InlineQueryResult } from 'grammy/types';
 import { performScan, scanImage, normaliseToken, looksLikeTxHash, looksLikeSolanaAddress, inlineCacheSeconds, rateLimitFrom, rateLimitedMessage, SCAN_FAILED, type ScanSource, type ScanOutcome } from './service.js';
 import { scanCache, startCacheReporter } from './cache.js';
-import { userQuota, floodQuota, scanSemaphore, startQuotaSweeper, formatRetry } from './quota.js';
+import { userQuota, floodQuota, scanSemaphore, startQuotaSweeper } from './quota.js';
 import { inlineDescription } from './card.js';
 import { db } from './db.js';
 import { indexCoverage } from './coverage.js';
@@ -146,8 +146,11 @@ async function handleScan(ctx: Context, raw: string, full = false): Promise<void
     ? { reply_parameters: { message_id: ctx.msg.message_id, allow_sending_without_reply: true } as const }
     : {};
 
-  // A bare /full falls back to whatever this chat last scanned.
-  const token = normaliseToken(raw) ?? (full ? recallToken(ctx.chat?.id) : null);
+  // A *bare* /full falls back to whatever this chat last scanned. Only bare:
+  // falling back on unparseable input meant "/full <a solana address>" silently
+  // rendered a completely different token, with nothing on the card to say so.
+  const parsed = normaliseToken(raw);
+  const token = parsed ?? (full && !raw.trim() ? recallToken(ctx.chat?.id) : null);
   if (!token) {
     const cmd = full ? 'full' : 'scan';
     // What went wrong, in one sentence. Same wording on every surface.
@@ -173,8 +176,6 @@ async function handleScan(ctx: Context, raw: string, full = false): Promise<void
     }
     return;
   }
-  if (normaliseToken(raw)) rememberToken(ctx.chat?.id, token);
-
   // A cached answer arrives instantly, so the "Scanning..." notice would only
   // flicker. Groups never get the notice at all -- an extra message per scan is
   // exactly the kind of noise that gets a bot removed from a group.
@@ -216,6 +217,13 @@ async function handleScan(ctx: Context, raw: string, full = false): Promise<void
     }
   }
 
+  // Remember it only once a card actually exists for it. Remembering on the way
+  // in meant a scan that was flood-limited -- no scan, no card -- still rewrote
+  // the chat's memory, so a later bare /full detailed a token nobody had seen.
+  if (parsed && (outcome.kind === 'ok' || outcome.kind === 'not_found')) {
+    rememberToken(ctx.chat?.id, token);
+  }
+
   // The image is opt-in and lives behind this button. It is never rendered
   // automatically: it is slower than the text and most people do not want it.
   const withImage =
@@ -240,6 +248,19 @@ async function handleImageButton(ctx: Context): Promise<void> {
     return;
   }
 
+  // Every text path is flood-capped inside performScan, but a cached card short
+  // -circuits before that, so the button was the one way to post unlimited
+  // photos into a group -- the noise problem this whole change set out to fix.
+  // Reported on the callback query so the cap does not itself add a message.
+  const quotaKey = quotaIdentity(ctx);
+  if (quotaKey !== undefined) {
+    const d = floodQuota.consume(quotaKey);
+    if (!d.allowed) {
+      await ctx.answerCallbackQuery({ text: rateLimitedMessage(d.retryAfterSec), show_alert: true });
+      return;
+    }
+  }
+
   await ctx.answerCallbackQuery({ text: 'rendering…' });
   const source = sourceOf(ctx);
   try {
@@ -248,7 +269,7 @@ async function handleImageButton(ctx: Context): Promise<void> {
       source,
       userId: ctx.from?.id,
       chatId: ctx.chat?.id,
-      quotaKey: quotaIdentity(ctx),
+      quotaKey,
       botUsername: usernameOf(ctx),
     });
     if (res.kind !== 'ok') {
@@ -521,7 +542,7 @@ export function createBot(token = TELEGRAM_BOT_TOKEN): Bot {
     if (key !== undefined) {
       const d = floodQuota.consume(key);
       if (!d.allowed) {
-        await ctx.reply(`⏳ rate limited, try again in ${formatRetry(d.retryAfterSec)}`);
+        await ctx.reply(`⏳ ${rateLimitedMessage(d.retryAfterSec)}`);
         return;
       }
     }

@@ -23,7 +23,30 @@ const RATE_PER_SEC = Number(process.env.RPC_RATE_PER_SEC || 10);
 const BURST = Number(process.env.RPC_BURST || 10);
 const MAX_429_RETRIES = 6;
 
+/**
+ * How long the 429 ladder may spend waiting before it gives up.
+ *
+ * This wrapper sleeps *inside* the fetch viem is awaiting, so viem's transport
+ * timeout (60s, chain.ts) covers the whole ladder rather than a single attempt.
+ * The unbounded ladder sums to 1+2+4+8+16+30 = 61s, and a `retry-after: 60` --
+ * exactly what this node sends -- blows the budget on the first wait. In both
+ * cases viem aborted first and the limit reached the user as a TimeoutError,
+ * classified as "scan failed": the false report this class exists to prevent.
+ * Kept comfortably under the transport timeout so the throw below always wins.
+ */
+export const BUDGET_MS = Number(process.env.RPC_429_BUDGET_MS || 45_000);
+
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** Does this error, or anything that caused it, mean the node limited us? */
+export function isRateLimit(err: unknown): boolean {
+  let cur: any = err;
+  for (let depth = 0; cur && depth < 6; depth++) {
+    if (cur instanceof RpcRateLimited) return true;
+    cur = cur.cause;
+  }
+  return false;
+}
 
 /**
  * The node rate-limited us and retrying did not clear it.
@@ -126,6 +149,11 @@ export function installRateLimit(): void {
     const url = typeof input === 'string' ? input : (input?.url ?? String(input));
     if (!url.startsWith(RPC_URL)) return realFetch(input, init);
 
+    // viem hands us its own abort signal; if it fires while we are sleeping off
+    // a 429, the reason we stopped is still the limit, not a slow node.
+    const signal: AbortSignal | undefined = init?.signal ?? (input as any)?.signal;
+    let waited = 0;
+
     for (let attempt = 0; ; attempt++) {
       await bucket.acquire();
       const res = await realFetch(input, init);
@@ -136,11 +164,16 @@ export function installRateLimit(): void {
         ? retryAfter * 1000
         : Math.min(30_000, 1000 * 2 ** attempt);
 
-      if (attempt >= MAX_429_RETRIES) {
+      // Give up while the answer is still ours to give. Waiting past the budget
+      // only lets the transport time out first and relabel a limit as a fault.
+      if (attempt >= MAX_429_RETRIES || waited + waitMs > BUDGET_MS || signal?.aborted) {
         throw new RpcRateLimited(Math.max(1, Math.round(waitMs / 1000)));
       }
       bucket.penalise();
-      await sleep(waitMs + Math.random() * 250);
+      const thisWait = waitMs + Math.random() * 250;
+      waited += thisWait;
+      await sleep(thisWait);
+      if (signal?.aborted) throw new RpcRateLimited(Math.max(1, Math.round(waitMs / 1000)));
     }
   };
 }

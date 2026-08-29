@@ -3,7 +3,7 @@
  * Not part of `npm test` -- it needs network. Run: node test/integration.mjs
  */
 import assert from 'node:assert/strict';
-import { performScan } from '../dist/service.js';
+import { performScan, rateLimitedMessage } from '../dist/service.js';
 import { scanCache } from '../dist/cache.js';
 import { userQuota, scanSemaphore } from '../dist/quota.js';
 import { db } from '../dist/db.js';
@@ -65,7 +65,10 @@ assert.ok(denied, 'quota must eventually deny');
 assert.equal(denied.window, 'minute');
 const rl = await performScan({ token: '0x' + '11'.repeat(20), source: 'inline', userId: USER });
 assert.equal(rl.kind, 'rate_limited', `expected rate_limited, got ${rl.kind}`);
-assert.match(rl.message, /^rate limited, try again in \d+s$/, `message was: ${rl.message}`);
+// Sourced from the module so a wording change cannot leave this asserting the
+// old string: it did exactly that, and the suite aborted here.
+assert.equal(rl.message, rateLimitedMessage(rl.retryAfterSec), `message was: ${rl.message}`);
+assert.ok(!/scan failed/i.test(rl.message), 'a limit must never be worded as a failure');
 ok(`rate limited with an explicit message: "${rl.message}"`);
 
 const rlEvent = db.prepare("SELECT outcome, source FROM scan_events ORDER BY id DESC LIMIT 1").get();

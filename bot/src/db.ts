@@ -139,6 +139,7 @@ CREATE TABLE IF NOT EXISTS rechecks (
   progress_pct   REAL,
   trades_since   INTEGER,
   error          TEXT,
+  attempts       INTEGER NOT NULL DEFAULT 0,
   UNIQUE (scan_id, offset_hours)
 );
 CREATE INDEX IF NOT EXISTS idx_rechecks_due ON rechecks(completed_at, due_at);
@@ -221,6 +222,21 @@ const CONFUSABLES: Record<string, string> = {
   // fullwidth / misc
   '０': '0', '１': '1', 'ǃ': '', '‐': '', '‑': '',
 };
+
+/**
+ * Columns added after the first release.
+ *
+ * The container has no persistent volume so the schema above usually creates
+ * everything, but a database that survives a restart must not be left behind by
+ * a deploy. Adding a column that already exists is an error, not a no-op, so it
+ * is checked first.
+ */
+for (const [table, column, decl] of [['rechecks', 'attempts', 'INTEGER NOT NULL DEFAULT 0']] as const) {
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
+  if (!cols.some((c) => c.name === column)) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${decl}`);
+  }
+}
 
 export function normaliseKey(input: string | null | undefined): string {
   if (!input) return '';

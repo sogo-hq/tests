@@ -30,14 +30,22 @@ export function rateLimitedMessage(retryAfterSec: number): string {
  * for somebody else. A limit is never a failure and must never read as one.
  */
 export function rateLimitFrom(err: unknown): number | null {
-  if (err instanceof RpcRateLimited) return err.retryAfterSec;
   // viem wraps transport errors, so the cause chain has to be walked.
   let cur: any = err;
   for (let depth = 0; cur && depth < 6; depth++) {
     if (cur instanceof RpcRateLimited) return cur.retryAfterSec;
-    const msg = String(cur.shortMessage ?? cur.details ?? cur.message ?? '');
-    if (/rate limit|429|too many requests/i.test(msg)) {
-      const m = msg.match(/retry after (\d+)/i);
+    // A 429 that reached viem without passing through the wrapper -- a raw
+    // response from the node -- arrives as HttpRequestError, whose
+    // shortMessage is only "HTTP request failed."; the status lives on the
+    // error and the code in `details`. Reading shortMessage alone reported it
+    // as "scan failed", which is the same false error by a different route.
+    if (cur.status === 429 || cur.statusCode === 429) return 30;
+    const text = [cur.shortMessage, cur.details, cur.message].filter(Boolean).join(' | ');
+    // Deliberately narrow: a bare "429" anywhere in a message would match a
+    // token symbol or a revert string. These three phrasings are transport
+    // vocabulary, not anything a contract can put in front of us.
+    if (/\brate.?limit(ed)?\b|\btoo many requests\b|\bstatus:?\s*429\b|\bHTTP\s*429\b/i.test(text)) {
+      const m = text.match(/retry after (\d+)/i);
       return m ? Number(m[1]) : 30;
     }
     cur = cur.cause;
@@ -193,20 +201,30 @@ export function normaliseToken(raw: string): string | null {
  *
  * Solana addresses get pasted here constantly, often with the pump.fun or bonk
  * vanity suffix, and falling through to the generic prompt teaches the user
- * nothing. An all-hex string is excluded: 40 hex characters with no zero in
- * them satisfy the base58 alphabet by accident, and that is an EVM address
- * missing its prefix, not a Solana one.
+ * nothing. Naming the chain is only worth doing if the name is right, so the
+ * length is pinned to what a 32-byte key actually encodes to -- 43 or 44
+ * characters. The looser 32-44 band also matched 34-character base58check
+ * addresses, which meant a Tron, Bitcoin, Litecoin or Doge address was told
+ * flatly "that's a solana address": a confident statement about the wrong
+ * chain, which is worse than the generic prompt it replaced.
+ *
+ * An all-hex string is excluded too: 40 hex characters with no zero in them
+ * satisfy the base58 alphabet by accident, and that is an EVM address missing
+ * its prefix, not a Solana one.
  */
-const BASE58_WORD = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
+const BASE58_WORD = /^[1-9A-HJ-NP-Za-km-z]{43,44}$/;
 const ALL_HEX = /^[0-9a-fA-F]+$/;
 
 export function looksLikeSolanaAddress(raw: string): boolean {
-  for (const word of String(raw).split(/[\s,;]+/)) {
-    if (!BASE58_WORD.test(word)) continue;
-    if (word.startsWith('0x') || word.startsWith('0X')) continue;
+  // Scan maximal runs of base58 characters rather than whitespace-separated
+  // words, so an address at the end of a sentence, in brackets, or inside a
+  // solscan URL is still recognised. `0` is not in the alphabet, so a 0x-
+  // prefixed EVM address can never survive as a single run.
+  for (const w of String(raw).match(/[1-9A-HJ-NP-Za-km-z]+/g) ?? []) {
+    if (!BASE58_WORD.test(w)) continue;
     // the vanity suffixes are decisive on their own
-    if (/(?:pump|bonk)$/i.test(word)) return true;
-    if (ALL_HEX.test(word)) continue;
+    if (/(?:pump|bonk)$/i.test(w)) return true;
+    if (ALL_HEX.test(w)) continue;
     return true;
   }
   return false;

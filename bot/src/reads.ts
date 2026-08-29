@@ -2,6 +2,7 @@ import type { Address } from 'viem';
 import { client } from './chain.js';
 import { factoryAbi, curveAbi, erc20Abi, tokenInfoAbi, buybackVaultAbi } from './abi.js';
 import { FACTORY, BUYBACK_VAULT, PHASE } from './config.js';
+import { isRateLimit } from './ratelimit.js';
 
 export interface TokenReads {
   token: Address;
@@ -90,6 +91,13 @@ async function tryRead<T>(fn: () => Promise<T>, fallback: T, label = 'read'): Pr
   try {
     return await fn();
   } catch (err) {
+    // A revert is a measurement: the interface is absent, and the fallback says
+    // so honestly. A rate limit or a dead transport measured nothing at all, and
+    // returning 0n there would put a number on the card the bot never read --
+    // "no buyers yet · 0.0%" for a token at 80% of its threshold, written into
+    // the scans table as though it were observed. Let those through so the scan
+    // reports a limit instead of inventing data.
+    if (isRateLimit(err) || (err as any)?.name === 'TimeoutError') throw err;
     if (DEBUG_READS) {
       console.warn(`[reads] ${label} failed, using fallback:`, String((err as Error)?.message ?? err).slice(0, 120));
     }

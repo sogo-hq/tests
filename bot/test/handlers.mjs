@@ -9,6 +9,7 @@ import assert from 'node:assert/strict';
 // dynamic import -- the deletion assertion should not depend on the caller
 // remembering to pass an env var.
 process.env.GROUP_PROMPT_TTL_MS ??= '50';
+process.env.LAST_TOKEN_TTL_MS ??= '1200';
 const { createBot } = await import('../dist/bot.js');
 const { scanCache } = await import('../dist/cache.js');
 
@@ -24,14 +25,17 @@ bot.botInfo = BOT_INFO;
 
 /** Capture every outgoing API call instead of sending it. */
 const calls = [];
+// Monotonic and independent of calls.length, which drain() resets -- two prompts
+// sharing a message_id let a delete-the-wrong-message bug pass unnoticed.
+let sentId = 7000;
 bot.api.config.use(async (_prev, method, payload) => {
   calls.push({ method, payload });
   // grammY expects the Bot API envelope, not a bare result.
   if (method === 'sendMessage') {
-    return { ok: true, result: { message_id: calls.length, chat: { id: payload.chat_id }, date: 0, text: payload.text } };
+    return { ok: true, result: { message_id: ++sentId, chat: { id: payload.chat_id }, date: 0, text: payload.text } };
   }
   if (method === 'sendPhoto') {
-    return { ok: true, result: { message_id: calls.length, chat: { id: payload.chat_id }, date: 0, photo: [] } };
+    return { ok: true, result: { message_id: ++sentId, chat: { id: payload.chat_id }, date: 0, photo: [] } };
   }
   if (method === 'answerCallbackQuery') return { ok: true, result: true };
   if (method === 'editMessageText') {
@@ -188,21 +192,28 @@ ok('every inline path answers with at least one result and a valid id');
 const SPAMMER = 4242;
 const SPAM_ADDR = '0x' + 'c7'.repeat(20);
 let limitedAt = null;
+let limitedResult = null;
 for (let i = 1; i <= 40; i++) {
   await bot.handleUpdate(inline(SPAM_ADDR, SPAMMER));
   const res = drain()[0].payload.results[0];
-  if (/[Rr]ate limited/.test(res.title + res.description)) { limitedAt = i; break; }
+  if (/[Rr]ate limited/.test(res.title + res.description)) { limitedAt = i; limitedResult = res; break; }
 }
 assert.ok(limitedAt, 'inline was never rate limited across 40 requests');
 assert.ok(limitedAt > 25 && limitedAt <= 35, `flood cap tripped at request ${limitedAt}, expected ~31`);
-ok(`inline is rate limited too: flood cap tripped at request ${limitedAt} (cache hits counted)`);
+// The title is a hardcoded label, so matching on it alone would pass even if
+// the body still said "scan failed". Check what the user would actually send.
+assert.match(limitedResult.input_message_content.message_text, /too many scans right now, try again in \d+s/,
+  `inline rate-limit body was: ${limitedResult.input_message_content.message_text}`);
+assert.ok(!/scan failed/i.test(limitedResult.input_message_content.message_text),
+  'a limit must never be worded as a failure');
+ok(`inline is rate limited too: flood cap tripped at request ${limitedAt}, body "${limitedResult.input_message_content.message_text}"`);
 
 // --- the image is opt-in, behind a button ----------------------------------
 {
   await bot.handleUpdate(msg('private', `/scan ${TOKEN}`, -500));
   const c2 = drain();
   const card = c2[c2.length - 1].payload;
-  assert.ok(card.reply_markup, 'the text card carries a button');
+  assert.ok(card.reply_markup, `the text card carries a button; last send was ${c2[c2.length - 1].method}: ${String(card.text || '').slice(0, 80)}`);
   const button = card.reply_markup.inline_keyboard[0][0];
   assert.equal(button.text, 'Image');
   assert.ok(button.callback_data.startsWith('img:'));
@@ -291,13 +302,15 @@ ok('/help is plain text and ends with the contact block');
 
 // --- 1. a bare /scan must not spam a group ---------------------------------
 {
-  await bot.handleUpdate(msg('group', '/scan', -700));
+  const trigger700 = msg('group', '/scan', -700);
+  await bot.handleUpdate(trigger700);
   let c6 = drain();
   assert.equal(c6.length, 1, `bare /scan in a group sent ${c6.length} messages`);
   const line = c6[0].payload.text;
   assert.equal(line.split('\n').length, 1, `group prompt must be one line, got:\n${line}`);
   assert.ok(line.length <= 60, `group prompt is ${line.length} chars, too long for a busy group`);
-  assert.ok(c6[0].payload.reply_parameters?.message_id, 'attached to whoever asked');
+  assert.equal(c6[0].payload.reply_parameters?.message_id, trigger700.message.message_id, 'attached to whoever asked');
+  const prompt700 = sentId; // the id the stub handed back for that prompt
   ok(`bare /scan in a group -> one short line, as a reply: "${line}"`);
 
   // /scan@botname is the same path
@@ -305,14 +318,22 @@ ok('/help is plain text and ends with the contact block');
   c6 = drain();
   assert.equal(c6.length, 1);
   assert.equal(c6[0].payload.text.split('\n').length, 1);
+  const prompt701 = sentId;
   ok('bare /scan@botname in a group -> one short line too');
 
   // and it is taken back down. GROUP_PROMPT_TTL_MS is read at module load, so
   // this run sets it to 50ms via the env before importing the bot.
+  //
+  // Asserts *what* was deleted, not how many calls were made: counting alone
+  // still passed when the handler deleted the group member's own message
+  // instead of the bot's prompt, which is far worse than the noise being fixed.
   await new Promise((r) => setTimeout(r, Number(process.env.GROUP_PROMPT_TTL_MS || 20000) + 80));
   const deletes = drain().filter((x) => x.method === 'deleteMessage');
-  assert.ok(deletes.length >= 2, `expected the group prompts to be deleted, saw ${deletes.length} deleteMessage calls`);
-  ok(`group prompts are deleted after ${process.env.GROUP_PROMPT_TTL_MS}ms`);
+  const deleted = deletes.map((d) => `${d.payload.chat_id}:${d.payload.message_id}`).sort();
+  assert.deepEqual(deleted, [`-700:${prompt700}`, `-701:${prompt701}`].sort(),
+    `the bot must delete its own two prompts, deleted: ${JSON.stringify(deleted)}`);
+  assert.ok(!deleted.includes(`-700:${trigger700.message.message_id}`), "must never delete the user's own message");
+  ok(`group prompts (and only those) are deleted after ${process.env.GROUP_PROMPT_TTL_MS}ms`);
 }
 
 // --- DM keeps the fuller prompt --------------------------------------------
@@ -345,6 +366,69 @@ await bot.handleUpdate(msg('private', '/full', -704));
   ok('/full memory is per chat');
 }
 
+// and it works in a group, where the fix was actually asked for
+await bot.handleUpdate(msg('group', `/scan ${TOKEN}`, -707));
+drain();
+await bot.handleUpdate(msg('group', '/full', -707));
+{
+  const cg = drain();
+  const text = cg[cg.length - 1].payload.text;
+  assert.ok(!/send a pons v2 token address/i.test(text), 'bare /full in a group must recall too');
+  assert.ok(text.includes('TRACTION') || text.includes('too early for traction'));
+  ok('bare /full recalls the token in a group as well as a DM');
+}
+
+// the fallback is for a *bare* /full only. An argument the bot cannot parse
+// must be explained, never silently answered with a different token: rendering
+// a card for something the user did not ask about is the worst kind of wrong.
+await bot.handleUpdate(msg('private', `/full ${'9BB6NFEcjBCtnNLFko2FqVQBq8HHM13kCyYcdQbgpump'}`, -703));
+{
+  const cf = drain();
+  const text = cf[cf.length - 1].payload.text;
+  assert.match(text, /that's a solana address/, `/full <solana> rendered: ${text.slice(0, 80)}`);
+  assert.ok(!text.includes('TRACTION'), '/full with a foreign address must not render the remembered token');
+  ok('/full <unparseable> explains the input instead of rendering the remembered token');
+}
+
+// memory is only written once a card exists. A flood-limited request produced
+// no card, so it must not become what a later bare /full renders.
+{
+  const { floodQuota } = await import('../dist/quota.js');
+  const CHAT = -708;
+  await bot.handleUpdate(msg('private', `/scan ${TOKEN}`, CHAT));
+  drain();
+  // drive the same identity past the flood cap on a different token
+  const other = '0x' + '77'.repeat(20);
+  const u = 6100;
+  let denied = false;
+  for (let i = 0; i < 200 && !denied; i++) denied = !floodQuota.consume(u).allowed;
+  assert.ok(denied, 'the flood cap must actually trip for this test to mean anything');
+  const upd = msg('private', `/scan ${other}`, CHAT);
+  upd.message.from.id = u;
+  await bot.handleUpdate(upd);
+  const limited = drain();
+  assert.match(limited[limited.length - 1].payload.text, /too many scans right now/);
+  await bot.handleUpdate(msg('private', '/full', CHAT));
+  const after = drain();
+  const text = after[after.length - 1].payload.text;
+  assert.ok(!text.includes(other.slice(0, 10)), 'a limited scan must not overwrite the chat memory');
+  ok('a rate-limited scan leaves the remembered token alone');
+}
+
+// the memory expires. LAST_TOKEN_TTL_MS is read at module load, so this run
+// sets it small enough to observe.
+{
+  const CHAT = -709;
+  await bot.handleUpdate(msg('private', `/scan ${TOKEN}`, CHAT));
+  drain();
+  await new Promise((r) => setTimeout(r, Number(process.env.LAST_TOKEN_TTL_MS) + 60));
+  await bot.handleUpdate(msg('private', '/full', CHAT));
+  const ce = drain();
+  assert.match(ce[ce.length - 1].payload.text, /send a pons v2 token address/i,
+    'the remembered token must expire');
+  ok(`the remembered token expires after ${process.env.LAST_TOKEN_TTL_MS}ms`);
+}
+
 // --- 4. solana addresses get told what this bot covers ---------------------
 const SOL = '9BB6NFEcjBCtnNLFko2FqVQBq8HHM13kCyYcdQbgpump';
 for (const [chatType, chatId] of [['private', -705], ['group', -706]]) {
@@ -364,6 +448,77 @@ await bot.handleUpdate(inline(SOL, 9500));
   assert.match(r2.title, /Solana/);
   assert.match(r2.input_message_content.message_text, /that's a solana address/);
   ok('solana address -> named as such inline too');
+}
+
+// A plain Solana address, with no pump/bonk suffix, must take the general
+// base58 branch rather than the vanity shortcut -- the fixture above would
+// pass with the shortcut alone and the general branch never exercised.
+{
+  const PLAIN = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v'; // USDC mint, 44 chars
+  await bot.handleUpdate(msg('private', `/scan ${PLAIN}`, -710));
+  const cp = drain();
+  assert.match(cp[cp.length - 1].payload.text, /that's a solana address/,
+    'a Solana address without a vanity suffix must still be named');
+  ok('solana address with no pump/bonk suffix -> general base58 branch');
+}
+
+// Naming a chain is only worth doing if the name is right. base58check
+// addresses from other chains are 34 characters and must not be called Solana.
+{
+  const { looksLikeSolanaAddress } = await import('../dist/service.js');
+  const notSolana = {
+    '1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa': 'bitcoin',
+    'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t': 'tron',
+    'LZ1JsRxwUFcLtHXKB1e2j5dYy1YCiZBmXR': 'litecoin',
+    'DH5yaieqoZN36fDVciNyRueRGvGLR3mr7L': 'dogecoin',
+    'd384722f6adfe7d79E8e6623896DF199afD31B76': 'EVM address without 0x, no zero digit',
+  };
+  for (const [addr, what] of Object.entries(notSolana)) {
+    assert.equal(looksLikeSolanaAddress(addr), false, `a ${what} address was reported as Solana`);
+  }
+  // and the real ones still are, including inside prose and a URL
+  for (const yes of [
+    SOL,
+    'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
+    'So11111111111111111111111111111111111111112',
+    'look at So11111111111111111111111111111111111111112.',
+    'https://solscan.io/token/EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
+  ]) {
+    assert.equal(looksLikeSolanaAddress(yes), true, `missed a solana address: ${yes}`);
+  }
+  ok(`${Object.keys(notSolana).length} non-Solana chains are not called Solana; 5 Solana forms still are`);
+}
+
+// --- the image button is flood-capped like every text path -----------------
+// A cached card short-circuits before performScan, so the button was the one
+// way to post unlimited photos into a group -- the noise this change set out
+// to stop, on the surface where it matters most.
+{
+  const { floodQuota } = await import('../dist/quota.js');
+  const CHAT = -711;
+  const TAPPER = 6200;
+  await bot.handleUpdate(msg('private', `/scan ${TOKEN}`, CHAT));
+  drain();
+  let photos = 0, refusals = 0;
+  for (let i = 0; i < 45; i++) {
+    await bot.handleUpdate({
+      update_id: 90000 + i,
+      callback_query: {
+        id: `cb${i}`, from: { id: TAPPER, is_bot: false, first_name: 'U' }, chat_instance: 'ci',
+        data: `img:${TOKEN}`,
+        message: { message_id: 1, date: 0, chat: { id: CHAT, type: 'private' }, text: 'card' },
+      },
+    });
+    const cs = drain();
+    photos += cs.filter((x) => x.method === 'sendPhoto').length;
+    refusals += cs.filter((x) => x.method === 'answerCallbackQuery'
+      && /too many scans right now/.test(x.payload.text ?? '')).length;
+  }
+  assert.ok(refusals > 0, `45 button taps produced ${photos} photos and no cap at all`);
+  assert.ok(photos <= 35, `the button posted ${photos} photos from 45 taps; the cap must bite`);
+  // and the refusal rides the callback query, so the cap adds no chat message
+  assert.equal(floodQuota.consume(TAPPER).allowed, false, 'the tapper should be flood-capped by now');
+  ok(`image button is flood-capped: 45 taps -> ${photos} photos, ${refusals} refused on the callback query`);
 }
 
 // --- 2. a rate limit must never be reported as a failure -------------------

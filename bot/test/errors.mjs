@@ -17,6 +17,8 @@ const ok = (m) => console.log(`  PASS  ${m}`);
 // a real contract that is not a pons launch, and an address with no code at all
 const NON_PONS = '0x49bac47750F3dCdBa49350B5D74fd399e90f97C6';
 const NO_CODE = '0x00000000000000000000000000000000deadbeef';
+// a real pons v2 launch, used where the reads themselves are the subject
+const LIVE_TOKEN = '0xd384722f6adfe7d79E8e6623896DF199afD31B76';
 
 const bot = createBot('123456:FAKE');
 bot.botInfo = BOT_INFO;
@@ -164,6 +166,51 @@ ok(`no concurrency slot leaked across ${9} failing scans (active=0, in-flight=0)
   }
   assert.equal(userQuota.check(USER).allowed, true, 'a failed scan must not consume scan quota');
   ok('a failed scan consumed no scan quota');
+}
+
+// ---------------------------------------------------------------------------
+// A rate limit must never be turned into a measurement.
+//
+// readToken fires 17 optional reads in one Promise.all, and tryRead used to
+// swallow every throw into a fallback. A limit hitting that burst therefore
+// produced realQuoteReserve=0, totalSupply=0, symbol=null -- and the scan then
+// rendered "no buyers yet · 0.0%" for a token at 80% of its threshold and wrote
+// those zeros into the scans table as though they had been observed. Reporting
+// the limit is the only honest answer; inventing a number is the worst outcome
+// this product has.
+{
+  const { performScan } = await import('../dist/service.js');
+  scanCache.sweep();
+
+  // Let the launch lookup through, then limit the read burst behind it.
+  const saved = globalThis.fetch;
+  let passed = 0;
+  const PASS_THROUGH = 4;
+  globalThis.fetch = async (input, init) => {
+    const url = typeof input === 'string' ? input : (input?.url ?? String(input));
+    if (url.includes('rpc.mainnet.chain.robinhood.com') && passed >= PASS_THROUGH) {
+      return new Response('{}', { status: 429, headers: { 'content-type': 'application/json', 'retry-after': '1' } });
+    }
+    if (url.includes('rpc.mainnet.chain.robinhood.com')) passed++;
+    return saved(input, init);
+  };
+
+  let outcome;
+  try {
+    outcome = await performScan({ token: LIVE_TOKEN, source: 'dm', userId: 88881, quotaKey: 88881 });
+  } finally {
+    globalThis.fetch = saved;
+  }
+
+  assert.notEqual(outcome.kind, 'ok',
+    'a scan whose reads were rate limited must not be rendered as a completed card');
+  if (outcome.kind === 'ok') {
+    assert.fail(`rendered a card from limited reads: ${outcome.defaultCard?.slice(0, 200)}`);
+  }
+  assert.equal(outcome.kind, 'rate_limited',
+    `a 429 must be reported as a limit, not as "${outcome.message}"`);
+  assert.ok(!/scan failed/i.test(outcome.message), 'a limit must never be worded as a failure');
+  ok(`reads that were rate limited report "${outcome.message}" rather than zeros`);
 }
 
 console.log('\nAll error-path checks passed.');
