@@ -158,6 +158,19 @@ async function scanTokenInner(token: string, requestedBy?: number): Promise<Scan
 
   await ensureLaunchRow(reads, launch);
 
+  // Holder concentration needs only the launch block and the head, so it is
+  // started here and collected after the indexing rather than queued behind it.
+  // Sequentially it added a round trip to every scan and pushed the slowest past
+  // the fifteen seconds a caller waits for an abandoned scan to land; overlapped,
+  // it costs nothing. Settled into a result rather than left to reject on its
+  // own, so a slow index cannot turn it into an unhandled rejection.
+  const concentrationSettled = readConcentration(
+    reads.token, reads.curve, BigInt(launch.block), head,
+  ).then(
+    (value) => ({ ok: true as const, value }),
+    (err) => ({ ok: false as const, err }),
+  );
+
   // Index the measurement window. Capped at the 30-minute window even for old
   // tokens, because that is the window every traction metric is defined over.
   const windowEnd = BigInt(Math.min(launch.block + WINDOW_30_MIN_BLOCKS, Number(head)));
@@ -171,15 +184,15 @@ async function scanTokenInner(token: string, requestedBy?: number): Promise<Scan
     reads.graduationThreshold,
   );
 
-  // Holder concentration, read from the token's whole Transfer history. Filtered
-  // by address this is cheap even over a long life. A limit or a dead transport
-  // still propagates -- the one answer this must never give is a confident low
-  // number -- but an ordinary read failure leaves the check undetermined rather
-  // than failing a scan that is otherwise complete.
+  // A limit or a dead transport still propagates -- the one answer this must
+  // never give is a confident low number -- but an ordinary read failure leaves
+  // the check undetermined rather than failing a scan that is otherwise complete.
+  const cr = await concentrationSettled;
   let concentration: Concentration | null = null;
-  try {
-    concentration = await readConcentration(reads.token, reads.curve, BigInt(launch.block), head);
-  } catch (err: any) {
+  if (cr.ok) {
+    concentration = cr.value;
+  } else {
+    const err = cr.err as any;
     if (isRateLimit(err) || err?.name === 'TimeoutError') throw err;
     console.warn(`[scan] holder concentration unreadable for ${reads.token}:`, String(err?.shortMessage ?? err?.message ?? err).slice(0, 140));
   }
