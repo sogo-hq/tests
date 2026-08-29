@@ -48,6 +48,25 @@ assert.ok(
 );
 ok('an ETH-paired token is clean on the ticker check; the flag set is 9 for both');
 
+// ---- the pool is not a wallet -------------------------------------------
+// The hardcoded PoolManager is pinned to the chain here rather than trusted:
+// it holds the graduated liquidity, so if this address ever drifts the top-5
+// share silently starts counting the pool as the largest holder. On $ARCHER
+// that was the difference between 56% and 21%.
+{
+  const { client } = await import('../dist/chain.js');
+  const { POOL_MANAGER, MEME_HOOK, FACTORY } = await import('../dist/config.js');
+  const abi = [{ type: 'function', name: 'poolManager', inputs: [], outputs: [{ type: 'address' }], stateMutability: 'view' }];
+  for (const [name, address] of [['MEME_HOOK', MEME_HOOK], ['FACTORY', FACTORY]]) {
+    const got = await client.readContract({ address, abi, functionName: 'poolManager', args: [] });
+    assert.equal(
+      String(got).toLowerCase(), POOL_MANAGER.toLowerCase(),
+      `${name}.poolManager() is ${got}, but config hardcodes ${POOL_MANAGER}`,
+    );
+  }
+  ok('the hardcoded PoolManager is the one the hook and factory actually use');
+}
+
 // ---- 3. the comparison is homoglyph-normalised, like the collision flag ----
 assert.equal(normaliseKey('NVDA'), normaliseKey('NVDА'), 'Cyrillic А must fold onto Latin A');
 assert.notEqual(normaliseKey('NVDA'), normaliseKey('AAPL'));

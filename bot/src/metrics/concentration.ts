@@ -136,7 +136,11 @@ export async function readConcentration(
     .sort((a, b) => (a < b ? 1 : a > b ? -1 : 0));
 
   const circulating = held.reduce((a, v) => a + v, 0n);
-  if (circulating <= 0n) return null;
+  // Nobody holds it outside the curve and the protocol. That is a real reading,
+  // not a failed one, and the difference matters: the flag says "too few
+  // holders to measure" rather than "could not be read", which is what it would
+  // say about a token whose log we never got.
+  if (circulating <= 0n) return { top5Share: 0, holders: 0, circulating: 0n };
 
   const top5 = held.slice(0, 5).reduce((a, v) => a + v, 0n);
   // basis points first, so the division stays in bigint

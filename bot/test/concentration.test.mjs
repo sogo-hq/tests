@@ -45,6 +45,26 @@ function inTempDb(body, env = {}) {
   }
 }
 
+test('the pool is not a wallet', () => {
+  const out = inTempDb(`
+    const { NON_HOLDER_ADDRESSES, POOL_MANAGER } = await import('${CWD}/dist/config.js');
+    console.log(JSON.stringify({
+      list: NON_HOLDER_ADDRESSES,
+      hasPool: NON_HOLDER_ADDRESSES.includes(POOL_MANAGER.toLowerCase()),
+      allLower: NON_HOLDER_ADDRESSES.every((a) => a === a.toLowerCase()),
+    }));
+  `);
+  const r = JSON.parse(out);
+  // The v4 PoolManager holds the graduated liquidity, so on a graduated token it
+  // is the single largest balance. Counting it made $ARCHER read 56% rather
+  // than 21% -- a false statement about a real token, on the concerns line.
+  assert.equal(r.hasPool, true, 'the PoolManager must never be counted as a holder');
+  // Balances are keyed by lowercase address, so an entry in any other case is
+  // an exclusion that silently does nothing.
+  assert.equal(r.allLower, true, `non-holder list must be lowercase: ${JSON.stringify(r.list)}`);
+  assert.ok(r.list.length >= 8, 'factory, hook, escrow, vault, locker, forwarder, pool, burn, zero');
+});
+
 test('five holders or fewer is undetermined, never a raised flag', () => {
   const out = inTempDb(`
     const res = [1, 2, 5].map((h) => {

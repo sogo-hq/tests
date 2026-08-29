@@ -42,6 +42,18 @@ export const LAUNCH_LOCKER = '0x267444D099b10fB5Ed7c3Cc7B7c767AdcA574952' as con
  */
 export const LAUNCH_FORWARDER = '0xe33E9E479dF8802cb0866d5d05258bEc4cF62948' as const;
 
+/**
+ * The Uniswap v4 PoolManager this launchpad graduates into.
+ *
+ * Verified on-chain rather than looked up: both MEME_HOOK.poolManager() and
+ * FACTORY.poolManager() return this address, and it answers
+ * protocolFeeController(). It holds the pool's liquidity, so on a graduated
+ * token it is the single largest balance -- 41.6% of $ARCHER's supply -- and
+ * counting it as a wallet made every graduated launch look concentrated in one
+ * hand when that hand is the pool.
+ */
+export const POOL_MANAGER = '0x8366a39CC670B4001A1121B8F6A443A643e40951' as const;
+
 /** The conventional burn sink. Burned supply is held by nobody. */
 export const BURN_ADDRESS = '0x000000000000000000000000000000000000dEaD' as const;
 
@@ -56,7 +68,7 @@ export const BURN_ADDRESS = '0x000000000000000000000000000000000000dEaD' as cons
  */
 export const NON_HOLDER_ADDRESSES: readonly string[] = [
   FACTORY, MEME_HOOK, FEE_ESCROW, BUYBACK_VAULT, LAUNCH_LOCKER, LAUNCH_FORWARDER,
-  BURN_ADDRESS,
+  POOL_MANAGER, BURN_ADDRESS,
   '0x0000000000000000000000000000000000000000',
 ].map((a) => a.toLowerCase());
 

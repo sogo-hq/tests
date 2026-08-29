@@ -256,6 +256,23 @@ for (const [table, column, decl] of [
 ] as const) {
   if (!columnsOf(table).includes(column)) {
     db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${decl}`);
+    if (table === 'holder_snapshots') {
+      // DEFAULT 0 would enter every existing observation into the threshold
+      // distribution as the most even value there is, dragging the percentile
+      // down and flagging tokens that do not deserve it. The excess is pure
+      // arithmetic over two columns the row already has, so it is derived
+      // rather than guessed:  (share - floor) / (100 - floor),  floor = 500/H.
+      db.exec(`
+        UPDATE holder_snapshots
+           SET excess = MAX(0.0, MIN(1.0,
+                 (top5_share - (100.0 * MIN(5, holders) / holders))
+                 / (100.0 - (100.0 * MIN(5, holders) / holders))))
+         WHERE holders > 5
+      `);
+      // Rows below the holder floor could never have been recorded under either
+      // rule; if one exists it has no excess to contribute.
+      db.exec('DELETE FROM holder_snapshots WHERE holders <= 5');
+    }
   }
 }
 
