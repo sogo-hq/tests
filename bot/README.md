@@ -332,6 +332,60 @@ ones. The log says which state it ended in:
 [boot] recovery finished — 36,268 indexed, 0 decoded; index-derived negatives still withheld until decode catches up
 ```
 
+## Filling the trade history
+
+Trades were only ever indexed as a side effect of somebody scanning a token, and
+three shipped figures are computed over them: the buyer comparison on every
+card, the exempted-wallet hold-time median in `/stats`, and — indirectly —
+check 09. On a live index that meant **thirteen launches out of eighteen
+thousand** had any trade history at all, so all three were silent.
+
+A drip runs for the life of the process at the same bulk priority as the
+decoder, reading the **first thirty minutes** of launches nobody has scanned.
+Thirty minutes because that is the window the buyer count is defined over;
+there is nothing further worth pulling. Every request inside a pass yields to
+interactive traffic, and each pass is bounded, so a scan issued mid-pass is
+served first.
+
+It is scoped, not a backfill:
+
+| population | how far it goes |
+|---|---|
+| launches carrying pre-exempted wallets | **all of them** — that population *is* the published median |
+| recent launches | until every age bucket clears `WINDOW_INDEX_TARGET`, then stops |
+| holder distributions for check 09 | until its own floor is met, bounded by `WINDOW_SAMPLE_CEILING` |
+
+Coverage is a recorded fact — `launches.trades_indexed_to` — rather than
+something inferred from when a token was last scanned. That inference held only
+while scanning was the one thing that indexed trades; every launch this loop
+reads would have been invisible to it.
+
+Check 09 needs separate handling, because concentration comes from a token's
+Transfer log rather than its trades: indexing trades alone leaves it
+undetermined forever. It has its own target and its own attempt marker, since
+most launches here never reach six holders — where the top-five share is forced
+by arithmetic and records nothing — and without a marker the loop would pick the
+same launches every pass. When it is short and has nothing left to read, the
+trade sample keeps running, because indexed trades are what make a launch a
+candidate at all. That coupling has a ceiling: its yield is roughly one usable
+observation per nine reads, and without a bound an unfillable threshold would
+pull the sample through the entire index.
+
+```
+[windows] 25 windows read (25 exempt, 0 sample), 1,597 trades, 3 holder readings — 158 exempt launches left, 17,811 unindexed
+```
+
+"Unindexed" is context, not a queue: only the exempt population is read to
+completion. `/stats` reports whether each derived figure is running yet, and the
+`n<30` floors are untouched — this fills the population, it does not lower the
+bar.
+
+```
+buyer benchmark: live (n=273 per bucket)
+holder concentration: not enough data yet (n=12)
+```
+
+
 ## Staying at the chain head
 
 `npm run bot` tails the factory every 3 seconds, so a launch is in the index
@@ -697,6 +751,12 @@ Tables: `launches`, `trades`, `scans`, `rechecks`, `token_peaks`, `cursors`.
 | `MIN_INDEX_ROWS_FOR_NEGATIVE` | `1000` | rows required before an index-backed negative is asserted |
 | `RECOVERY_STALE_SECONDS` | `21600` | index age past which boot rebuilds it |
 | `MIN_HOLD_SAMPLES` | `30` | observations required before the median hold time is published |
+| `MIN_BENCHMARK_SAMPLES` | `30` | launches required behind a bucket before the buyer comparison is shown |
+| `MIN_CONCENTRATION_SAMPLES` | `30` | holder distributions required before check 09 has a threshold |
+| `CONCENTRATION_PERCENTILE` | `90` | where in the recorded distribution check 09 raises |
+| `WINDOW_INDEX_BATCH` | `25` | launches the background window indexer reads per pass |
+| `WINDOW_INDEX_TARGET` | `40` | coverage aimed for per age bucket, above the floor rather than on it |
+| `WINDOW_SAMPLE_CEILING` | `2000` | most launches the sample will ever read, so an unfillable threshold cannot pull it through the whole index |
 | `SCAN_CACHE_TTL_MS` | `60000` | rendered-card cache TTL |
 | `SCAN_CACHE_MAX` | `500` | cache entry cap |
 | `SCANS_PER_MINUTE` | `10` | per-user quota |
