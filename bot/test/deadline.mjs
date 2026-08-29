@@ -13,8 +13,19 @@ import { db } from '../dist/db.js';
 const ok = (m) => console.log(`  PASS  ${m}`);
 const TOKEN = '0x927db481d5f59d6ae2880b6dc1254742960e65ed';
 
-// make sure it is genuinely uncached
-scanCache.sweep();
+// Index the launch first, then forget the card.
+//
+// What this file is about is the deadline contract, not how long a cold index
+// takes: on an empty database findLaunch walks the factory's logs backwards and
+// a scan measured 21s against this node, against the 15s this test waits for the
+// abandoned scan to land. Warming the launch row leaves a real ~4s scan to
+// abandon and observe, which is the thing being tested. The cold-index cost is
+// asserted on its own at the end.
+//
+// sweep() only drops entries that have EXPIRED, so it cannot be used to forget
+// a fresh card -- it was doing nothing here.
+await performScan({ token: TOKEN, source: 'dm', userId: 31336 });
+scanCache.drop(TOKEN);
 assert.equal(scanCache.peek(TOKEN), false, 'token must start uncached for this test');
 
 // --- 1. an impossible deadline yields "busy", not a hang or an error --------
@@ -36,12 +47,13 @@ ok(`logged as "${ev.outcome}" from inline`);
 // The scan is not cancellable; it keeps running. That is what makes
 // "try again in a moment" an honest instruction.
 let cached = false;
-for (let i = 0; i < 60; i++) {
+const waitStart = Date.now();
+for (let i = 0; i < 120; i++) {
   if (scanCache.peek(TOKEN)) { cached = true; break; }
   await new Promise((r) => setTimeout(r, 250));
 }
-assert.ok(cached, 'the abandoned scan should still have populated the cache');
-ok('abandoned scan still populated the cache');
+assert.ok(cached, `the abandoned scan should still have populated the cache (waited ${Date.now() - waitStart}ms)`);
+ok(`abandoned scan still populated the cache after ${Date.now() - waitStart}ms`);
 
 // --- 4. so the promised retry is instant ------------------------------------
 const t1 = Date.now();
