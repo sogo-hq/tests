@@ -64,7 +64,13 @@ assert.equal(m.traction, 'early');
 // moved to concerns-and-checks along with the card it previews
 const d = inlineDescription(m);
 assert.doesNotMatch(d, /traction/i, `inline description carried a verdict: ${d}`);
-assert.match(d, /concern/);
+// The subtitle leads with the worst finding in its own words now, so the
+// vocabulary check is against that or the no-concerns line -- "1 concern" put a
+// count where the finding should be.
+assert.ok(
+  /concern/.test(d) || (m.topFlag && d.startsWith(m.topFlag)),
+  `subtitle carries neither a finding nor a concerns summary: ${d}`,
+);
 ok(`inline description carries no traction verdict: "${d}"`);
 
 // ---- what it stored --------------------------------------------------------
