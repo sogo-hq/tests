@@ -17,6 +17,12 @@ import {
 import { queueHolderRefresh } from './indexer/windows.js';
 import { PhaseTimer, Budget, withDeadline } from './timing.js';
 import { firstScan, type FirstScan } from './history.js';
+import { readDeployerActivity, type DeployerActivity } from './metrics/deployer.js';
+
+/** The launch time to measure the deployer's first move from. */
+function launchedAtExactForDeployer(reads: TokenReads, launch: { launchedAt: number }): number {
+  return reads.launchedAt > 0 ? reads.launchedAt : launch.launchedAt;
+}
 import { SCAN_BUDGET_MS, CONCENTRATION_DEADLINE_MS } from './config.js';
 import { isRateLimit } from './ratelimit.js';
 import { TokenLaunched } from './abi.js';
@@ -83,6 +89,12 @@ export interface ScanResult {
   bulkAhead: number;
   /** What this token was worth when it was first scanned here. Null on a first scan. */
   firstScan: FirstScan | null;
+  /**
+   * What the deployer did with its supply. /full only, and null when the
+   * transfers could not be read -- which renders as undetermined, not as
+   * "unchanged".
+   */
+  deployerActivity: DeployerActivity | null;
 }
 
 /**
@@ -375,6 +387,23 @@ async function scanTokenInner(token: string, requestedBy?: number): Promise<Scan
   // next one to be current. Deduplicated, bulk priority, off the critical path.
   queueHolderRefresh(reads.token, reads.curve, launch.block);
 
+  // The deployer's own movements. Bounded by the same deadline as the holder
+  // read and only attempted when that one was served from the index, so it can
+  // never be the reason a card is late -- it appears in /full, which nobody is
+  // staring at in the first ten seconds of a launch.
+  let deployerActivity: DeployerActivity | null = null;
+  if (fromIndex) {
+    deployerActivity = await timer.time('deployer', () =>
+      withDeadline(
+        readDeployerActivity(
+          reads.token, reads.deployer, reads.curve,
+          BigInt(launch.block), head, launchedAtExactForDeployer(reads, launch), BLOCK_TIME_SECONDS,
+        ).catch(() => null),
+        budget.allowanceFor(CONCENTRATION_DEADLINE_MS),
+        null,
+      ));
+  }
+
   const flags = computeFlags({
     token: reads.token,
     deployer: reads.deployer,
@@ -498,6 +527,7 @@ async function scanTokenInner(token: string, requestedBy?: number): Promise<Scan
         // appended: without that a re-scan inside the early window would report
         // itself as the first scan.
         firstScan: firstScan(reads.token, existing.id),
+        deployerActivity: null,
         launchBlock: launch.block,
         launchedAt: launchedAtExact,
         ageSeconds,
@@ -576,6 +606,7 @@ async function scanTokenInner(token: string, requestedBy?: number): Promise<Scan
     // The row for THIS scan was just inserted, so it is excluded: a token's
     // very first scan must find nothing and print nothing.
     firstScan: firstScan(reads.token, scanId),
+    deployerActivity,
     launchBlock: launch.block,
     launchedAt: launchedAtExact,
     ageSeconds,

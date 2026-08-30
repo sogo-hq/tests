@@ -6,6 +6,7 @@ import { clamp, clampMessage, MAX_NAME, MAX_TICKER, TELEGRAM_MAX_MESSAGE } from 
 import { EARLY_WINDOW_SECONDS } from './config.js';
 import { MIN_HOLDERS_FOR_SHARE } from './metrics/concentration.js';
 import { MIN_BENCHMARK_SAMPLES } from './metrics/benchmark.js';
+import { deployerActivityLine } from './metrics/deployer.js';
 
 export { TELEGRAM_MAX_MESSAGE };
 
@@ -261,6 +262,14 @@ export function renderCard(r: ScanResult): string {
     L.push(`  round-trippers: ${t.roundTrippers} of ${t.uniqueBuyers30m} buyers also sold`);
   if (t.forwarderBuys > 0)
     L.push(`  creator opening buy present in the launch transaction`);
+  L.push('');
+
+  // What the deployer did with its own supply. /full only: it is context
+  // rather than a decision input, and the default card is read in the first
+  // seconds of a launch. Unreadable transfers render as undetermined here,
+  // never as "unchanged" -- not having looked is not the same as nothing
+  // having moved.
+  L.push(`  ${esc(deployerActivityLine(r.deployerActivity))}`);
   L.push('');
 
   L.push(`<b>FLAGS  ${f.raised} of ${f.total}</b>${f.unknown ? ` · ${f.unknown} undetermined` : ''}`);

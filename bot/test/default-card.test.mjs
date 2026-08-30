@@ -520,3 +520,51 @@ test('buyer growth appears only once there are two points in time', () => {
   assert.equal(has({ ageSeconds: 1200, buyers: 38, windowMinutes: 20 }), true);
   assert.equal(has({ ageSeconds: 1200, buyers: 0, windowMinutes: 20 }), false, 'nothing to grow from');
 });
+
+// --------------------------------------------- deployer activity (/full only)
+test('deployer activity is stated as facts, never as a judgement', async () => {
+  const { renderCardText } = await import('../dist/card.js');
+  const line = (deployerActivity) =>
+    renderCardText(makeScan({ ageSeconds: 3600, deployerActivity }))
+      .split('\n').find((l) => /deployer:/.test(l)).trim();
+
+  assert.equal(
+    line({ heldPct: 4.2, unchanged: true, firstMoveSeconds: null, sentTo: 0, startedPct: 4.2 }),
+    'deployer: holds 4.2% of supply, unchanged since launch',
+  );
+  assert.equal(
+    line({ heldPct: 0, unchanged: false, firstMoveSeconds: 480, sentTo: 1, startedPct: 12 }),
+    'deployer: sold or sent all of its supply within 8 minutes',
+  );
+  assert.match(
+    line({ heldPct: 3.1, unchanged: false, firstMoveSeconds: 3600, sentTo: 3, startedPct: 9.4 }),
+    /^deployer: holds 3\.1% of supply, moved 6\.3% to 3 addresses within 1 hour$/,
+  );
+
+  // Never a verdict. "Dev dumped" is a judgement; "sold all of its supply
+  // within 8 minutes" is a reading.
+  const VERDICT = /\b(dumped|rug|scam|safe|clean|honest|trustworthy|dev is|good|bad)\b/i;
+  for (const a of [
+    { heldPct: 0, unchanged: false, firstMoveSeconds: 60, sentTo: 1, startedPct: 90 },
+    { heldPct: 90, unchanged: true, firstMoveSeconds: null, sentTo: 0, startedPct: 90 },
+  ]) {
+    assert.ok(!VERDICT.test(line(a)), `a verdict reached the line: ${line(a)}`);
+  }
+});
+
+test('unreadable deployer transfers are undetermined, never "unchanged"', async () => {
+  const { renderCardText } = await import('../dist/card.js');
+  const l = renderCardText(makeScan({ ageSeconds: 3600, deployerActivity: null }))
+    .split('\n').find((x) => /deployer:/.test(x)).trim();
+  assert.match(l, /undetermined$/);
+  // Not having looked is not the same as nothing having moved.
+  assert.ok(!/unchanged|holds/.test(l), `an unread deployer claimed a holding: ${l}`);
+});
+
+test('deployer activity stays out of the default card', async () => {
+  const card = renderDefaultCard(makeScan({
+    ageSeconds: 3600,
+    deployerActivity: { heldPct: 4.2, unchanged: true, firstMoveSeconds: null, sentTo: 0, startedPct: 4.2 },
+  }), 'b');
+  assert.ok(!/deployer:/.test(card), 'it is context for /full, not a decision input for the card');
+});

@@ -90,6 +90,7 @@ export function makeScan(over = {}) {
     // Null unless a test supplies one: a first scan has no history to report,
     // and that is the state the card must be correct in.
     firstScan: over.firstScan ?? null,
+    deployerActivity: over.deployerActivity ?? null,
   };
 }
 
