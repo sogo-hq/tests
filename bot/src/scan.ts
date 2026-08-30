@@ -95,6 +95,14 @@ export interface ScanResult {
  * factory had already confirmed. That is the exact failure this project exists
  * to avoid, and it reached a user.
  */
+/**
+ * Blocks of slack per second of age when placing a launch from the curve.
+ *
+ * One percent covers the measured drift several times over without pushing the
+ * window start so far back that it stops overlapping the launch.
+ */
+const CURVE_ESTIMATE_MARGIN = 0.01 / BLOCK_TIME_SECONDS;
+
 export class LaunchLookupIncomplete extends Error {
   constructor(readonly reason: string, readonly durationMs: number) {
     super(`launch lookup incomplete after ${durationMs}ms: ${reason}`);
@@ -109,6 +117,11 @@ export interface LaunchLocation {
   launchedAt: number;
   /** Where it came from, for the log: the index, the factory's logs, or the curve. */
   source: 'index' | 'logs' | 'curve';
+  /**
+   * How far the block might be out, in blocks. Zero when it was read; the
+   * safety margin when it was estimated from the curve's timestamp.
+   */
+  uncertaintyBlocks: number;
 }
 
 /**
@@ -129,7 +142,10 @@ async function findLaunch(
     .prepare('SELECT block_number, tx_hash, launched_at FROM launches WHERE token = ?')
     .get(token.toLowerCase()) as { block_number: number; tx_hash: string; launched_at: number } | undefined;
   if (row) {
-    return { block: row.block_number, txHash: row.tx_hash as Hex, launchedAt: row.launched_at, source: 'index' };
+    return {
+      block: row.block_number, txHash: row.tx_hash as Hex,
+      launchedAt: row.launched_at, source: 'index', uncertaintyBlocks: 0,
+    };
   }
 
   // Not indexed yet -- search back through the factory's own logs. Scoped to the
@@ -156,6 +172,7 @@ async function findLaunch(
         txHash: l.transactionHash as Hex,
         launchedAt: Number(blk.timestamp),
         source: 'logs',
+        uncertaintyBlocks: 0,
       };
     }
   }
@@ -167,9 +184,26 @@ async function findLaunch(
   // instead of giving up -- no second scan, and the reading is already in hand
   // from the same call that proved the token exists.
   if (reads.launchedAt > 0) {
-    const elapsed = Math.max(0, Math.floor(Date.now() / 1000) - reads.launchedAt);
-    const block = Math.max(1, Number(head) - Math.round(elapsed / BLOCK_TIME_SECONDS));
-    return { block, txHash: null, launchedAt: reads.launchedAt, source: 'curve' };
+    // Measured against the head block's OWN timestamp, not this host's clock.
+    // Deriving from wall time put the block 310 to 618 blocks early across four
+    // real launches -- 31 to 62 seconds -- because the node's head lags real
+    // time and the error grows with how far behind it is. The chain's own
+    // clock has no such skew, and one getBlock on a path this rare is nothing.
+    const headBlock = await client.getBlock({ blockNumber: head, includeTransactions: false });
+    const elapsed = Math.max(0, Number(headBlock.timestamp) - reads.launchedAt);
+    const estimate = Number(head) - elapsed / BLOCK_TIME_SECONDS;
+    // Deliberately biased early. Measured against four real launches the
+    // estimate lands 275 to 528 blocks before the truth and the error grows
+    // with age, because the chain's block time is not exactly the 0.1s this
+    // divides by. Erring earlier still is the safe direction: blocks before a
+    // launch hold none of its trades, while blocks after it hold the opening
+    // minutes, which are the ones that matter most.
+    const margin = Math.max(600, elapsed * CURVE_ESTIMATE_MARGIN);
+    const block = Math.min(Number(head), Math.max(1, Math.floor(estimate - margin)));
+    return {
+      block, txHash: null, launchedAt: reads.launchedAt, source: 'curve',
+      uncertaintyBlocks: Math.ceil(margin),
+    };
   }
 
   throw new LaunchLookupIncomplete(
@@ -265,7 +299,15 @@ async function scanTokenInner(token: string, requestedBy?: number): Promise<Scan
 
   // Index the measurement window. Capped at the 30-minute window even for old
   // tokens, because that is the window every traction metric is defined over.
-  const windowEnd = BigInt(Math.min(launch.block + WINDOW_30_MIN_BLOCKS, Number(head)));
+  // Widened by the placement's own uncertainty. An estimated launch block sits
+  // early by design, so a window measured from it ends early too and clips the
+  // tail off the thirty minutes it is meant to cover. Reading further costs one
+  // slightly wider query and means the trades are all here for whoever asks
+  // next -- including a later scan that places the launch exactly.
+  const windowEnd = BigInt(Math.min(
+    launch.block + WINDOW_30_MIN_BLOCKS + 2 * launch.uncertaintyBlocks,
+    Number(head),
+  ));
   // Re-indexing a window that is already complete is pure latency. The first
   // thirty minutes of a launch that is days old is immutable history, and the
   // rows are already here -- yet this re-read them on every scan, 2.6 seconds
@@ -278,7 +320,11 @@ async function scanTokenInner(token: string, requestedBy?: number): Promise<Scan
     timer.record('trades', 0);
   } else {
     await timer.time('trades', () => indexOneCurve(reads.curve, reads.token, BigInt(launch.block), windowEnd));
-    markWindowIndexed(reads.token, launch.block, Number(windowEnd));
+    // Coverage is only claimed for a launch block that was READ, not estimated.
+    // The benchmark compares like for like across launches; a window placed a
+    // few hundred blocks out would enter that population as though it had been
+    // measured exactly, and quietly skew the median everyone is compared to.
+    if (launch.source !== 'curve') markWindowIndexed(reads.token, launch.block, Number(windowEnd));
   }
 
   const scannedAt = Math.floor(Date.now() / 1000);
