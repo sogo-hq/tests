@@ -6,6 +6,8 @@ import { readToken, type TokenReads } from './reads.js';
 import { indexOneCurve, markWindowIndexed, coveredThrough } from './indexer/trades.js';
 import { fetchLaunchCalldata } from './indexer/exemptions.js';
 import { computeTraction, type TractionMetrics } from './metrics/traction.js';
+import { readStoredEarlySells } from './metrics/concentration.js';
+import type { EarlySells } from './metrics/earlysells.js';
 import { computeFlags, type FlagResult } from './metrics/flags.js';
 import { buyerBenchmark, type BuyerBenchmark } from './metrics/benchmark.js';
 import {
@@ -92,6 +94,7 @@ export interface ScanResult {
    * transfers could not be read -- which renders as undetermined, not as
    * "unchanged".
    */
+  earlySells: import('./metrics/earlysells.js').EarlySells | null;
   deployerActivity: DeployerActivity | null;
 }
 
@@ -339,11 +342,15 @@ async function scanTokenInner(token: string, requestedBy?: number): Promise<Scan
   }
 
   const scannedAt = Math.floor(Date.now() / 1000);
+  // Coverage is re-read AFTER indexing, not reused from the check above: the
+  // indexOneCurve call between them is what changes it, and passing the stale
+  // value would report every freshly indexed window as unread.
   const traction = computeTraction(
     reads.token,
     launch.block,
     Number(head),
     reads.graduationThreshold,
+    coveredThrough(reads.token),
   );
 
   // ------------------------------------------------------------------ 09
@@ -392,6 +399,8 @@ async function scanTokenInner(token: string, requestedBy?: number): Promise<Scan
   // Transfer log the holder reading walks, so the background refresh computes
   // both and this costs nothing.
   const deployerActivity = readStoredDeployerActivity<DeployerActivity>(reads.token);
+  // Both served from the store the background walk fills; neither costs the scan a read.
+  const earlySells = readStoredEarlySells<EarlySells>(reads.token);
 
   const flags = computeFlags({
     token: reads.token,
@@ -510,6 +519,7 @@ async function scanTokenInner(token: string, requestedBy?: number): Promise<Scan
         scanId: existing.id,
         reads,
         traction,
+        earlySells,
         flags,
         benchmark,
         // Excluding this token's own early row, which is reused rather than
@@ -565,21 +575,32 @@ async function scanTokenInner(token: string, requestedBy?: number): Promise<Scan
     // an early signal against a later outcome, and a row claiming "0 buyers,
     // traction none" for a token nobody could have bought yet would train that
     // pairing on a measurement that was never taken.
+    //
+    // A window nobody has indexed stores NULL for the same reason, and it is the
+    // same reason: zero rows means nobody looked, not that nobody bought. A row
+    // claiming "0 buyers" for an unread window is a fabricated observation, and
+    // this table is what later reasoning is built on.
     ...(isEarly
       ? [null, null, null, null, null, null, null, null, null, 'early']
-      : [
-          traction.uniqueBuyers30m, traction.uniqueBuyers10m, traction.buyerGrowthRatio,
-          traction.buyTxCount, traction.sellTxCount, traction.buySellRatio,
-          String(traction.medianBuySize), traction.progressPct,
-          traction.progressVelocityPer10m, traction.label,
-        ]),
+      : traction.window === null
+        ? [null, null, null, null, null, null, null, null, null, 'undetermined']
+        : [
+            traction.window.uniqueBuyers30m, traction.window.uniqueBuyers10m,
+            traction.window.buyerGrowthRatio,
+            traction.window.buyTxCount, traction.window.sellTxCount,
+            traction.window.buySellRatio,
+            String(traction.window.medianBuySize), traction.window.progressPct,
+            traction.window.progressVelocityPer10m, traction.label,
+          ]),
     flags.snipeExemptionCount, reads.creatorTaxBps, flags.creatorTaxMedianBps,
     flags.deployerLaunches7d,
     flags.deployerMedianPeakMcap === null ? null : String(flags.deployerMedianPeakMcap),
     flags.deployerSurvival24h, flags.nameCollision ? 1 : 0,
     reads.buybackEnabled ? 1 : 0, flags.flags.find((f) => f.key === 'custom_pair')?.state === 'raised' ? 1 : 0,
     flags.raised, flags.total,
-    String(reads.mcapInQuote), isEarly ? null : traction.uniqueBuyers30m, reads.pairToken.toLowerCase(),
+    String(reads.mcapInQuote),
+    isEarly || !traction.window ? null : traction.window.uniqueBuyers30m,
+    reads.pairToken.toLowerCase(),
     reads.phase, String(reads.realQuoteReserve), String(reads.graduationThreshold),
   );
 
@@ -597,6 +618,7 @@ async function scanTokenInner(token: string, requestedBy?: number): Promise<Scan
     // very first scan must find nothing and print nothing.
     firstScan: firstScan(reads.token, scanId),
     deployerActivity,
+    earlySells,
     launchBlock: launch.block,
     launchedAt: launchedAtExact,
     ageSeconds,

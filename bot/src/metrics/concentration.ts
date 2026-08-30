@@ -3,6 +3,7 @@ import { getLogsAdaptive } from '../chain.js';
 import { db } from '../db.js';
 import { NON_HOLDER_ADDRESSES, BLOCK_TIME_SECONDS } from '../config.js';
 import { deployerActivityFrom } from './deployer.js';
+import { earlySellsFrom } from './earlysells.js';
 
 /**
  * Holder concentration: how much of the circulating supply the top five wallets
@@ -428,6 +429,7 @@ export async function refreshConcentration(
   // last chunk of it.
   const allLogs: any[] = [];
   let pendingDeployerActivity: unknown = null;
+  let pendingEarlySells: import('./earlysells.js').EarlySells | null = null;
   let readTo = from - 1n;
   let complete = true;
   for (let start = from; start <= head; start += BigInt(REFRESH_CHUNK_BLOCKS)) {
@@ -467,6 +469,11 @@ export async function refreshConcentration(
         allLogs, token, row.deployer, curve, BigInt(row.block_number), BLOCK_TIME_SECONDS,
       );
       if (activity) pendingDeployerActivity = activity;
+      // Same walk, same reason: the opening cohort's later selling is only
+      // visible across the token's whole life, which is exactly what these logs
+      // are. Computed here it costs nothing; on the scan path it would cost a
+      // second whole-life read.
+      pendingEarlySells = earlySellsFrom(allLogs, token, curve, row.block_number);
     }
   }
 
@@ -504,6 +511,7 @@ export async function refreshConcentration(
   }
 
   if (pendingDeployerActivity) storeDeployerActivity(token, pendingDeployerActivity);
+  if (pendingEarlySells) storeEarlySells(token, pendingEarlySells);
 
   return { concentration, blocksRead, incremental, complete };
 }
@@ -531,6 +539,32 @@ export function readStoredDeployerActivity<T>(token: string): T | null {
     return JSON.parse(row.deployer_activity) as T;
   } catch (err) {
     console.warn(`[holders] unreadable deployer activity for ${token.slice(0, 10)}:`, String((err as Error)?.message ?? err).slice(0, 80));
+    return null;
+  }
+}
+
+
+/**
+ * The opening cohort's later selling, stored beside the reading that found it.
+ *
+ * Same arrangement as the deployer's movements above, for the same reason: the
+ * whole-life Transfer walk is the only place this is visible, and a scan cannot
+ * afford to do that walk itself.
+ */
+export function storeEarlySells(token: string, v: unknown): void {
+  db.prepare('UPDATE holder_snapshots SET early_sells = ? WHERE token = ?')
+    .run(JSON.stringify(v), token.toLowerCase());
+}
+
+export function readStoredEarlySells<T>(token: string): T | null {
+  const row = db
+    .prepare('SELECT early_sells FROM holder_snapshots WHERE token = ?')
+    .get(token.toLowerCase()) as { early_sells: string | null } | undefined;
+  if (!row?.early_sells) return null;
+  try {
+    return JSON.parse(row.early_sells) as T;
+  } catch (err) {
+    console.warn(`[holders] unreadable early sells for ${token.slice(0, 10)}:`, String((err as Error)?.message ?? err).slice(0, 80));
     return null;
   }
 }

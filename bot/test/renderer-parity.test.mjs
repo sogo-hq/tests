@@ -54,9 +54,11 @@ const FULL = () => {
       f('d', 'fourth', 50), f('u', 'x', 1, 'unknown'),
     ],
   });
-  r.traction.uniqueBuyers10m = 8;
-  r.traction.earlyBuyers = 13;
-  r.traction.earlyBuyersSold = 1;
+  r.traction.window.uniqueBuyers10m = 8;
+  r.traction.window.earlyBuyers = 13;
+  // The cohort's later selling is not a window figure: it comes from the
+  // whole-life Transfer walk, so it is set where the card reads it.
+  r.earlySells = { cohort: 13, sold: 1 };
   return r;
 };
 

@@ -172,7 +172,7 @@ test('the PNG carries the market cap and the receipt, and clears the footer', as
       f('d', 'fourth', 50), f('u', 'x', 1, 'unknown'),
     ],
   });
-  r.traction.uniqueBuyers10m = 20;
+  r.traction.window.uniqueBuyers10m = 20;
   const svg = cardSvg(r);
 
   // Both were added to the text card and rendered here from hardcoded
@@ -210,7 +210,7 @@ test('when the body cannot fit, growth yields before the receipt does', async ()
       f('d', 'fourth', 50), f('u', 'x', 1, 'unknown'),
     ],
   });
-  r.traction.uniqueBuyers10m = 20;
+  r.traction.window.uniqueBuyers10m = 20;
   const svg = cardSvg(r);
   // The receipt is the one line here worth forwarding on its own; growth
   // restates the buyer count directly above it.

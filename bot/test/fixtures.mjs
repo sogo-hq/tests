@@ -43,24 +43,36 @@ export function makeScan(over = {}) {
       label: over.traction ?? 'none',
       // derived as production does: the window cannot exceed the token's age
       windowMinutes: over.windowMinutes ?? Math.min(30, ageSeconds / 60),
-      windowTruncated: false,
-      uniqueBuyers30m: over.buyers ?? 2,
-      uniqueBuyers10m: 2,
-      buyerGrowthRatio: 1,
-      buyTxCount: 2,
-      sellTxCount: 2,
-      buySellRatio: 1,
-      medianBuySize: over.medianBuySize ?? 0n,
-      meanBuySize: 0n,
-      progressAt10m: 0,
-      progressAt30m: 0,
-      peakProgressPct: 0,
-      progressVelocityPer10m: 0,
-      forwarderBuys: 0,
-      roundTrippers: over.roundTrippers ?? 2,
-      totalBuyVolume: 0n,
-      totalSellVolume: 0n,
+      // as production derives it: a token under 30 min has not had its window yet
+      windowTruncated: over.windowTruncated ?? ageSeconds < 1800,
+      // `windowIndexed: false` builds the unread-window case: every figure
+      // below becomes undetermined rather than zero.
+      window:
+        over.windowIndexed === false
+          ? null
+          : {
+              uniqueBuyers30m: over.buyers ?? 2,
+              uniqueBuyers10m: over.buyers10m ?? 2,
+              buyerGrowthRatio: 1,
+              buyTxCount: 2,
+              sellTxCount: 2,
+              buySellRatio: 1,
+              medianBuySize: over.medianBuySize ?? 0n,
+              meanBuySize: 0n,
+              progressAt10m: 0,
+              progressAt30m: 0,
+              progressPct: 0,
+              peakProgressPct: 0,
+              progressVelocityPer10m: 0,
+              forwarderBuys: 0,
+              roundTrippers: over.roundTrippers ?? 2,
+              earlyBuyers: over.earlyBuyers ?? over.buyers ?? 2,
+              earlyBuyersSold: over.earlyBuyersSold ?? 0,
+              totalBuyVolume: 0n,
+              totalSellVolume: 0n,
+            },
     },
+    earlySells: over.earlySells ?? null,
     flags: {
       flags,
       raised,

@@ -6,15 +6,22 @@ import {
   LAUNCH_FORWARDER,
 } from '../config.js';
 
-export type TractionLabel = 'none' | 'weak' | 'building' | 'strong';
+export type TractionLabel = 'undetermined' | 'none' | 'weak' | 'building' | 'strong';
 
-export interface TractionMetrics {
-  /** Blocks actually observed. Shorter than 30 min for a young token. */
-  windowBlocks: number;
-  windowMinutes: number;
-  /** True when the token is younger than 30 min, so the window is truncated. */
-  windowTruncated: boolean;
-
+/**
+ * Everything read out of the opening trade window.
+ *
+ * Reached only through `TractionMetrics.window`, which is null when that window
+ * was never indexed. That indirection is the point. These were flat fields, and
+ * an unindexed window and an empty one both produced zero -- so a graduated
+ * launch whose window had not been read rendered "no buyers yet" on a token
+ * that had crossed 4.2 ETH. Nothing was wrong with the renderer; it was handed
+ * a zero and had no way to ask whether anyone had looked.
+ *
+ * Now there is no number to hand it. The compiler makes every reader open the
+ * window first, and a window that was not read cannot be opened.
+ */
+export interface WindowMetrics {
   uniqueBuyers30m: number;
   uniqueBuyers10m: number;
   /** uniqueBuyers30m / uniqueBuyers10m. null when there were no buyers at +10m. */
@@ -39,20 +46,37 @@ export interface TractionMetrics {
   /** Distinct recipients that both bought and sold inside the window. */
   roundTrippers: number;
   /**
-   * Buyers from the opening window who have sold at ANY point since, including
-   * long after the window closed.
+   * Buyers in the opening window -- the cohort itself.
    *
-   * Different from roundTrippers, which only counts selling that happened
-   * inside the window itself. This is scoped to the opening population -- the
-   * one the exemption flag cares about -- and asks what became of it, so a
-   * wallet that bought in minute two and sold on day three is counted here and
-   * not there.
+   * What became of them afterwards is NOT here. It was, briefly, as
+   * `earlyBuyersSold`, computed as "appears in any sell row for this token".
+   * That reads as whole-life but is not: the trades table holds the opening
+   * window and nothing else, so it silently equalled `roundTrippers` and the
+   * card printed the same two numbers on two lines. It lives in
+   * metrics/earlysells.ts now, computed from the whole-life Transfer walk that
+   * can actually see it.
    */
   earlyBuyers: number;
-  earlyBuyersSold: number;
 
   totalBuyVolume: bigint;
   totalSellVolume: bigint;
+}
+
+export interface TractionMetrics {
+  /** Blocks actually observed. Shorter than 30 min for a young token. */
+  windowBlocks: number;
+  windowMinutes: number;
+  /** True when the token is younger than 30 min, so the window is truncated. */
+  windowTruncated: boolean;
+
+  /**
+   * The measurements, or null when the opening window has not been indexed.
+   *
+   * Null is not "nothing happened". It is "nobody has looked", and every figure
+   * derived from the window -- buyers, sells, round-trippers, growth, the
+   * benchmark comparison -- is undetermined until it is not null.
+   */
+  window: WindowMetrics | null;
 
   label: TractionLabel;
 }
@@ -93,12 +117,33 @@ export function computeTraction(
   launchBlock: number,
   currentBlock: number,
   graduationThreshold: bigint,
+  /**
+   * The block this token's trades are indexed through, from `coveredThrough`.
+   *
+   * Required, and null when nothing has been read. Without it this function
+   * could not tell an empty window from an unread one -- both are zero rows --
+   * and it reported the unread one as a fact about the chain.
+   */
+  coveredThrough: number | null,
 ): TractionMetrics {
   const windowEnd30 = launchBlock + WINDOW_30_MIN_BLOCKS;
   const windowEnd10 = launchBlock + WINDOW_10_MIN_BLOCKS;
   const observedEnd = Math.min(windowEnd30, currentBlock);
   const windowBlocks = Math.max(0, observedEnd - launchBlock);
   const windowMinutes = windowBlocks / BLOCKS_PER_MINUTE;
+
+  // Coverage has to reach the end of the stretch being measured, not merely
+  // exist. A window read halfway and then abandoned reports the buyers of its
+  // first half as though they were all of them.
+  if (coveredThrough === null || coveredThrough < observedEnd) {
+    return {
+      windowBlocks,
+      windowMinutes,
+      windowTruncated: currentBlock < windowEnd30,
+      window: null,
+      label: 'undetermined',
+    };
+  }
 
   const rows = db
     .prepare(
@@ -122,15 +167,6 @@ export function computeTraction(
   const sellerSet = new Set(sells.map((r) => r.trader));
   const roundTrippers = [...uniq30].filter((a) => sellerSet.has(a)).length;
 
-  // Every sell this token has ever had indexed, not just the ones inside the
-  // window, so "has since sold" means since -- not "sold before the window
-  // happened to close".
-  const everSold = new Set(
-    (db
-      .prepare(`SELECT DISTINCT trader FROM trades WHERE token = ? AND side = 'sell'`)
-      .all(token.toLowerCase()) as { trader: string }[]).map((r) => r.trader),
-  );
-  const earlyBuyersSold = [...uniq30].filter((a) => everSold.has(a)).length;
 
   const buySizes = buys.map((r) => BigInt(r.quote_amount));
   const totalBuy = buySizes.reduce((a, b) => a + b, 0n);
@@ -158,10 +194,7 @@ export function computeTraction(
   const peakProgressPct = pctOf(peak);
   const velocity = windowMinutes > 0 ? progressAt30m / (windowMinutes / 10) : 0;
 
-  const metrics: Omit<TractionMetrics, 'label'> = {
-    windowBlocks,
-    windowMinutes,
-    windowTruncated: currentBlock < windowEnd30,
+  const window: WindowMetrics = {
     uniqueBuyers30m: uniq30.size,
     uniqueBuyers10m: uniq10.size,
     buyerGrowthRatio: uniq10.size > 0 ? uniq30.size / uniq10.size : null,
@@ -178,12 +211,17 @@ export function computeTraction(
     forwarderBuys: buys.filter((r) => r.trader === fwd).length,
     roundTrippers,
     earlyBuyers: uniq30.size,
-    earlyBuyersSold,
     totalBuyVolume: totalBuy,
     totalSellVolume: totalSell,
   };
 
-  return { ...metrics, label: classify(metrics) };
+  return {
+    windowBlocks,
+    windowMinutes,
+    windowTruncated: currentBlock < windowEnd30,
+    window,
+    label: classify(window),
+  };
 }
 
 /**
@@ -191,7 +229,7 @@ export function computeTraction(
  * in the measured window -- it is not a forecast, and carries no view on what
  * the token will do next.
  */
-function classify(m: Omit<TractionMetrics, 'label'>): TractionLabel {
+function classify(m: WindowMetrics): TractionLabel {
   const buyers = m.uniqueBuyers30m;
   if (buyers === 0 || m.buyTxCount === 0) return 'none';
 

@@ -1,5 +1,5 @@
 import type { ScanResult } from './scan.js';
-import type { TractionMetrics } from './metrics/traction.js';
+import type { TractionMetrics, WindowMetrics } from './metrics/traction.js';
 import type { FlagResult } from './metrics/flags.js';
 import { DISCLAIMER, EXPLORER_URL } from './config.js';
 import { clamp, clampMessage, MAX_NAME, MAX_TICKER, TELEGRAM_MAX_MESSAGE } from './text.js';
@@ -56,32 +56,37 @@ function age(seconds: number): string {
  * The single strongest observed signal. This describes what the measured window
  * contains -- it is never a projection.
  */
-function strongestSignal(t: TractionMetrics, quote: string, quoteDecimals: number): string {
+function strongestSignal(
+  t: TractionMetrics,
+  w: WindowMetrics,
+  quote: string,
+  quoteDecimals: number,
+): string {
   const cands: { weight: number; text: string }[] = [];
 
-  if (t.uniqueBuyers30m > 0)
+  if (w.uniqueBuyers30m > 0)
     cands.push({
-      weight: t.uniqueBuyers30m,
-      text: `${t.uniqueBuyers30m} unique buyer${t.uniqueBuyers30m === 1 ? '' : 's'} in the first ${num(t.windowMinutes, 0)} min`,
+      weight: w.uniqueBuyers30m,
+      text: `${w.uniqueBuyers30m} unique buyer${w.uniqueBuyers30m === 1 ? '' : 's'} in the first ${num(t.windowMinutes, 0)} min`,
     });
-  if (t.buyerGrowthRatio !== null && t.buyerGrowthRatio > 1)
+  if (w.buyerGrowthRatio !== null && w.buyerGrowthRatio > 1)
     cands.push({
-      weight: t.buyerGrowthRatio * 12,
-      text: `buyer count grew ${ratioStr(t.buyerGrowthRatio)}x between +10 min and +${num(t.windowMinutes, 0)} min`,
+      weight: w.buyerGrowthRatio * 12,
+      text: `buyer count grew ${ratioStr(w.buyerGrowthRatio)}x between +10 min and +${num(t.windowMinutes, 0)} min`,
     });
-  if (t.buySellRatio !== null && t.buySellRatio > 1)
-    cands.push({ weight: t.buySellRatio * 8, text: `buys outnumber sells ${ratioStr(t.buySellRatio)} to 1` });
-  if (t.progressAt30m > 0)
-    cands.push({ weight: t.progressAt30m * 2.5, text: `curve at ${num(t.progressAt30m, 2)}% of graduation` });
-  if (t.progressVelocityPer10m > 0)
+  if (w.buySellRatio !== null && w.buySellRatio > 1)
+    cands.push({ weight: w.buySellRatio * 8, text: `buys outnumber sells ${ratioStr(w.buySellRatio)} to 1` });
+  if (w.progressAt30m > 0)
+    cands.push({ weight: w.progressAt30m * 2.5, text: `curve at ${num(w.progressAt30m, 2)}% of graduation` });
+  if (w.progressVelocityPer10m > 0)
     cands.push({
-      weight: t.progressVelocityPer10m * 2,
-      text: `progress accruing at ${num(t.progressVelocityPer10m, 2)}% per 10 min`,
+      weight: w.progressVelocityPer10m * 2,
+      text: `progress accruing at ${num(w.progressVelocityPer10m, 2)}% per 10 min`,
     });
-  if (t.medianBuySize > 0n && t.uniqueBuyers30m >= 5)
+  if (w.medianBuySize > 0n && w.uniqueBuyers30m >= 5)
     cands.push({
-      weight: t.uniqueBuyers30m * 0.8,
-      text: `median buy ${fmtUnits(t.medianBuySize, quoteDecimals)} ${quote} across ${t.buyTxCount} buys`,
+      weight: w.uniqueBuyers30m * 0.8,
+      text: `median buy ${fmtUnits(w.medianBuySize, quoteDecimals)} ${quote} across ${w.buyTxCount} buys`,
     });
 
   if (!cands.length) return 'no buying activity recorded in the measured window';
@@ -237,7 +242,16 @@ export function renderCard(r: ScanResult): string {
     ? ` (token is ${age(r.ageSeconds)} old — window truncated to ${num(t.windowMinutes, 0)} min)`
     : '';
   L.push(`<b>TRACTION  ${t.label}</b>${windowNote}`);
-  L.push(`  unique buyers, first ${num(t.windowMinutes, 0)} min: <b>${t.uniqueBuyers30m}</b>`);
+  const w = t.window;
+  if (!w) {
+    // Every line below reads the window. Printing them from an unread one is
+    // how "no buyers yet" reached a graduated launch, so the block says what is
+    // true -- that nobody has looked -- and stops.
+    L.push('  the first 30 minutes of this launch have not been indexed,');
+    L.push('  so buyers, sells, growth and round-trippers are all undetermined.');
+    L.push('');
+  } else {
+  L.push(`  unique buyers, first ${num(t.windowMinutes, 0)} min: <b>${w.uniqueBuyers30m}</b>`);
   // The reference point, with the sample behind it, so the comparison on the
   // default card can be audited rather than taken on trust.
   const b = r.benchmark;
@@ -251,18 +265,19 @@ export function renderCard(r: ScanResult): string {
       : `  buyer benchmark: ${b.median} — median over the same first ${windowLabel(b.windowMinutes)}, across ${b.n.toLocaleString()} indexed launches that reached it`,
   );
   L.push(`  age band: ${esc(b.bucket.label)}${b.measuredAtAge ? '' : ` (buyers counted over the first ${windowLabel(b.windowMinutes)}, not the full age)`}`);
-  L.push(`  buyer growth: ${t.uniqueBuyers10m} at +10 min → ${t.uniqueBuyers30m} at +${num(t.windowMinutes, 0)} min${t.buyerGrowthRatio !== null ? ` (${ratioStr(t.buyerGrowthRatio)}x)` : ''}`);
-  L.push(`  buy/sell tx: ${t.buyTxCount}/${t.sellTxCount}${t.buySellRatio !== null ? ` (${ratioStr(t.buySellRatio)}:1)` : t.buyTxCount ? ' (no sells)' : ''}`);
-  L.push(`  median buy: ${fmtUnits(t.medianBuySize, k.pairDecimals)} ${esc(quote)}`);
+  L.push(`  buyer growth: ${w.uniqueBuyers10m} at +10 min → ${w.uniqueBuyers30m} at +${num(t.windowMinutes, 0)} min${w.buyerGrowthRatio !== null ? ` (${ratioStr(w.buyerGrowthRatio)}x)` : ''}`);
+  L.push(`  buy/sell tx: ${w.buyTxCount}/${w.sellTxCount}${w.buySellRatio !== null ? ` (${ratioStr(w.buySellRatio)}:1)` : w.buyTxCount ? ' (no sells)' : ''}`);
+  L.push(`  median buy: ${fmtUnits(w.medianBuySize, k.pairDecimals)} ${esc(quote)}`);
   L.push(`  graduation progress: ${num(k.progressPct, 3)}%`);
-  L.push(`  progress velocity: ${num(t.progressVelocityPer10m, 3)}% per 10 min`);
-  if (t.peakProgressPct > k.progressPct + 0.01)
-    L.push(`  peak progress in window: ${num(t.peakProgressPct, 3)}% (since retraced)`);
-  if (t.roundTrippers > 0)
-    L.push(`  round-trippers: ${t.roundTrippers} of ${t.uniqueBuyers30m} buyers also sold`);
-  if (t.forwarderBuys > 0)
+  L.push(`  progress velocity: ${num(w.progressVelocityPer10m, 3)}% per 10 min`);
+  if (w.peakProgressPct > k.progressPct + 0.01)
+    L.push(`  peak progress in window: ${num(w.peakProgressPct, 3)}% (since retraced)`);
+  if (w.roundTrippers > 0)
+    L.push(`  round-trippers: ${w.roundTrippers} of ${w.uniqueBuyers30m} buyers also sold`);
+  if (w.forwarderBuys > 0)
     L.push(`  creator opening buy present in the launch transaction`);
   L.push('');
+  }
 
   // What the deployer did with its own supply. /full only: it is context
   // rather than a decision input, and the default card is read in the first
@@ -284,7 +299,11 @@ export function renderCard(r: ScanResult): string {
     ? `${f.worst.label.toLowerCase()} — ${f.worst.detail}`
     : 'no flags raised';
   L.push(
-    `<b>Strongest signal:</b> ${esc(strongestSignal(t, quote, k.pairDecimals))}. ` +
+    `<b>Strongest signal:</b> ${esc(
+      t.window
+        ? strongestSignal(t, t.window, quote, k.pairDecimals)
+        : 'undetermined — the opening window has not been indexed',
+    )}. ` +
       `<b>Worst flag:</b> ${esc(worst)}.`,
   );
   L.push('');
@@ -499,18 +518,34 @@ export function defaultTicker(r: ScanResult): string {
  * data; raw counts carry the same information without pretending to a
  * conclusion.
  */
+/**
+ * How to say "nobody bought" without implying the window is over.
+ *
+ * A token twelve minutes old genuinely has not had its thirty minutes yet, so
+ * "yet" is the true word. A twenty-three-day-old launch has had them, and "yet"
+ * quietly reads as "still early" on a token whose story finished weeks ago.
+ */
+function noBuyersPhrase(t: TractionMetrics): string {
+  return t.windowTruncated
+    ? 'no buyers yet'
+    : `no buyers in the first ${Math.round(t.windowMinutes)} min`;
+}
+
 export function activityLine(r: ScanResult): string {
-  const t = r.traction;
-  const buyers = t.uniqueBuyers30m;
+  const w = r.traction.window;
   const progress = `${formatProgress(r.reads.progressPct)}%`;
-  if (buyers === 0) return `no buyers yet \u00b7 ${progress}`;
+  // Progress comes off the curve's own reserve, so it stands whether or not the
+  // window was read. The buyer count does not.
+  if (!w) return `buyers undetermined \u00b7 ${progress}`;
+  const buyers = w.uniqueBuyers30m;
+  if (buyers === 0) return `${noBuyersPhrase(r.traction)} \u00b7 ${progress}`;
 
   const sold =
-    t.roundTrippers >= buyers
+    w.roundTrippers >= buyers
       ? buyers === 2
         ? 'both already sold'
         : 'all already sold'
-      : `${t.roundTrippers} sold`;
+      : `${w.roundTrippers} sold`;
   return `${buyers} buyer${buyers === 1 ? '' : 's'} \u00b7 ${sold} \u00b7 ${progress}`;
 }
 
@@ -535,8 +570,14 @@ function windowLabel(minutes: number): string {
 }
 
 export function buyerLine(r: ScanResult): string {
-  const buyers = r.traction.uniqueBuyers30m;
-  const head = buyers === 0 ? 'no buyers yet' : `${buyers} buyer${buyers === 1 ? '' : 's'}`;
+  const w = r.traction.window;
+  // The one line that says why every other window figure is missing. Without a
+  // count there is nothing for the benchmark to compare against either, so the
+  // reference point goes with it rather than sitting beside a blank.
+  if (!w) return 'buyers undetermined \u2014 the first 30 min are not indexed';
+  const buyers = w.uniqueBuyers30m;
+  const head =
+    buyers === 0 ? noBuyersPhrase(r.traction) : `${buyers} buyer${buyers === 1 ? '' : 's'}`;
   const b = r.benchmark;
   if (b.median === null) return head;
   // "at this age" is only true while the window IS the token's life. Past the
@@ -594,18 +635,22 @@ export function graduationProgress(r: ScanResult): string | null {
 }
 
 export function sellingLine(r: ScanResult): string {
-  const t = r.traction;
-  const buyers = t.uniqueBuyers30m;
+  const w = r.traction.window;
   const progress = graduationProgress(r);
-  if (buyers === 0) return progress ?? 'no buyers and no reserve read yet';
+  // With no window there is nothing to say about selling. The graduation
+  // distance is a curve read and survives on its own; buyerLine has already
+  // said why the rest is missing, so this does not repeat it.
+  if (!w) return progress ?? '';
+  const buyers = w.uniqueBuyers30m;
+  if (buyers === 0) return progress ?? '';
   const sold =
-    t.roundTrippers === 0
+    w.roundTrippers === 0
       ? 'none sold yet'
-      : t.roundTrippers >= buyers
+      : w.roundTrippers >= buyers
         ? buyers === 2
           ? 'both already sold'
           : 'all already sold'
-        : `${t.roundTrippers} of ${buyers} sold`;
+        : `${w.roundTrippers} of ${buyers} sold`;
   return progress ? `${sold} \u00b7 ${progress}` : sold;
 }
 
@@ -621,9 +666,12 @@ export function sellingLine(r: ScanResult): string {
  * not a measurement.
  */
 export function earlySellLine(r: ScanResult): string | null {
-  const t = r.traction;
-  if (!t.earlyBuyers) return null;
-  return `${t.earlyBuyersSold} of ${t.earlyBuyers} early buyers sold`;
+  // Absent, not "undetermined", when it cannot be measured: buyerLine states
+  // the unread-window case once for the whole group, and four lines each saying
+  // the same thing about the same unread window is noise rather than honesty.
+  const e = r.earlySells;
+  if (!e || !e.cohort) return null;
+  return `${e.sold} of ${e.cohort} early buyers sold`;
 }
 
 export function concentrationLine(r: ScanResult): string | null {
@@ -649,8 +697,9 @@ export function concentrationLine(r: ScanResult): string | null {
  */
 export function growthLine(r: ScanResult): string | null {
   const t = r.traction;
-  if (t.windowMinutes < 10 || t.uniqueBuyers30m === 0) return null;
-  return `buyers ${t.uniqueBuyers10m} \u2192 ${t.uniqueBuyers30m} in ${Math.round(t.windowMinutes)} min`;
+  const w = t.window;
+  if (!w || t.windowMinutes < 10 || w.uniqueBuyers30m === 0) return null;
+  return `buyers ${w.uniqueBuyers10m} \u2192 ${w.uniqueBuyers30m} in ${Math.round(t.windowMinutes)} min`;
 }
 
 /**

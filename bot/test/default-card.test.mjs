@@ -38,7 +38,7 @@ test('nothing-raised card matches the specified shape exactly', () => {
     progressPct: 12.4, windowMinutes: 20, flagsTotal: 8,
     flags: [f('a', 'x', 5, 'unknown'), f('b', 'y', 5, 'unknown')],
   });
-  r.traction.uniqueBuyers10m = 12;
+  r.traction.window.uniqueBuyers10m = 12;
   assert.deepEqual(renderDefaultCard(r, 'vitalscheck_bot').split('\n'), [
     'VITALS  $TOKEN · 20m',
     '',
@@ -173,7 +173,16 @@ test('the buyer count stands alone, with what happened to them on the next line'
   const buyer = (over) => lines(over).find((l) => /^\d+ buyer|^no buyers/.test(l));
   const rest = (over) => lines(over).find((l) => /to graduation$/.test(l));
 
-  assert.equal(buyer({ buyers: 0, roundTrippers: 0, progressPct: 0 }), 'no buyers yet');
+  // "yet" belongs to a window that is still open. The default fixture is
+  // exactly 30 minutes old, so its window has closed and "yet" would read as
+  // "still early" on a launch whose opening is over -- the same wrong tense
+  // that put "no buyers yet" on a 23-day-old graduated token.
+  assert.equal(buyer({ buyers: 0, roundTrippers: 0, progressPct: 0 }), 'no buyers in the first 30 min');
+  assert.equal(
+    buyer({ ageSeconds: 300, windowMinutes: 5, buyers: 0, roundTrippers: 0, progressPct: 0 }),
+    'no buyers yet',
+    'a token still inside its window has genuinely not had its buyers yet',
+  );
   assert.equal(rest({ buyers: 0, roundTrippers: 0, progressPct: 0 }), '0 of 4.2 ETH to graduation');
   assert.equal(buyer({ buyers: 1, roundTrippers: 0, progressPct: 1 }), '1 buyer');
   assert.equal(rest({ buyers: 1, roundTrippers: 0, progressPct: 1, realQuoteReserve: 42000000000000000n }),
@@ -192,7 +201,10 @@ test('the buyer count carries its reference point, and only above the floor', ()
   assert.equal(buyer({ buyers: 5, benchmarkMedian: null, benchmarkN: 12 }), '5 buyers');
   assert.equal(buyer({ buyers: 5, benchmarkMedian: 3, benchmarkN: 412 }), '5 buyers \u2014 median at this age is 3');
   assert.equal(buyer({ buyers: 38, benchmarkMedian: 12, benchmarkN: 412 }), '38 buyers \u2014 median at this age is 12');
-  assert.equal(buyer({ buyers: 0, benchmarkMedian: 3, benchmarkN: 412 }), 'no buyers yet \u2014 median at this age is 3');
+  assert.equal(
+    buyer({ buyers: 0, benchmarkMedian: 3, benchmarkN: 412 }),
+    'no buyers in the first 30 min \u2014 median at this age is 3',
+  );
 });
 
 test('"at this age" is claimed only when the measurement really was at that age', () => {
@@ -441,7 +453,7 @@ test('the card is bounded at 14 lines with every optional line rendering', () =>
       f('d', 'fourth concern', 70), f('e', 'undetermined one', 1, 'unknown'),
     ],
   });
-  r.traction.uniqueBuyers10m = 12;
+  r.traction.window.uniqueBuyers10m = 12;
   const lines = renderDefaultCard(r, 'vitalscheck_bot').split('\n');
   // header, blank, the lifted concern, blank, two more, "+N more", blank,
   // buyers, concentration, sold, growth, blank, footer. Fourteen: it gained the
@@ -498,7 +510,7 @@ test('card order: concerns, then the buyer count, then concentration, then the r
     concentration: { top5Share: 44.2, holders: 23, circulating: 1n },
     flags: [f('snipe', '8 wallets got in tax-free before you could', 108)],
   });
-  r.traction.uniqueBuyers10m = 12;
+  r.traction.window.uniqueBuyers10m = 12;
   assert.deepEqual(renderDefaultCard(r, 'vitalscheck_bot').split('\n'), [
     'VITALS  $TOKEN \u00b7 20m',
     '',
