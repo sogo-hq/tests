@@ -1,7 +1,8 @@
 import { parseAbiItem, type Address } from 'viem';
 import { getLogsAdaptive } from '../chain.js';
 import { db } from '../db.js';
-import { NON_HOLDER_ADDRESSES } from '../config.js';
+import { NON_HOLDER_ADDRESSES, BLOCK_TIME_SECONDS } from '../config.js';
+import { deployerActivityFrom } from './deployer.js';
 
 /**
  * Holder concentration: how much of the circulating supply the top five wallets
@@ -423,6 +424,10 @@ export async function refreshConcentration(
 
   let blocksRead = 0;
   let chunks = 0;
+  // Kept so the deployer aggregation can see the whole history rather than the
+  // last chunk of it.
+  const allLogs: any[] = [];
+  let pendingDeployerActivity: unknown = null;
   let readTo = from - 1n;
   let complete = true;
   for (let start = from; start <= head; start += BigInt(REFRESH_CHUNK_BLOCKS)) {
@@ -441,12 +446,29 @@ export async function refreshConcentration(
     const end = start + BigInt(REFRESH_CHUNK_BLOCKS) - 1n > head ? head : start + BigInt(REFRESH_CHUNK_BLOCKS) - 1n;
     const logs = await getLogsAdaptive({ address: token as Address, event: Transfer, fromBlock: start, toBlock: end });
     applyTransfers(balances, logs);
+    allLogs.push(...logs);
     blocksRead += Number(end - start) + 1;
     readTo = end;
     chunks++;
   }
 
   const concentration = summarise(balances, excluded);
+
+  // The deployer's movements come out of the same logs, so they are computed
+  // here rather than costing a scan a second read of them. Only on a complete
+  // read: a partial walk would report "unchanged since launch" for a deployer
+  // whose transfers are simply in the part not yet visited.
+  if (complete) {
+    const row = db
+      .prepare('SELECT deployer, block_number FROM launches WHERE token = ?')
+      .get(token.toLowerCase()) as { deployer: string; block_number: number } | undefined;
+    if (row) {
+      const activity = deployerActivityFrom(
+        allLogs, token, row.deployer, curve, BigInt(row.block_number), BLOCK_TIME_SECONDS,
+      );
+      if (activity) pendingDeployerActivity = activity;
+    }
+  }
 
   // Zero balances are dropped before storing: they are not holders and keeping
   // them grows the blob without end on a token people trade in and out of.
@@ -481,5 +503,34 @@ export async function refreshConcentration(
     ).run(token.toLowerCase(), concentration.top5Share, concentration.top1Share, concentration.holders, excess ?? 0, now, JSON.stringify(keep), Number(readTo));
   }
 
+  if (pendingDeployerActivity) storeDeployerActivity(token, pendingDeployerActivity);
+
   return { concentration, blocksRead, incremental, complete };
+}
+
+
+/**
+ * Deployer activity, stored beside the holder reading that produced it.
+ *
+ * Both come from the same Transfer log. Reading it twice cost every scan two
+ * seconds of its five-second budget for a line that only appears in /full --
+ * so it is computed once, in the background refresh that already walks those
+ * logs, and served from here for nothing.
+ */
+export function storeDeployerActivity(token: string, activity: unknown): void {
+  db.prepare('UPDATE holder_snapshots SET deployer_activity = ? WHERE token = ?')
+    .run(JSON.stringify(activity), token.toLowerCase());
+}
+
+export function readStoredDeployerActivity<T>(token: string): T | null {
+  const row = db
+    .prepare('SELECT deployer_activity FROM holder_snapshots WHERE token = ?')
+    .get(token.toLowerCase()) as { deployer_activity: string | null } | undefined;
+  if (!row?.deployer_activity) return null;
+  try {
+    return JSON.parse(row.deployer_activity) as T;
+  } catch (err) {
+    console.warn(`[holders] unreadable deployer activity for ${token.slice(0, 10)}:`, String((err as Error)?.message ?? err).slice(0, 80));
+    return null;
+  }
 }

@@ -9,6 +9,7 @@ import { computeTraction, type TractionMetrics } from './metrics/traction.js';
 import { computeFlags, type FlagResult } from './metrics/flags.js';
 import { buyerBenchmark, type BuyerBenchmark } from './metrics/benchmark.js';
 import {
+  readStoredDeployerActivity,
   readStoredConcentration,
   refreshConcentration,
   hasStoredBalances,
@@ -17,12 +18,7 @@ import {
 import { queueHolderRefresh } from './indexer/windows.js';
 import { PhaseTimer, Budget, withDeadline } from './timing.js';
 import { firstScan, type FirstScan } from './history.js';
-import { readDeployerActivity, type DeployerActivity } from './metrics/deployer.js';
-
-/** The launch time to measure the deployer's first move from. */
-function launchedAtExactForDeployer(reads: TokenReads, launch: { launchedAt: number }): number {
-  return reads.launchedAt > 0 ? reads.launchedAt : launch.launchedAt;
-}
+import { type DeployerActivity } from './metrics/deployer.js';
 import { SCAN_BUDGET_MS, CONCENTRATION_DEADLINE_MS } from './config.js';
 import { isRateLimit } from './ratelimit.js';
 import { TokenLaunched } from './abi.js';
@@ -387,22 +383,12 @@ async function scanTokenInner(token: string, requestedBy?: number): Promise<Scan
   // next one to be current. Deduplicated, bulk priority, off the critical path.
   queueHolderRefresh(reads.token, reads.curve, launch.block);
 
-  // The deployer's own movements. Bounded by the same deadline as the holder
-  // read and only attempted when that one was served from the index, so it can
-  // never be the reason a card is late -- it appears in /full, which nobody is
-  // staring at in the first ten seconds of a launch.
-  let deployerActivity: DeployerActivity | null = null;
-  if (fromIndex) {
-    deployerActivity = await timer.time('deployer', () =>
-      withDeadline(
-        readDeployerActivity(
-          reads.token, reads.deployer, reads.curve,
-          BigInt(launch.block), head, launchedAtExactForDeployer(reads, launch), BLOCK_TIME_SECONDS,
-        ).catch(() => null),
-        budget.allowanceFor(CONCENTRATION_DEADLINE_MS),
-        null,
-      ));
-  }
+  // The deployer's own movements, from the store rather than the chain. Read
+  // live it spent its full two-second deadline on every scan -- two fifths of
+  // the budget, for a line that only appears in /full. It comes from the same
+  // Transfer log the holder reading walks, so the background refresh computes
+  // both and this costs nothing.
+  const deployerActivity = readStoredDeployerActivity<DeployerActivity>(reads.token);
 
   const flags = computeFlags({
     token: reads.token,

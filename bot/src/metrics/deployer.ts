@@ -1,5 +1,3 @@
-import { parseAbiItem, type Address } from 'viem';
-import { getLogsAdaptive } from '../chain.js';
 import { NON_HOLDER_ADDRESSES } from '../config.js';
 
 /**
@@ -13,7 +11,6 @@ import { NON_HOLDER_ADDRESSES } from '../config.js';
  * Undetermined when the transfers cannot be read, like everything else here.
  */
 
-const Transfer = parseAbiItem('event Transfer(address indexed from,address indexed to,uint256 value)');
 const ZERO = '0x0000000000000000000000000000000000000000';
 
 export interface DeployerActivity {
@@ -29,31 +26,25 @@ export interface DeployerActivity {
   startedPct: number;
 }
 
+
 /**
- * Read the deployer's side of the token's Transfer log.
+ * Aggregate a deployer's movements from Transfer logs already in hand.
  *
- * Scoped to one address's movements rather than the whole distribution, so it
- * is a filter over logs already fetched for concentration rather than a second
- * expensive read when both are wanted.
+ * Takes the logs rather than fetching them: the background holder refresh
+ * walks exactly these to compute the distribution, so producing this at the
+ * same time costs nothing. Fetching them again put two seconds on every scan
+ * for a line that only appears in /full.
  */
-export async function readDeployerActivity(
+export function deployerActivityFrom(
+  logs: readonly any[],
   token: string,
   deployer: string,
   curve: string,
   launchBlock: bigint,
-  head: bigint,
-  launchedAt: number,
   blockTimeSeconds: number,
-): Promise<DeployerActivity | null> {
+): DeployerActivity | null {
   const dep = deployer.toLowerCase();
   const excluded = new Set([...NON_HOLDER_ADDRESSES, curve.toLowerCase(), token.toLowerCase()]);
-
-  const logs = await getLogsAdaptive({
-    address: token as Address,
-    event: Transfer,
-    fromBlock: launchBlock,
-    toBlock: head,
-  });
   if (!logs.length) return null;
 
   const bal = new Map<string, bigint>();
@@ -67,7 +58,6 @@ export async function readDeployerActivity(
     const v = l.args.value as bigint;
     if (from !== ZERO) bal.set(from, (bal.get(from) ?? 0n) - v);
     if (to !== ZERO) bal.set(to, (bal.get(to) ?? 0n) + v);
-
     if (to === dep) received += v;
     if (from === dep) {
       if (firstOutBlock === null) firstOutBlock = Number(l.blockNumber);
