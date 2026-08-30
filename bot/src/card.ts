@@ -600,6 +600,23 @@ export function sellingLine(r: ScanResult): string {
   return progress ? `${sold} \u00b7 ${progress}` : sold;
 }
 
+/**
+ * What became of the wallets that got in first.
+ *
+ * "1 of 13 early buyers sold" -- the opening window's population, and how many
+ * of them have sold at any point since. The ratio and nothing else: no label,
+ * no threshold, no word for whether one in thirteen is a lot. A reader who
+ * knows the token decides that.
+ *
+ * Absent when the window holds no buyers, because a ratio out of nothing is
+ * not a measurement.
+ */
+export function earlySellLine(r: ScanResult): string | null {
+  const t = r.traction;
+  if (!t.earlyBuyers) return null;
+  return `${t.earlyBuyersSold} of ${t.earlyBuyers} early buyers sold`;
+}
+
 export function concentrationLine(r: ScanResult): string | null {
   const c = r.flags.concentration;
   if (!c || c.holders < MIN_HOLDERS_FOR_SHARE) return null;
@@ -639,66 +656,101 @@ export function growthLine(r: ScanResult): string | null {
  * not an all-clear: it means the checks that ran found nothing, which is why the
  * count of what ran, and of what could not be determined, is stated beside it.
  */
-export function renderDefaultCard(r: ScanResult, botUsername?: string): string {
+/**
+ * One card, described once.
+ *
+ * The PNG has silently missed three features -- the growth line, the market
+ * cap, the first-scan receipt -- because it built its own header and its own
+ * list of body lines from the same ScanResult. Each time nothing failed,
+ * because nothing asked: a renderer that forgets a line produces a perfectly
+ * valid smaller card. Every assertion added after those was a patch on one
+ * line at a time.
+ *
+ * So the card is a list of lines with roles, produced once. The text renderer
+ * joins them; the image draws them by role. A line added here appears in both
+ * or in neither, and "in neither" is a visible absence rather than a silent
+ * one.
+ */
+export type CardRole =
+  | 'header'
+  | 'concern-top'
+  | 'concern'
+  | 'extras'
+  | 'summary'
+  | 'measure'
+  | 'measure-dim'
+  | 'spacer'
+  | 'footer';
+
+export interface CardLine {
+  text: string;
+  role: CardRole;
+}
+
+export function cardLines(r: ScanResult, botUsername?: string): CardLine[] {
   const f = r.flags;
-  const L: string[] = [];
+  const L: CardLine[] = [];
+  const push = (role: CardRole, text: string) => L.push({ role, text });
 
   const mc = headerMcap(r);
-  L.push(`VITALS  ${defaultTicker(r)} \u00b7 ${headerAge(r.ageSeconds)}${mc ? ` \u00b7 ${mc}` : ''}`);
-  L.push('');
+  push('header', `VITALS  ${defaultTicker(r)} \u00b7 ${headerAge(r.ageSeconds)}${mc ? ` \u00b7 ${mc}` : ''}`);
+  push('spacer', '');
 
   const raised = f.flags
     .filter((fl) => fl.state === 'raised')
     .sort((a, b) => b.severity - a.severity);
 
   if (raised.length) {
-    // The worst one, alone, with room around it.
-    //
-    // Every concern used to render at the same weight behind the same marker,
-    // so three of them competed and none of them landed -- two testers
-    // independently said the worst one did not stand out. The ordering that
-    // picks it has always been here; this only makes it visible. It is
-    // emphasis and nothing more: no new judgement, no second opinion, and the
-    // ones below are still there to be read.
-    L.push(`\u26a0\ufe0f ${plainField(raised[0]!.plain, 70)}`);
+    // The worst one, alone, with room around it. The ordering that picks it has
+    // always been here; this only makes it visible. Emphasis and nothing more:
+    // no new judgement, and the ones below are still there to be read.
+    push('concern-top', `\u26a0\ufe0f ${plainField(raised[0]!.plain, 70)}`);
 
-    const rest: string[] = raised
+    const rest: CardLine[] = raised
       .slice(1, MAX_DEFAULT_FLAGS)
-      .map((fl) => `\u00b7 ${plainField(fl.plain, 70)}`);
+      .map((fl) => ({ role: 'concern' as CardRole, text: `\u00b7 ${plainField(fl.plain, 70)}` }));
 
     const hidden = raised.length - MAX_DEFAULT_FLAGS;
     const extras: string[] = [];
     if (hidden > 0) extras.push(`+${hidden} more`);
     // Undetermined is never dropped, even when the flag slots are full.
     if (f.unknown > 0) extras.push(`${f.unknown} undetermined`);
-    if (extras.length) rest.push(`${extras.join(' \u00b7 ')} \u00b7 /full`);
+    if (extras.length) rest.push({ role: 'extras', text: `${extras.join(' \u00b7 ')} \u00b7 /full` });
 
-    // The blank line belongs to the top concern, so it is only spent when
-    // something follows. One concern and nothing else leaves a single break
-    // before the measurements rather than two.
-    if (rest.length) L.push('', ...rest);
+    // The blank belongs to the top concern, so it is only spent when something
+    // follows. One concern and nothing else leaves a single break.
+    if (rest.length) {
+      push('spacer', '');
+      L.push(...rest);
+    }
   } else {
     const parts = [`no concerns raised \u00b7 ${f.total - f.unknown} of ${f.total} checked`];
     if (f.unknown > 0) parts.push(`${f.unknown} undetermined`);
-    L.push(parts.join(' \u00b7 '));
+    push('summary', parts.join(' \u00b7 '));
   }
 
   // Concerns, then the one number a reader can act on, then who holds it, then
   // the rest. The first line after the flags is the most decision-relevant fact
-  // available: a buyer count that finally means something next to its peers.
-  L.push('');
-  L.push(buyerLine(r));
-  const conc = concentrationLine(r);
-  if (conc) L.push(conc);
-  L.push(sellingLine(r));
-  const growth = growthLine(r);
-  if (growth) L.push(growth);
-  const first = firstScanLine(r);
-  if (first) L.push(first);
+  // available.
+  push('spacer', '');
+  push('measure', buyerLine(r));
+  for (const line of [
+    concentrationLine(r),
+    sellingLine(r),
+    growthLine(r),
+    earlySellLine(r),
+    firstScanLine(r),
+  ]) {
+    if (line) push('measure-dim', line);
+  }
 
-  L.push('');
-  L.push(botUsername ? `@${plainField(botUsername, 40)} \u00b7 ${PLAIN_FOOTER}` : PLAIN_FOOTER);
-  return L.join('\n');
+  push('spacer', '');
+  push('footer', botUsername ? `@${plainField(botUsername, 40)} \u00b7 ${PLAIN_FOOTER}` : PLAIN_FOOTER);
+  return L;
+}
+
+export function renderDefaultCard(r: ScanResult, botUsername?: string): string {
+  return cardLines(r, botUsername).map((l) => l.text).join('\n');
 }
 
 /** Default card for an address the factory has no record of. */

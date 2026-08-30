@@ -3,10 +3,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 import type { ScanResult } from './scan.js';
-import {
-  defaultTicker, headerAge, headerMcap, buyerLine, concentrationLine, sellingLine, growthLine,
-  firstScanLine, MAX_DEFAULT_FLAGS,
-} from './card.js';
+import { cardLines, type CardLine } from './card.js';
 
 /**
  * Optional PNG render of the default card.
@@ -145,136 +142,77 @@ export function cardSvg(r: ScanResult, renderedAt = new Date()): string {
   parts.push(text(PAD, PAD + 26, 'VITALS', { size: 30, fill: ACCENT, weight: 600 }));
   parts.push(text(WIDTH - PAD, PAD + 24, utcStamp(renderedAt), { size: 20, fill: DIM, anchor: 'end' }));
 
+  // --- everything below the wordmark, from the card itself --------------------
+  // The card describes itself once, as a list of lines with roles, and this
+  // draws them. It used to build its own header and its own list of body lines
+  // from the same ScanResult, and silently missed three features that way --
+  // the growth line, the market cap, the first-scan receipt. Each time nothing
+  // failed, because a renderer that forgets a line still produces a valid
+  // smaller picture. Now a line added to the card appears here or nowhere.
+  const lines = cardLines(r);
+  const header = lines.find((l: CardLine) => l.role === 'header');
+  const body = lines.filter(
+    (l: CardLine) => l.role !== 'header' && l.role !== 'footer' && l.role !== 'spacer',
+  );
+
   // --- identity -------------------------------------------------------------
-  // The market cap rides with the identity, exactly as it does on the text
-  // card. It was absent here entirely: the image built its own header instead
-  // of asking the card for one, so a feature added to the card silently did not
-  // reach the picture of it.
-  const mc = headerMcap(r);
-  const ticker = `${defaultTicker(r)} · ${headerAge(r.ageSeconds)}${mc ? ` · ${mc}` : ''}`;
-  parts.push(text(PAD, 176, ticker, { size: fitSize(ticker, CONTENT_W, 52, 22), fill: INK, weight: 600 }));
+  // The card's own header line, minus the wordmark the picture draws already.
+  const ticker = (header?.text ?? '').replace(/^VITALS\s+/, '');
+  parts.push(text(PAD, 158, ticker, { size: fitSize(ticker, CONTENT_W, 52, 22), fill: INK, weight: 600 }));
 
   // The address in full, so a reader can verify what they are looking at.
   const addr = r.reads.token;
-  parts.push(text(PAD, 214, addr, { size: fitSize(addr, CONTENT_W, 22, 14), fill: DIM }));
+  parts.push(text(PAD, 194, addr, { size: fitSize(addr, CONTENT_W, 22, 14), fill: DIM }));
 
-  parts.push(`<rect x="${PAD}" y="252" width="${CONTENT_W}" height="1" fill="${DIM}" opacity="0.35"/>`);
+  parts.push(`<rect x="${PAD}" y="226" width="${CONTENT_W}" height="1" fill="${DIM}" opacity="0.35"/>`);
 
-  // --- concerns, or what was checked ---------------------------------------
-  // Identical treatment either way: same colours, same sizes, same positions.
-  // Nothing in the styling says good or bad -- only the words differ.
-  const ZONE_TOP = 272;
-  const ZONE_BOTTOM = 408;
-  const FLAG_LEADING = 42;
-  const EXTRA_LEADING = 30;
+  // --- the body, by role ----------------------------------------------------
+  // Nothing in the styling says good or bad: emphasis is size and tone only,
+  // because a colour here would be read as a verdict and this card gives none.
+  // Markers are drawn rather than typed -- no bundled font subset carries a
+  // warning glyph or a square, and a missing one renders as tofu.
+  const STYLE: Record<string, { size: number; min: number; fill: string; weight?: number; indent: number; leading: number }> = {
+    'concern-top': { size: 31, min: 18, fill: INK, weight: 600, indent: 34, leading: 40 },
+    concern: { size: 23, min: 15, fill: DIM, indent: 30, leading: 27 },
+    extras: { size: 21, min: 14, fill: DIM, indent: 30, leading: 30 },
+    summary: { size: 28, min: 16, fill: INK, indent: 0, leading: 40 },
+    measure: { size: 29, min: 18, fill: INK, indent: 0, leading: 31 },
+    'measure-dim': { size: 22, min: 14, fill: DIM, indent: 0, leading: 25 },
+  };
 
-  const raised = f.flags
-    .filter((fl) => fl.state === 'raised')
-    .sort((a, b) => b.severity - a.severity);
-  const shown = raised.slice(0, MAX_DEFAULT_FLAGS);
+  // Laid out from a fixed top and flowed downward, stopping at the footer rule
+  // rather than being drawn over it. Nothing is silently dropped without the
+  // count saying so.
+  const TOP = 262;
+  const LIMIT = 540;
+  let y = TOP;
+  let dropped = 0;
 
-  const hidden = raised.length - MAX_DEFAULT_FLAGS;
-  const extras: string[] = [];
-  if (raised.length) {
-    if (hidden > 0) extras.push(`+${hidden} more`);
-    if (f.unknown > 0) extras.push(`${f.unknown} undetermined`);
-  }
-  const extraLine = extras.length ? `${extras.join(' · ')} · /full` : null;
+  for (const line of body) {
+    const st = STYLE[line.role] ?? STYLE['measure-dim']!;
+    if (y > LIMIT) { dropped++; continue; }
+    // A gap before the measurements, matching the card's blank line.
+    if (line.role === 'measure' && y > TOP) y += 10;
 
-  // Centred in its zone so one concern does not leave a hole where three would
-  // sit, and three cannot spill into the measurements below.
-  // Height of what is about to be drawn, so the block stays centred in its zone
-  // rather than growing into the measurements below it.
-  const blockHeight =
-    (shown.length
-      ? FLAG_LEADING + (shown.length > 1 ? 12 + (shown.length - 1) * EXTRA_LEADING : 0)
-      : FLAG_LEADING) +
-    (extraLine ? EXTRA_LEADING : 0);
-  // Centred in its zone when there is room, but never lower than its own top:
-  // the measurements below flow from wherever this ends, so a tall concern
-  // block pushes them down rather than being drawn over by them.
-  let y = ZONE_TOP + Math.max(0, (ZONE_BOTTOM - ZONE_TOP - blockHeight) / 2) + 16;
-
-  if (shown.length) {
-    // Same shape as the text card: the worst one alone and larger, the rest
-    // below it at a lower weight. Emphasis by size and tone only -- no colour
-    // is spent on it, because a red or a green here would be read as a verdict
-    // and this card does not give one.
-    //
-    // Markers are drawn, not typed: no bundled font subset carries a warning
-    // glyph or a square, and a missing one renders as tofu. A triangle for the
-    // one that matters, small squares for the others.
-    const [top, ...rest] = shown;
-    const topSize = fitSize(top!.plain, CONTENT_W - 34, 32, 18);
-    parts.push(
-      `<path d="M ${PAD + 11} ${y - 20} L ${PAD + 22} ${y - 2} L ${PAD} ${y - 2} Z" fill="${INK}"/>`,
-    );
-    parts.push(text(PAD + 34, y, top!.plain, { size: topSize, fill: INK, weight: 600 }));
-    y += FLAG_LEADING;
-
-    if (rest.length) {
-      y += 12; // the gap that does the lifting, matching the card's blank line
-      for (const fl of rest) {
-        parts.push(`<rect x="${PAD + 3}" y="${y - 11}" width="8" height="8" fill="${DIM}"/>`);
-        parts.push(text(PAD + 30, y, fl.plain, { size: fitSize(fl.plain, CONTENT_W - 30, 24, 15), fill: DIM }));
-        y += EXTRA_LEADING;
-      }
+    if (line.role === 'concern-top') {
+      parts.push(`<path d="M ${PAD + 11} ${y - 20} L ${PAD + 22} ${y - 2} L ${PAD} ${y - 2} Z" fill="${INK}"/>`);
+    } else if (line.role === 'concern') {
+      parts.push(`<rect x="${PAD + 3}" y="${y - 11}" width="8" height="8" fill="${DIM}"/>`);
     }
-  } else {
-    const bits = [`no concerns raised · ${f.total - f.unknown} of ${f.total} checked`];
-    if (f.unknown > 0) bits.push(`${f.unknown} undetermined`);
-    const line = bits.join(' · ');
-    parts.push(text(PAD, y, line, { size: fitSize(line, CONTENT_W, 28, 16), fill: INK }));
-    y += FLAG_LEADING;
-  }
-  if (extraLine) {
-    parts.push(text(PAD + 30, y, extraLine, { size: fitSize(extraLine, CONTENT_W - 30, 22, 14), fill: DIM }));
-    // Advanced past it. Without this `y` still pointed AT the extras line, so
-    // the measurements below — which now flow from here — were laid out on top
-    // of it.
-    y += EXTRA_LEADING;
+
+    // The text-card markers are stripped: the picture draws its own, and a
+    // glyph the bundled font lacks would render as tofu beside them.
+    const shown = line.text.replace(/^(\u26a0\ufe0f|\u00b7)\s+/, '');
+    parts.push(text(PAD + st.indent, y, shown, {
+      size: fitSize(shown, CONTENT_W - st.indent, st.size, st.min),
+      fill: st.fill,
+      ...(st.weight ? { weight: st.weight } : {}),
+    }));
+    y += st.leading;
   }
 
-  // --- what was measured ----------------------------------------------------
-  // Same order as the text card: the benchmarked buyer count first, because it
-  // is the one measurement a reader can act on, then who holds the supply, then
-  // the rest. The buyer count leads at full size; the supporting lines are dim.
-  // Four lines have to fit between the concerns above and the footer rule at
-  // 552, and lifting the worst concern made the block above taller. At the old
-  // leading the growth line fell off the bottom whenever concentration
-  // rendered, silently: the card simply stopped saying something it knew.
-  // Five lines can now follow the buyer count -- concentration, what the buyers
-  // did, growth, and the first-scan receipt -- so the block starts higher and
-  // sits tighter. The receipt was missing from the image entirely for the same
-  // reason the market cap was: this list is written out by hand and a line
-  // added to the card does not arrive here on its own.
-  // Flowed from where the concerns actually ended, not from a fixed y. Two
-  // features were added to the card and rendered here at hardcoded
-  // coordinates; the block grew, and the buyer line was drawn straight through
-  // the "+N more" line above it. The footer rule at 552 is the only fixed point
-  // that matters, and lines that cannot fit above it are dropped rather than
-  // drawn over it.
-  const FOOTER_RULE = 552;
-  const M_LEADING = 22;
-  // Ordered by what survives a squeeze. The image has a fixed height and the
-  // last line is dropped rather than drawn over the footer, so the order is the
-  // priority order: growth goes before the receipt does, because growth restates
-  // the buyer count directly above it while the receipt is the one line here
-  // that is worth forwarding on its own.
-  const measured = [concentrationLine(r), sellingLine(r), firstScanLine(r), growthLine(r)].filter(Boolean) as string[];
-
-  // Enough room for the buyer line and everything under it, or as much of it as
-  // there is space for.
-  const needed = 30 + measured.length * M_LEADING;
-  let my = Math.max(y + 14, FOOTER_RULE - 18 - needed);
-
-  const buyers = buyerLine(r);
-  parts.push(text(PAD, my, buyers, { size: fitSize(buyers, CONTENT_W, 30, 18), fill: INK }));
-  my += 26;
-  for (const line of measured) {
-    if (my > FOOTER_RULE - 18) break;
-    parts.push(text(PAD, my, line, { size: fitSize(line, CONTENT_W, 24, 14), fill: DIM }));
-    my += M_LEADING;
+  if (dropped > 0) {
+    parts.push(text(PAD, LIMIT + 8, `+${dropped} more on the card`, { size: 18, fill: DIM }));
   }
 
   // --- footer ---------------------------------------------------------------

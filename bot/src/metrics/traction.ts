@@ -38,6 +38,18 @@ export interface TractionMetrics {
   forwarderBuys: number;
   /** Distinct recipients that both bought and sold inside the window. */
   roundTrippers: number;
+  /**
+   * Buyers from the opening window who have sold at ANY point since, including
+   * long after the window closed.
+   *
+   * Different from roundTrippers, which only counts selling that happened
+   * inside the window itself. This is scoped to the opening population -- the
+   * one the exemption flag cares about -- and asks what became of it, so a
+   * wallet that bought in minute two and sold on day three is counted here and
+   * not there.
+   */
+  earlyBuyers: number;
+  earlyBuyersSold: number;
 
   totalBuyVolume: bigint;
   totalSellVolume: bigint;
@@ -110,6 +122,16 @@ export function computeTraction(
   const sellerSet = new Set(sells.map((r) => r.trader));
   const roundTrippers = [...uniq30].filter((a) => sellerSet.has(a)).length;
 
+  // Every sell this token has ever had indexed, not just the ones inside the
+  // window, so "has since sold" means since -- not "sold before the window
+  // happened to close".
+  const everSold = new Set(
+    (db
+      .prepare(`SELECT DISTINCT trader FROM trades WHERE token = ? AND side = 'sell'`)
+      .all(token.toLowerCase()) as { trader: string }[]).map((r) => r.trader),
+  );
+  const earlyBuyersSold = [...uniq30].filter((a) => everSold.has(a)).length;
+
   const buySizes = buys.map((r) => BigInt(r.quote_amount));
   const totalBuy = buySizes.reduce((a, b) => a + b, 0n);
   const totalSell = sells.reduce((a, r) => a + BigInt(r.quote_amount), 0n);
@@ -155,6 +177,8 @@ export function computeTraction(
     progressVelocityPer10m: velocity,
     forwarderBuys: buys.filter((r) => r.trader === fwd).length,
     roundTrippers,
+    earlyBuyers: uniq30.size,
+    earlyBuyersSold,
     totalBuyVolume: totalBuy,
     totalSellVolume: totalSell,
   };
