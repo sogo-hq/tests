@@ -12,6 +12,20 @@ import {
 } from '../config.js';
 import { TokenLaunched, LaunchSwept, PoolGraduated } from '../abi.js';
 
+/**
+ * How many times a launch's creation transaction is worth decoding.
+ *
+ * The loop retried every undecoded row on every pass, forever, at nought
+ * percent success: 11,966 rows re-fetched every fifteen seconds against a
+ * rate-limited node that the scan path competes for. These are launches made
+ * through contracts this bot has no ABI for -- the long tail, not a transient
+ * failure -- so a second attempt is generous and a third is superstition.
+ *
+ * Two rather than one because a decode CAN fail transiently: an RPC hiccup on
+ * the transaction fetch looks exactly like an unknown entry point from here.
+ */
+const MAX_DECODE_ATTEMPTS = Math.max(1, Number(process.env.MAX_DECODE_ATTEMPTS || 2) || 2);
+
 const CURSOR = 'launches';
 
 const insertLaunch = db.prepare(`
@@ -155,17 +169,18 @@ export async function indexLaunches(
 export async function decodePending(
   limit = Infinity,
   onProgress?: (done: number, total: number) => void,
-): Promise<{ decoded: number; failed: number; remaining: number }> {
+): Promise<{ decoded: number; failed: number; remaining: number; exhausted: number }> {
   const rows = db
     .prepare(
       `SELECT token, tx_hash FROM launches
-       WHERE snipe_exemption_count IS NULL
-          -- also repair rows whose exemption count was decoded while the
-          -- creator's opening buy was dropped by the old upsert
-          OR (entry_point = 'launchAndBuy' AND launch_buy_amount IS NULL)
+       WHERE decode_attempts < ?
+         AND (snipe_exemption_count IS NULL
+           -- also repair rows whose exemption count was decoded while the
+           -- creator's opening buy was dropped by the old upsert
+           OR (entry_point = 'launchAndBuy' AND launch_buy_amount IS NULL))
        ORDER BY launched_at DESC LIMIT ?`,
     )
-    .all(Number.isFinite(limit) ? limit : -1) as { token: string; tx_hash: string }[];
+    .all(MAX_DECODE_ATTEMPTS, Number.isFinite(limit) ? limit : -1) as { token: string; tx_hash: string }[];
 
   const update = db.prepare(`
     UPDATE launches SET
@@ -178,11 +193,17 @@ export async function decodePending(
     WHERE token = ?
   `);
 
+  const countAttempt = db.prepare('UPDATE launches SET decode_attempts = decode_attempts + 1 WHERE token = ?');
+
   let decoded = 0;
   let failed = 0;
   let done = 0;
   await pooled(rows, 8, async (row) => {
     const cd = await bulk(() => fetchLaunchCalldata(row.tx_hash as Hex));
+    // Counted whether it worked or not. A row that decodes leaves the queue by
+    // having its exemption count filled in; a row that does not is on its way
+    // to being resolved as undetermined.
+    countAttempt.run(row.token);
     if (cd.exemptionCount === null) failed++;
     else decoded++;
     update.run(
@@ -201,12 +222,28 @@ export async function decodePending(
     onProgress?.(++done, rows.length);
   });
 
-  const remaining = (db
-    .prepare(`SELECT COUNT(*) AS n FROM launches
-              WHERE snipe_exemption_count IS NULL
-                 OR (entry_point = 'launchAndBuy' AND launch_buy_amount IS NULL)`)
-    .get() as { n: number }).n;
-  return { decoded, failed, remaining };
+  const counts = decodeBacklog();
+  return { decoded, failed, remaining: counts.pending, exhausted: counts.exhausted };
+}
+
+/**
+ * How many rows are still worth attempting, and how many have been given up on.
+ *
+ * `pending` is what the loop will try again. `exhausted` is the long tail:
+ * launches made through contracts this bot has no ABI for, which no number of
+ * retries turns into a decode. They keep a NULL exemption count, so every check
+ * that depends on one still reports undetermined -- being out of the queue is
+ * not the same as being answered, and nothing here lets one become the other.
+ */
+export function decodeBacklog(): { pending: number; exhausted: number } {
+  const unresolved = `(snipe_exemption_count IS NULL
+      OR (entry_point = 'launchAndBuy' AND launch_buy_amount IS NULL))`;
+  const q = (where: string, ...params: unknown[]) =>
+    (db.prepare(`SELECT COUNT(*) AS n FROM launches WHERE ${where}`).get(...params) as { n: number }).n;
+  return {
+    pending: q(`decode_attempts < ? AND ${unresolved}`, MAX_DECODE_ATTEMPTS),
+    exhausted: q(`decode_attempts >= ? AND ${unresolved}`, MAX_DECODE_ATTEMPTS),
+  };
 }
 
 /** Index LaunchSwept / PoolGraduated so stored phase reflects graduation. */
@@ -300,14 +337,28 @@ export async function indexNew(opts: { lifecycle?: boolean } = {}) {
  */
 export function startDecodeLoop(batch = 200, intervalMs = 15_000): NodeJS.Timeout {
   let running = false;
+  // The terminal line is printed once, not every fifteen seconds forever. It is
+  // re-armed when new launches arrive, so a later drain reports its own end.
+  let announcedDone = false;
   const tick = async () => {
     if (running) return;
     running = true;
     try {
       const res = await decodePending(batch);
       if (res.decoded || res.failed) {
+        announcedDone = false;
         console.log(
           `[decode] ${res.decoded} decoded${res.failed ? `, ${res.failed} undetermined` : ''}, ${res.remaining} remaining`,
+        );
+      }
+      if (res.remaining === 0 && !announcedDone) {
+        announcedDone = true;
+        // Said once, and said plainly: the queue is empty, and this many rows
+        // are out of it without having been answered. Nothing downstream treats
+        // them as decoded -- they still report undetermined wherever they are
+        // read -- so this is the end of the retrying, not the end of the doubt.
+        console.log(
+          `[decode] 0 pending, ${res.exhausted.toLocaleString()} resolved as undetermined`,
         );
       }
     } catch (err) {

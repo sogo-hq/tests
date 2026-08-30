@@ -384,6 +384,43 @@ when it runs over:
 That line is why this section exists. A 56-second scan was a single number with
 nothing to blame, which is how it shipped in the first place.
 
+## Giving up on a decode
+
+The decode drip re-attempted every undecoded launch on every pass, forever:
+
+```
+[decode] 0 decoded, 200 undetermined, 11966 remaining
+```
+
+Nought percent success, 11,966 rows re-fetched every fifteen seconds against a
+rate-limited node the scan path competes for, and a count that only ever rose
+because new launches arrived. Sampling sixty of those rows found **eight
+distinct unknown selectors** and one that is constructor bytecode rather than a
+function call at all — these are launches made through contracts this bot has no
+ABI for. It is a long tail, not a transient failure, and no number of retries
+turns it into a decode.
+
+Each row now gets `MAX_DECODE_ATTEMPTS` tries (two — because a decode *can* fail
+transiently, and an RPC hiccup on the transaction fetch looks exactly like an
+unknown entry point from here) and is then left alone. The end is announced
+once, not every fifteen seconds:
+
+```
+[decode] 0 pending, 11,966 resolved as undetermined
+```
+
+**Resolved is not answered.** An exhausted row keeps a NULL exemption count, so
+the snipe-exemption check still reports undetermined on every one of them, and
+`trustNegatives.collision` — which counts rows that actually decoded — still
+refuses to assert "no ticker collision" from them. Stopping the retry frees the
+RPC the scan path needs; it does not settle a single question. A test pins that
+specifically, because quietly converting undetermined into clean is the one
+failure mode this tool exists to avoid.
+
+One-off cost on an existing index: rows start at zero attempts, so the backlog
+is worked twice more before it drains. That is finite, where the previous
+behaviour was not.
+
 ## Filling the trade history
 
 Trades were only ever indexed as a side effect of somebody scanning a token, and
@@ -803,6 +840,12 @@ Tables: `launches`, `trades`, `scans`, `rechecks`, `token_peaks`, `cursors`.
 | `MIN_INDEX_ROWS_FOR_NEGATIVE` | `1000` | rows required before an index-backed negative is asserted |
 | `RECOVERY_STALE_SECONDS` | `21600` | index age past which boot rebuilds it |
 | `MIN_HOLD_SAMPLES` | `30` | observations required before the median hold time is published |
+| `MAX_DECODE_ATTEMPTS` | `2` | tries at a launch's creation transaction before it is left as undetermined |
+| `SCAN_BUDGET_MS` | `5000` | hard ceiling on a scan, request to reply |
+| `CONCENTRATION_DEADLINE_MS` | `2000` | longest holder concentration may hold up a card |
+| `HOLDER_REFRESH_TTL_MS` | `1800000` | age at which a stored holder reading is worth updating |
+| `HOLDER_REFRESH_CHUNK` | `100000` | blocks per query when a holder reading is being considerate |
+| `HOLDER_REFRESH_PAUSE_MS` | `400` | pause between those queries |
 | `MIN_BENCHMARK_SAMPLES` | `30` | launches required behind a bucket before the buyer comparison is shown |
 | `MIN_CONCENTRATION_SAMPLES` | `30` | holder distributions required before check 09 has a threshold |
 | `CONCENTRATION_PERCENTILE` | `90` | where in the recorded distribution check 09 raises |

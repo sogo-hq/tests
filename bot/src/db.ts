@@ -255,6 +255,7 @@ for (const [table, column, decl] of [
   ['holder_snapshots', 'excess', 'REAL NOT NULL DEFAULT 0'],
   ['launches', 'trades_indexed_to', 'INTEGER'],
   ['launches', 'holders_read_at', 'INTEGER'],
+  ['launches', 'decode_attempts', 'INTEGER NOT NULL DEFAULT 0'],
   ['holder_snapshots', 'balances', 'TEXT'],
   ['holder_snapshots', 'read_to_block', 'INTEGER'],
 ] as const) {
