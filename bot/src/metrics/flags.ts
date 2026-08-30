@@ -490,7 +490,7 @@ export function computeFlags(opts: {
       detail: `top 5 hold ${shareStr} of circulating, largest single wallet ${conc.top1Share.toFixed(1)}% (${conc.holders} holders) — ${audit}`,
       compactDetail: over
         ? `top 5 hold ${shareStr}${conc.top1Share > 0 ? ` \u2014 largest ${conc.top1Share.toFixed(0)}%` : ''} (over ${thr.thresholdShare.toFixed(1)}%)`
-        : `top 5 wallets hold ${shareStr}`,
+        : `top 5 hold ${shareStr}${conc.top1Share > 0 ? ` \u2014 largest ${conc.top1Share.toFixed(0)}%` : ''}`,
       // Rounded as the card rounds, and carrying the holder count, because when
       // this is raised it is the only place the reader sees either.
       plain: over

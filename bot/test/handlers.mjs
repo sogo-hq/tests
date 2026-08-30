@@ -590,7 +590,7 @@ await bot.handleUpdate(inline(SOL, 9500));
 
   const dmCard = renderDefaultCard(withBoth, 'vitalscheck_bot');
   assert.match(dmCard, /38 buyers \u2014 median at this age is 12/, 'DM card carries the comparison');
-  assert.match(dmCard, /top 5 wallets hold 44% \u00b7 23 holders/, 'DM card carries concentration');
+  assert.match(dmCard, /top 5 hold 44% \u00b7 23 holders/, 'DM card carries concentration');
 
   // The group surface renders the same card through the same path.
   //
@@ -649,7 +649,8 @@ await bot.handleUpdate(inline(SOL, 9500));
   const texts = [...svg.matchAll(/<text[^>]*>([^<]*)<\/text>/g)].map((m) => m[1]);
   const idx = (re) => texts.findIndex((t) => re.test(t));
   const iBuyers = idx(/^38 buyers/);
-  const iConc = idx(/top 5 wallets/);
+  const iConc = idx(/top 5 hold/);
+  assert.ok(iConc >= 0, `the PNG lost the concentration line: ${JSON.stringify(texts)}`);
   const iSold = idx(/to graduation$/);
   assert.ok(iBuyers >= 0, `the PNG lost the buyer line: ${JSON.stringify(texts)}`);
   assert.ok(/median at this age is 12/.test(texts[iBuyers]), `the PNG lost the comparison: ${texts[iBuyers]}`);
