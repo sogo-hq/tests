@@ -151,6 +151,29 @@ export const RECHECK_OFFSETS_HOURS = [1, 6, 24, 24 * 7] as const;
 export const PHASE = ['NotGraduated', 'Swept', 'PoolCreated', 'Rescued'] as const;
 
 export const DB_PATH = process.env.DB_PATH || './pons.db';
+
+/**
+ * Hard ceiling on a scan, request to reply.
+ *
+ * A degen decides in about ten seconds; a card that lands after that is worth
+ * nothing, and one that lands a minute later reads as a broken bot rather than
+ * a slow one. Optional checks race whatever is left of this and render
+ * undetermined if they lose.
+ */
+export const SCAN_BUDGET_MS = positiveNumber('SCAN_BUDGET_MS', process.env.SCAN_BUDGET_MS, 5_000);
+
+/**
+ * How long holder concentration may hold up a card.
+ *
+ * It never holds one up for longer than this even when the budget would allow
+ * it: the reading is served from the index and refreshed in the background, so
+ * waiting is the exception rather than the design.
+ */
+export const CONCENTRATION_DEADLINE_MS = positiveNumber(
+  'CONCENTRATION_DEADLINE_MS',
+  process.env.CONCENTRATION_DEADLINE_MS,
+  2_000,
+);
 export const BACKFILL_DAYS = Number(process.env.BACKFILL_DAYS || 7);
 /** How far back /scan will hunt for an unindexed token's launch. */
 export const LOOKBACK_DAYS = Number(process.env.LOOKBACK_DAYS || 10);

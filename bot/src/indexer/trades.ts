@@ -123,6 +123,14 @@ export async function indexTrades(
  * minutes were read, which is a different question from whether anything about
  * it was read at all.
  */
+/** How far this launch's own trade history has been read, in block number. */
+export function coveredThrough(token: string): number | null {
+  const row = db
+    .prepare('SELECT trades_indexed_to FROM launches WHERE token = ?')
+    .get(token.toLowerCase()) as { trades_indexed_to: number | null } | undefined;
+  return row?.trades_indexed_to ?? null;
+}
+
 export function markWindowIndexed(token: string, launchBlock: number, indexedTo: number): void {
   if (indexedTo < launchBlock) return;
   db.prepare(

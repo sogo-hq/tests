@@ -54,7 +54,16 @@ export function rateLimitFrom(err: unknown): number | null {
 }
 
 export type ScanOutcome =
-  | { kind: 'ok'; defaultCard: string; fullCard: string; meta: CompactMeta; cacheHit: boolean; durationMs: number }
+  | {
+      kind: 'ok';
+      defaultCard: string;
+      fullCard: string;
+      meta: CompactMeta;
+      cacheHit: boolean;
+      durationMs: number;
+      /** Per-phase milliseconds. Absent on a cache hit, which had no phases. */
+      phases?: string;
+    }
   | { kind: 'not_found'; defaultCard: string; fullCard: string; meta: CompactMeta; cacheHit: boolean; durationMs: number }
   | { kind: 'rate_limited'; retryAfterSec: number; window: 'minute' | 'hour'; message: string }
   | { kind: 'busy'; message: string }
@@ -104,6 +113,7 @@ function logScanLine(
   durationMs: number,
   outcome: string,
   meta?: { ageSeconds: number; early: boolean },
+  timing?: { phases: string; slowestPhase: string | null; overBudget: boolean },
 ): void {
   const parts = [
     `source=${req.source}`,
@@ -114,6 +124,13 @@ function logScanLine(
     meta ? `early=${meta.early ? 'yes' : 'no'}` : 'early=?',
     `outcome=${outcome}`,
   ];
+  // The breakdown only appears on a real scan -- a cache hit has no phases --
+  // and the slowest phase is called out when the budget was blown, because a
+  // scan that took a minute used to be one number with nothing to blame.
+  if (timing?.phases) {
+    parts.push(`phases[${timing.phases}]`);
+    if (timing.overBudget) parts.push(`OVER_BUDGET slowest=${timing.slowestPhase ?? 'unknown'}`);
+  }
   console.log(`[scan] ${parts.join(' ')}`);
 }
 
@@ -127,8 +144,9 @@ function logEvent(
   outcome: string,
   scanId?: number,
   meta?: { ageSeconds: number; early: boolean },
+  timing?: { phases: string; slowestPhase: string | null; overBudget: boolean },
 ): void {
-  logScanLine(req, cacheHit, durationMs, outcome, meta);
+  logScanLine(req, cacheHit, durationMs, outcome, meta, timing);
   try {
     insertEvent.run(
       Math.floor(Date.now() / 1000),
@@ -248,6 +266,8 @@ interface RenderedScan {
   fullCard: string;
   meta: CompactMeta;
   scanId?: number;
+  /** Per-phase milliseconds, for the operator log. Absent on a not-found. */
+  timing?: { phases: string; slowestPhase: string | null; overBudget: boolean };
 }
 
 /**
@@ -287,6 +307,7 @@ function render(token: string, result: Awaited<ReturnType<typeof scanToken>>, bo
     fullCard: renderCard(result),
     meta: compactMeta(result),
     scanId: result.scanId,
+    timing: { phases: result.phases, slowestPhase: result.slowestPhase, overBudget: result.overBudget },
   };
 }
 
@@ -472,9 +493,14 @@ export async function performScan(req: ScanRequest): Promise<ScanOutcome> {
     if (kind === 'not_found' && consumedScanQuota && quotaKey !== undefined) {
       userQuota.refund(quotaKey);
     }
-    logEvent(req, false, d, kind, rendered.scanId, rendered.meta.notFound ? undefined : rendered.meta);
+    logEvent(
+      req, false, d, kind, rendered.scanId,
+      rendered.meta.notFound ? undefined : rendered.meta,
+      rendered.timing,
+    );
     return {
       kind,
+      phases: rendered.timing?.phases,
       defaultCard: rendered.defaultCard,
       fullCard: rendered.fullCard,
       meta: rendered.meta,

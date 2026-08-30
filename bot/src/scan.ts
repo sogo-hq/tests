@@ -3,12 +3,20 @@ import { client, getLogsAdaptive } from './chain.js';
 import { interactive } from './ratelimit.js';
 import { db, normaliseKey } from './db.js';
 import { readToken, type TokenReads } from './reads.js';
-import { indexOneCurve, markWindowIndexed } from './indexer/trades.js';
+import { indexOneCurve, markWindowIndexed, coveredThrough } from './indexer/trades.js';
 import { fetchLaunchCalldata } from './indexer/exemptions.js';
 import { computeTraction, type TractionMetrics } from './metrics/traction.js';
 import { computeFlags, type FlagResult } from './metrics/flags.js';
 import { buyerBenchmark, type BuyerBenchmark } from './metrics/benchmark.js';
-import { readConcentration, recordConcentration, type Concentration } from './metrics/concentration.js';
+import {
+  readStoredConcentration,
+  refreshConcentration,
+  hasStoredBalances,
+  type Concentration,
+} from './metrics/concentration.js';
+import { queueHolderRefresh } from './indexer/windows.js';
+import { PhaseTimer, Budget, withDeadline } from './timing.js';
+import { SCAN_BUDGET_MS, CONCENTRATION_DEADLINE_MS } from './config.js';
 import { isRateLimit } from './ratelimit.js';
 import { TokenLaunched } from './abi.js';
 import {
@@ -60,6 +68,12 @@ export interface ScanResult {
    * stays true has to use this number, not the constant.
    */
   earlyThresholdSeconds: number;
+  /** Per-phase milliseconds, so a slow scan can be explained rather than guessed at. */
+  phases: string;
+  /** The phase that took longest. */
+  slowestPhase: string | null;
+  /** True when the scan ran past its budget; the log says which phase ate it. */
+  overBudget: boolean;
 }
 
 /** Locate a token's launch, from the index if present, otherwise from the chain. */
@@ -149,33 +163,35 @@ export async function scanToken(token: string, requestedBy?: number): Promise<Sc
 }
 
 async function scanTokenInner(token: string, requestedBy?: number): Promise<ScanResult | null> {
-  const reads = await readToken(token);
+  const timer = new PhaseTimer();
+  const budget = new Budget(SCAN_BUDGET_MS);
+
+  const reads = await timer.time('reads', () => readToken(token));
   if (!reads) return null;
 
-  const head = await client.getBlockNumber();
-  const launch = await findLaunch(reads.token, head);
+  const head = await timer.time('head', () => client.getBlockNumber());
+  const launch = await timer.time('findLaunch', () => findLaunch(reads.token, head));
   if (!launch) return null;
 
-  await ensureLaunchRow(reads, launch);
-
-  // Holder concentration needs only the launch block and the head, so it is
-  // started here and collected after the indexing rather than queued behind it.
-  // Sequentially it added a round trip to every scan and pushed the slowest past
-  // the fifteen seconds a caller waits for an abandoned scan to land; overlapped,
-  // it costs nothing. Settled into a result rather than left to reject on its
-  // own, so a slow index cannot turn it into an unhandled rejection.
-  const concentrationSettled = readConcentration(
-    reads.token, reads.curve, BigInt(launch.block), head,
-  ).then(
-    (value) => ({ ok: true as const, value }),
-    (err) => ({ ok: false as const, err }),
-  );
+  await timer.time('launchRow', () => ensureLaunchRow(reads, launch));
 
   // Index the measurement window. Capped at the 30-minute window even for old
   // tokens, because that is the window every traction metric is defined over.
   const windowEnd = BigInt(Math.min(launch.block + WINDOW_30_MIN_BLOCKS, Number(head)));
-  await indexOneCurve(reads.curve, reads.token, BigInt(launch.block), windowEnd);
-  markWindowIndexed(reads.token, launch.block, Number(windowEnd));
+  // Re-indexing a window that is already complete is pure latency. The first
+  // thirty minutes of a launch that is days old is immutable history, and the
+  // rows are already here -- yet this re-read them on every scan, 2.6 seconds
+  // of a five-second budget spent confirming what the index already said. A
+  // token still inside its own window is a different matter: that window is
+  // still filling, so it is always re-read.
+  const covered = coveredThrough(reads.token);
+  const windowComplete = covered !== null && covered >= launch.block + WINDOW_30_MIN_BLOCKS;
+  if (windowComplete) {
+    timer.record('trades', 0);
+  } else {
+    await timer.time('trades', () => indexOneCurve(reads.curve, reads.token, BigInt(launch.block), windowEnd));
+    markWindowIndexed(reads.token, launch.block, Number(windowEnd));
+  }
 
   const scannedAt = Math.floor(Date.now() / 1000);
   const traction = computeTraction(
@@ -185,21 +201,45 @@ async function scanTokenInner(token: string, requestedBy?: number): Promise<Scan
     reads.graduationThreshold,
   );
 
-  // A limit or a dead transport still propagates -- the one answer this must
-  // never give is a confident low number -- but an ordinary read failure leaves
-  // the check undetermined rather than failing a scan that is otherwise complete.
-  const cr = await concentrationSettled;
-  let concentration: Concentration | null = null;
-  if (cr.ok) {
-    concentration = cr.value;
-  } else {
-    const err = cr.err as any;
-    if (isRateLimit(err) || err?.name === 'TimeoutError') throw err;
-    console.warn(`[scan] holder concentration unreadable for ${reads.token}:`, String(err?.shortMessage ?? err?.message ?? err).slice(0, 140));
+  // ------------------------------------------------------------------ 09
+  // Holder concentration, served from the index and never waited on.
+  //
+  // Reading a token's whole Transfer history costs twenty seconds on a busy
+  // launch -- 9,001 logs across four million blocks -- and putting that between
+  // a request and a card took scans from 1.1s to 56s. A card that arrives after
+  // the decision is worth nothing, and the delay read as the bot being broken
+  // rather than slow.
+  //
+  // So: the stored reading if there is one, which is instant; otherwise a live
+  // read bounded by whatever is smaller, its own two-second deadline or what is
+  // left of the scan's budget. Losing that race is not a failure -- the check
+  // renders undetermined, exactly as it does when the read fails -- and the
+  // background refresh means the next scan of this token has an answer waiting.
+  let concentration: Concentration | null = readStoredConcentration(reads.token, scannedAt);
+  const fromIndex = concentration !== null;
+  if (!fromIndex && hasStoredBalances(reads.token)) {
+    // Only ever the cheap case. A deadline caps how long the CARD waits, not
+    // how long the work runs: a losing read carries on in the background at
+    // interactive priority, and a four-million-block one left every scan for
+    // the next half minute sitting at eight seconds. So a first read is never
+    // started here at all -- the window loop does those on its own schedule --
+    // and what runs inline is a delta of a few hundred blocks.
+    const allowance = budget.allowanceFor(CONCENTRATION_DEADLINE_MS);
+    concentration = await timer.time('concentration', () =>
+      withDeadline(
+        refreshConcentration(reads.token, reads.curve, BigInt(launch.block), head)
+          .then((r) => r.concentration)
+          .catch((err: any) => {
+            if (isRateLimit(err)) console.warn(`[scan] holder read rate limited for ${reads.token}`);
+            return null;
+          }),
+        allowance,
+        null,
+      ));
   }
-  // Recorded before the threshold is taken; the threshold query excludes this
-  // token so a launch can never be part of the distribution it is judged against.
-  if (concentration) recordConcentration(reads.token, concentration, scannedAt);
+  // Always queue a refresh: a miss needs a first reading, and a hit needs the
+  // next one to be current. Deduplicated, bulk priority, off the critical path.
+  queueHolderRefresh(reads.token, reads.curve, launch.block);
 
   const flags = computeFlags({
     token: reads.token,
@@ -327,6 +367,9 @@ async function scanTokenInner(token: string, requestedBy?: number): Promise<Scan
         creation,
         isEarly,
         earlyThresholdSeconds: earlyThreshold,
+        phases: timer.breakdown(),
+        slowestPhase: timer.worst ? `${timer.worst.name}=${timer.worst.ms}ms` : null,
+        overBudget: budget.blown,
       };
     }
   }
@@ -396,6 +439,9 @@ async function scanTokenInner(token: string, requestedBy?: number): Promise<Scan
     creation,
     isEarly,
     earlyThresholdSeconds: earlyThreshold,
+    phases: timer.breakdown(),
+    slowestPhase: timer.worst ? `${timer.worst.name}=${timer.worst.ms}ms` : null,
+    overBudget: budget.blown,
   };
 }
 

@@ -128,8 +128,16 @@ class TokenBucket {
     }
   }
 
+  pendingInteractive(): number {
+    return this.queue.reduce((n, q) => n + (q.priority === 'interactive' ? 1 : 0), 0);
+  }
+
+  /** When an interactive request last took a token. */
+  lastInteractiveAt = 0;
+
   acquire(): Promise<void> {
     const priority = priorityStore.getStore() ?? 'interactive';
+    if (priority === 'interactive') this.lastInteractiveAt = Date.now();
     return new Promise((resolve) => {
       this.queue.push({ resolve, priority });
       this.pump();
@@ -138,6 +146,31 @@ class TokenBucket {
 }
 
 const bucket = new TokenBucket(RATE_PER_SEC, BURST);
+
+/**
+ * Interactive requests waiting for a token right now.
+ *
+ * Background work uses this to stay out of the way. Priority ordering decides
+ * who is served next once a request is queued, but it cannot undo the node
+ * slowing down while it serves a heavy query -- and a whole-life Transfer read
+ * is heavy enough to take a concurrent scan from 1.5s to 20s. So the background
+ * reader checks this between chunks and waits rather than pressing on.
+ */
+export function interactivePending(): number {
+  return bucket.pendingInteractive();
+}
+
+/**
+ * Has anything interactive happened just now?
+ *
+ * Counting only QUEUED interactive requests reads zero for most of a scan --
+ * seventeen reads spend their time in flight, not waiting for a token -- so
+ * background work checking that guard saw an idle system and pressed on
+ * regardless. Recent activity is the honest signal.
+ */
+export function interactivelyBusy(withinMs = 2_000): boolean {
+  return bucket.pendingInteractive() > 0 || Date.now() - bucket.lastInteractiveAt < withinMs;
+}
 let installed = false;
 
 export function installRateLimit(): void {

@@ -1,8 +1,8 @@
 import { db } from '../db.js';
-import { bulk, isRateLimit } from '../ratelimit.js';
+import { bulk, isRateLimit, interactivelyBusy } from '../ratelimit.js';
 import { client } from '../chain.js';
 import { indexOneCurve, markWindowIndexed } from './trades.js';
-import { readConcentration, recordConcentration, excessConcentration } from '../metrics/concentration.js';
+import { readConcentration, recordConcentration, excessConcentration, readStoredConcentration, refreshConcentration, hasStoredBalances } from '../metrics/concentration.js';
 import { WINDOW_30_MIN_BLOCKS, BLOCKS_PER_MINUTE } from '../config.js';
 import { AGE_BUCKETS, MIN_BENCHMARK_SAMPLES } from '../metrics/benchmark.js';
 import { MIN_CONCENTRATION_SAMPLES, MIN_HOLDERS_FOR_SHARE, concentrationCoverage } from '../metrics/concentration.js';
@@ -293,7 +293,12 @@ export async function indexWindows(limit = BATCH): Promise<WindowPass> {
       // window read. The trades are the primary purpose here.
       if (t.holders_read_at === null) {
         try {
-          const c = await bulk(() => readConcentration(t.token, t.curve, BigInt(t.block_number), BigInt(head)));
+          // Through the same incremental path as the refresher, so this read
+          // stores its balances too and every later read of the token is a
+          // delta rather than another whole-life scan.
+          const c = (await bulk(() =>
+            refreshConcentration(t.token, t.curve, BigInt(t.block_number), BigInt(head), () => !interactivelyBusy()),
+          )).concentration;
           // Marked as read whatever came back. Most launches on this chain have
           // fewer than six holders, where the top-five share is forced and
           // records nothing -- without this the loop would pick the same
@@ -303,10 +308,9 @@ export async function indexWindows(limit = BATCH): Promise<WindowPass> {
           // excessConcentration is what decides whether the observation is
           // recordable at all, so asking it directly beats counting the table
           // twice per launch to find out.
-          if (c && excessConcentration(c) !== null) {
-            recordConcentration(t.token, c);
-            pass.concentration++;
-          }
+          // refreshConcentration stores the reading itself; this only counts
+          // the ones that are usable observations for the threshold.
+          if (excessConcentration(c) !== null) pass.concentration++;
         } catch (err) {
           if (isRateLimit(err)) throw err;   // handled once, below
           console.warn(`[windows] ${t.token} holder read failed:`, String((err as any)?.shortMessage ?? (err as Error)?.message ?? err).slice(0, 100));
@@ -406,4 +410,84 @@ export function startWindowLoop(intervalMs = 15_000, batch = BATCH): NodeJS.Time
   const timer = setInterval(tick, intervalMs);
   timer.unref?.();
   return timer;
+}
+
+
+/**
+ * Refresh one token's holder reading in the background.
+ *
+ * Fire and forget, at bulk priority, deduplicated by token. Called after a scan
+ * so the NEXT scan of that token serves the check from the index instantly --
+ * the reading itself costs twenty seconds on a busy launch and must never be on
+ * the path between a request and a card.
+ *
+ * Deliberately not routed through the window loop's selection: that stops once
+ * its coverage targets are met, and a refresh is about one token being current
+ * rather than about the population being large enough.
+ */
+const refreshing = new Set<string>();
+
+/**
+ * How long a stored reading is left alone before a refresh is worth its cost.
+ *
+ * Refreshing on every scan made the NEXT scan of that token ten times slower:
+ * 1.5s to 15.7s, with readToken alone taking 11.7s of it. A whole-life Transfer
+ * read is 9,001 logs across four million blocks, and while the node is serving
+ * that it serves everything else slowly too -- which is server-side contention
+ * that no amount of client-side priority can reorder away. So the refresh is
+ * rare rather than merely deprioritised.
+ */
+const REFRESH_TTL_MS = Number(process.env.HOLDER_REFRESH_TTL_MS || 30 * 60_000) || 30 * 60_000;
+
+/** One at a time, process-wide. Two heavy reads at once is the same problem twice. */
+let refreshInFlight = 0;
+
+export function queueHolderRefresh(token: string, curve: string, launchBlock: number): void {
+  if (process.env.HOLDER_REFRESH_OFF === '1') return;
+  const key = token.toLowerCase();
+  if (refreshing.has(key) || refreshInFlight > 0) return;
+
+  const stored = readStoredConcentration(token);
+  if (stored && stored.ageSeconds * 1000 < REFRESH_TTL_MS) return;
+
+  // A token with no stored balances needs its whole life read -- four million
+  // blocks, half a minute, and heavy enough that a concurrent scan felt it
+  // however finely it was chunked or paced. That work belongs to the window
+  // loop, which runs on its own schedule when nobody is waiting. A scan only
+  // ever triggers the cheap case: a delta onto balances that already exist.
+  if (!hasStoredBalances(token)) return;
+
+  refreshing.add(key);
+  refreshInFlight++;
+  void (async () => {
+    try {
+      const head = await bulk(() => client.getBlockNumber());
+      // Wait for the user to be done before starting. Starting immediately after
+      // the scan that queued it put a heavy read against the node exactly while
+      // the next scan needed it.
+      const r = await bulk(() =>
+        refreshConcentration(token, curve, BigInt(launchBlock), head, () => !interactivelyBusy()),
+      );
+      console.log(
+        `[holders] ${key.slice(0, 10)} ${r.incremental ? 'updated' : 'first read'}` +
+          `${r.complete ? '' : ' (paused for a scan, resumes next time)'}: ` +
+          `top 5 hold ${r.concentration.top5Share.toFixed(1)}% of ${r.concentration.holders} holders, ` +
+          `${r.blocksRead.toLocaleString()} blocks read`,
+      );
+      db.prepare('UPDATE launches SET holders_read_at = ? WHERE token = ?')
+        .run(Math.floor(Date.now() / 1000), key);
+    } catch (err) {
+      // Nothing to report to anyone: the card already rendered without it, and
+      // the next scan queues another attempt.
+      console.warn(`[holders] ${key.slice(0, 10)} refresh failed:`, String((err as any)?.shortMessage ?? (err as Error)?.message ?? err).slice(0, 100));
+    } finally {
+      refreshing.delete(key);
+      refreshInFlight--;
+    }
+  })();
+}
+
+/** In-flight refreshes, for tests and for the /stats line. */
+export function refreshesInFlight(): number {
+  return refreshing.size;
 }
