@@ -85,15 +85,52 @@ export interface ScanResult {
   firstScan: FirstScan | null;
 }
 
-/** Locate a token's launch, from the index if present, otherwise from the chain. */
+/**
+ * A read that did not finish is not a fact about the chain.
+ *
+ * Thrown when the factory says a token exists but its launch could not be
+ * placed. Everything downstream of a scan needs the launch block, and returning
+ * null for this rendered as "not a pons v2 launch" -- a confident statement
+ * about the chain produced by a lookup that never completed, on a token the
+ * factory had already confirmed. That is the exact failure this project exists
+ * to avoid, and it reached a user.
+ */
+export class LaunchLookupIncomplete extends Error {
+  constructor(readonly reason: string, readonly durationMs: number) {
+    super(`launch lookup incomplete after ${durationMs}ms: ${reason}`);
+    this.name = 'LaunchLookupIncomplete';
+  }
+}
+
+export interface LaunchLocation {
+  block: number;
+  /** Null when the launch was placed without seeing its transaction. */
+  txHash: Hex | null;
+  launchedAt: number;
+  /** Where it came from, for the log: the index, the factory's logs, or the curve. */
+  source: 'index' | 'logs' | 'curve';
+}
+
+/**
+ * Locate a token's launch: the index, then the factory's logs, then the curve.
+ *
+ * The caller has already established that the factory knows this token --
+ * readToken reads getLaunchedToken and returns null when `exists` is false --
+ * so "absent" is not one of the answers this can give. Either it places the
+ * launch or it admits it could not.
+ */
 async function findLaunch(
   token: string,
   head: bigint,
-): Promise<{ block: number; txHash: Hex; launchedAt: number } | null> {
+  reads: TokenReads,
+): Promise<LaunchLocation> {
+  const started = Date.now();
   const row = db
     .prepare('SELECT block_number, tx_hash, launched_at FROM launches WHERE token = ?')
     .get(token.toLowerCase()) as { block_number: number; tx_hash: string; launched_at: number } | undefined;
-  if (row) return { block: row.block_number, txHash: row.tx_hash as Hex, launchedAt: row.launched_at };
+  if (row) {
+    return { block: row.block_number, txHash: row.tx_hash as Hex, launchedAt: row.launched_at, source: 'index' };
+  }
 
   // Not indexed yet -- search back through the factory's own logs. Scoped to the
   // factory address and filtered on the indexed token topic, so this stays fast.
@@ -114,10 +151,31 @@ async function findLaunch(
     if (logs.length) {
       const l = logs[0]!;
       const blk = await client.getBlock({ blockNumber: l.blockNumber!, includeTransactions: false });
-      return { block: Number(l.blockNumber), txHash: l.transactionHash as Hex, launchedAt: Number(blk.timestamp) };
+      return {
+        block: Number(l.blockNumber),
+        txHash: l.transactionHash as Hex,
+        launchedAt: Number(blk.timestamp),
+        source: 'logs',
+      };
     }
   }
-  return null;
+
+  // The logs did not have it, and for a launch seconds old that is expected
+  // rather than surprising: this node's log index lags its head, so a token can
+  // exist in the factory's state before it appears in a getLogs result. The
+  // curve knows exactly when it launched, so the block is derived from that
+  // instead of giving up -- no second scan, and the reading is already in hand
+  // from the same call that proved the token exists.
+  if (reads.launchedAt > 0) {
+    const elapsed = Math.max(0, Math.floor(Date.now() / 1000) - reads.launchedAt);
+    const block = Math.max(1, Number(head) - Math.round(elapsed / BLOCK_TIME_SECONDS));
+    return { block, txHash: null, launchedAt: reads.launchedAt, source: 'curve' };
+  }
+
+  throw new LaunchLookupIncomplete(
+    'factory confirms the token but neither its logs nor the curve could place the launch',
+    Date.now() - started,
+  );
 }
 
 /** Make sure this token has a row in `launches`, decoding its creation tx. */
@@ -188,10 +246,22 @@ async function scanTokenInner(token: string, requestedBy?: number): Promise<Scan
   if (!reads) return null;
 
   const head = await timer.time('head', () => client.getBlockNumber());
-  const launch = await timer.time('findLaunch', () => findLaunch(reads.token, head));
-  if (!launch) return null;
+  const launch = await timer.time('findLaunch', () => findLaunch(reads.token, head, reads));
+  // Which of the three placed it, so "not a pons v2 launch" versus "could not
+  // read" is answerable from the log rather than by guessing. Only the two
+  // fallbacks are worth a line: the index is the ordinary case and says nothing.
+  if (launch.source !== 'index') {
+    console.log(
+      `[scan] launch for ${reads.token} placed from ${launch.source} in ${timer.lastMs('findLaunch')}ms` +
+        `${launch.source === 'curve' ? ' — the factory knows it but its logs do not yet' : ''}`,
+    );
+  }
 
-  await timer.time('launchRow', () => ensureLaunchRow(reads, launch));
+  // Skipped when the launch was placed from the curve rather than seen in a
+  // log: there is no creation transaction to decode and the row's tx_hash is
+  // NOT NULL. The snipe-exemption check then reports undetermined, which is
+  // true -- the creation transaction has not been read.
+  if (launch.txHash) await timer.time('launchRow', () => ensureLaunchRow(reads, { ...launch, txHash: launch.txHash! }));
 
   // Index the measurement window. Capped at the 30-minute window even for old
   // tokens, because that is the window every traction metric is defined over.

@@ -27,6 +27,14 @@ export class PhaseTimer {
     this.phases.push({ name, ms });
   }
 
+  /** How long a named phase took, for a caller that wants to report it. */
+  lastMs(name: string): number {
+    for (let i = this.phases.length - 1; i >= 0; i--) {
+      if (this.phases[i]!.name === name) return this.phases[i]!.ms;
+    }
+    return 0;
+  }
+
   get elapsedMs(): number {
     return Date.now() - this.started;
   }

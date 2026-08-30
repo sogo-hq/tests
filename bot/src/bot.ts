@@ -351,6 +351,11 @@ function messageFor(outcome: ScanOutcome, full: boolean): string {
       return `⏳ ${outcome.message}`;
     case 'busy':
       return `⏳ ${outcome.message}`;
+    case 'unreadable':
+      // No hourglass and no card: this is not a wait and not a finding, it is
+      // an admission. The user asked a fair question and the chain did not
+      // answer it.
+      return outcome.message;
     case 'error':
       return outcome.message;
   }
@@ -498,6 +503,18 @@ async function handleInline(ctx: Context): Promise<void> {
           'Still indexing',
           outcome.message,
           transientCard(ctx, `⏳ ${outcome.message}`),
+        ),
+      ]);
+      return;
+    case 'unreadable':
+      // Titled for what it is. "Not a pons v2 launch" was the wrong answer
+      // here and this one must not be mistakable for it.
+      await answerTransient([
+        article(
+          `unread:${token}`,
+          'Could not read the chain',
+          outcome.message,
+          transientCard(ctx, outcome.message),
         ),
       ]);
       return;

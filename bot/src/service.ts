@@ -1,5 +1,5 @@
 import { isAddress, getAddress } from 'viem';
-import { scanToken, type ScanResult } from './scan.js';
+import { scanToken, LaunchLookupIncomplete, type ScanResult } from './scan.js';
 import { renderCard, renderDefaultCard, renderDefaultNotFound, compactMeta, type CompactMeta } from './card.js';
 import { scanCache, type CachedScan } from './cache.js';
 import { userQuota, floodQuota, scanSemaphore, SlotTimeout, formatRetry } from './quota.js';
@@ -16,6 +16,17 @@ export type ScanSource = 'dm' | 'group' | 'inline' | 'cli';
  * helps nobody and leaks internals.
  */
 export const SCAN_FAILED = 'scan failed, try again';
+
+/**
+ * A lookup that did not finish, said as such.
+ *
+ * A user scanned a real pons v2 launch seconds after it went live and was told
+ * "not a pons v2 launch". The factory had already confirmed the token; only the
+ * lookup for its launch block had come up empty, and that null rendered as a
+ * confident statement about the chain. These two answers are now different
+ * sentences and different log lines.
+ */
+export const CHAIN_UNREADABLE = "couldn't read the chain for this one, try again in a moment";
 
 /** What a user sees when a limit, not a fault, stopped the scan. */
 export function rateLimitedMessage(retryAfterSec: number): string {
@@ -67,6 +78,13 @@ export type ScanOutcome =
   | { kind: 'not_found'; defaultCard: string; fullCard: string; meta: CompactMeta; cacheHit: boolean; durationMs: number }
   | { kind: 'rate_limited'; retryAfterSec: number; window: 'minute' | 'hour'; message: string }
   | { kind: 'busy'; message: string }
+  /**
+   * The chain could not be read well enough to answer. Distinct from
+   * `not_found`, which is a fact the factory stated, and from `error`, which is
+   * a fault: this one means the lookup did not finish, and saying anything
+   * about the token would be inventing it.
+   */
+  | { kind: 'unreadable'; message: string }
   | { kind: 'error'; message: string };
 
 export interface ScanRequest {
@@ -552,6 +570,12 @@ export async function performScan(req: ScanRequest): Promise<ScanOutcome> {
     // A limit is not a fault. Reporting one as "scan failed" tells the user the
     // token is broken when the only thing that happened is that we asked the
     // node too often.
+    if (err instanceof LaunchLookupIncomplete) {
+      const d = Date.now() - started;
+      console.warn(`[scan] launch lookup incomplete for ${token} (${req.source}) after ${err.durationMs}ms: ${err.reason}`);
+      logEvent(req, false, d, 'unreadable');
+      return { kind: 'unreadable', message: CHAIN_UNREADABLE };
+    }
     const retryAfter = rateLimitFrom(err);
     if (retryAfter !== null) {
       console.warn(`[scan] rpc rate limited for ${token} (${req.source}), retry after ${retryAfter}s`);
