@@ -406,10 +406,11 @@ export async function refreshConcentration(
     // next; it cannot undo the node being busy with a query it has already
     // accepted. Skipped on the first chunk so a small delta stays instant.
     if (chunks > 0 && REFRESH_PAUSE_MS > 0) {
-      await new Promise((r) => {
-        const t = setTimeout(r, REFRESH_PAUSE_MS);
-        (t as any).unref?.();
-      });
+      // NOT unref'd. This promise's settlement depends on it, and unref'ing it
+      // let the process exit mid-read with the reading half done -- the same
+      // mistake as unref'ing a deadline timer, which this codebase has made
+      // before. Unref belongs on background intervals, not here.
+      await new Promise((r) => setTimeout(r, REFRESH_PAUSE_MS));
       if (!shouldContinue()) { complete = false; break; }
     }
     const end = start + BigInt(REFRESH_CHUNK_BLOCKS) - 1n > head ? head : start + BigInt(REFRESH_CHUNK_BLOCKS) - 1n;

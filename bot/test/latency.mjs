@@ -13,26 +13,50 @@ import assert from 'node:assert/strict';
 import { performScan } from '../dist/service.js';
 import { scanCache } from '../dist/cache.js';
 import { db } from '../dist/db.js';
-import { readStoredConcentration } from '../dist/metrics/concentration.js';
+import { readStoredConcentration, refreshConcentration } from '../dist/metrics/concentration.js';
+import { client } from '../dist/chain.js';
 import { SCAN_BUDGET_MS } from '../dist/config.js';
 
 const ok = (m) => console.log(`  PASS  ${m}`);
 const MIN_HOLDERS = Number(process.env.LATENCY_MIN_HOLDERS || 300);
 
-// The heaviest token on record: holder count is what drives the Transfer read,
-// which is the phase that caused this.
-const biggest = db
-  .prepare('SELECT token, holders FROM holder_snapshots ORDER BY holders DESC LIMIT 1')
-  .get();
+/**
+ * The token this regression was found on: 206 holders and 9,001 Transfer logs
+ * across four million blocks, which is what a whole-life read costs. Named
+ * rather than discovered, so the suite works against a fresh database like
+ * every other live suite here — discovering it from holder_snapshots meant the
+ * test only ran when something else had already warmed the index, which is to
+ * say it did not run.
+ */
+const SUBJECT = process.env.LATENCY_TOKEN || '0x2ca41249485eb6f71981872461d0fca32058fd78';
 
-assert.ok(biggest, 'no holder readings on record — run the window indexer first');
+// ---- setup, not measured --------------------------------------------------
+// One scan to index the launch, then the expensive first holder reading driven
+// to completion. Both are what the background loop does on its own schedule in
+// production; doing them here is what makes the measurements below the
+// steady state rather than a cold start.
+{
+  const first = await performScan({ token: SUBJECT, source: 'dm', userId: 899_999 });
+  assert.equal(first.kind, 'ok', `subject did not scan: ${first.kind}`);
+  const row = db.prepare('SELECT block_number, curve FROM launches WHERE token = ?').get(SUBJECT.toLowerCase());
+  assert.ok(row, 'subject has no launch row after a successful scan');
+  const t0 = Date.now();
+  const r = await refreshConcentration(SUBJECT, row.curve, BigInt(row.block_number), await client.getBlockNumber());
+  console.log(`  setup: first holder reading took ${((Date.now() - t0) / 1000).toFixed(1)}s over ${r.blocksRead.toLocaleString()} blocks`);
+}
+
+const biggest = db
+  .prepare('SELECT token, holders FROM holder_snapshots WHERE token = ?')
+  .get(SUBJECT.toLowerCase());
+assert.ok(biggest, 'the first reading recorded nothing — cannot measure what it costs to serve');
+
 if (biggest.holders < MIN_HOLDERS) {
   // Stated, never skipped silently: a latency ceiling asserted against a
   // ten-holder token proves nothing, and pretending otherwise is how a
   // regression this size ships twice.
   console.log(
-    `  WARN  largest token on record has ${biggest.holders} holders, under the ${MIN_HOLDERS} this is meant to prove.\n` +
-    `        Asserting against it anyway; set LATENCY_MIN_HOLDERS to change the bar.`,
+    `  WARN  subject has ${biggest.holders} holders, under the ${MIN_HOLDERS} this is meant to prove.\n` +
+    `        Asserting against it anyway; set LATENCY_TOKEN to a heavier one.`,
   );
 }
 console.log(`  token ${biggest.token.slice(0, 12)}… — ${biggest.holders} holders`);
