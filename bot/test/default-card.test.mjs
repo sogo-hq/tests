@@ -26,7 +26,7 @@ test('concerns-raised card matches the specified shape exactly', () => {
     '· deployer launched 91 tokens this week',
     '',
     '2 buyers',
-    'both already sold · 0.00% to graduation',
+    'both already sold · 0 of 4.2 ETH to graduation',
     '',
     '@vitalscheck_bot · not financial advice',
   ]);
@@ -45,7 +45,7 @@ test('nothing-raised card matches the specified shape exactly', () => {
     'no concerns raised · 6 of 8 checked · 2 undetermined',
     '',
     '38 buyers',
-    '3 of 38 sold · 12.4% to graduation',
+    '3 of 38 sold · 0 of 4.2 ETH to graduation',
     'buyers 12 → 38 in 20 min',
     '',
     '@vitalscheck_bot · not financial advice',
@@ -174,12 +174,13 @@ test('the buyer count stands alone, with what happened to them on the next line'
   const rest = (over) => lines(over).find((l) => /to graduation$/.test(l));
 
   assert.equal(buyer({ buyers: 0, roundTrippers: 0, progressPct: 0 }), 'no buyers yet');
-  assert.equal(rest({ buyers: 0, roundTrippers: 0, progressPct: 0 }), '0.00% to graduation');
+  assert.equal(rest({ buyers: 0, roundTrippers: 0, progressPct: 0 }), '0 of 4.2 ETH to graduation');
   assert.equal(buyer({ buyers: 1, roundTrippers: 0, progressPct: 1 }), '1 buyer');
-  assert.equal(rest({ buyers: 1, roundTrippers: 0, progressPct: 1 }), 'none sold yet \u00b7 1% to graduation');
-  assert.equal(rest({ buyers: 2, roundTrippers: 2, progressPct: 0 }), 'both already sold \u00b7 0.00% to graduation');
-  assert.equal(rest({ buyers: 9, roundTrippers: 9, progressPct: 5.5 }), 'all already sold \u00b7 5.5% to graduation');
-  assert.equal(rest({ buyers: 9, roundTrippers: 3, progressPct: 5.5 }), '3 of 9 sold \u00b7 5.5% to graduation');
+  assert.equal(rest({ buyers: 1, roundTrippers: 0, progressPct: 1, realQuoteReserve: 42000000000000000n }),
+    'none sold yet \u00b7 0.042 of 4.2 ETH to graduation');
+  assert.equal(rest({ buyers: 2, roundTrippers: 2, progressPct: 0 }), 'both already sold \u00b7 0 of 4.2 ETH to graduation');
+  assert.equal(rest({ buyers: 9, roundTrippers: 9, progressPct: 5.5 }), 'all already sold \u00b7 0 of 4.2 ETH to graduation');
+  assert.equal(rest({ buyers: 9, roundTrippers: 3, progressPct: 5.5 }), '3 of 9 sold \u00b7 0 of 4.2 ETH to graduation');
 });
 
 test('the buyer count carries its reference point, and only above the floor', () => {
@@ -320,6 +321,64 @@ test('the market cap is scaled, not spelled out', () => {
   assert.equal(mc(1_120_000), '1.1M ETH mc');
 });
 
+// --------------------------------------------- distance to graduation
+test('graduation is stated in absolutes, against the threshold', () => {
+  const line = (over) =>
+    renderDefaultCard(makeScan(over), 'b').split('\n').find((l) => /graduat/.test(l));
+  assert.match(
+    line({ realQuoteReserve: 186_200000000000000n, buyers: 0 }),
+    /^0.186 of 4.2 ETH to graduation$/,
+  );
+  // and in whatever asset the curve is measured in
+  assert.match(
+    line({ realQuoteReserve: 57_000000000000000000n, graduationThreshold: 120_000000000000000000n,
+           pairSymbol: 'NVDA', buyers: 0 }),
+    /^57 of 120 NVDA to graduation$/,
+  );
+});
+
+test('the threshold is never paired with the market cap', () => {
+  // They are different quantities in the same units. The threshold gates the
+  // curve's quote RESERVE; the cap is supply times price. $CHIPPER carries a
+  // 1.68 ETH cap against a 0.0000 ETH reserve, so "1.7 of 4.2" would have
+  // announced 40% of the way to graduation for a token at 0.000%.
+  const card = renderDefaultCard(makeScan({
+    mcapInQuote: 1.68, realQuoteReserve: 0n, buyers: 0,
+  }), 'b');
+  assert.match(card.split('\n')[0], /1.68 ETH mc$/, 'the cap belongs in the header');
+  assert.match(card, /^0 of 4.2 ETH to graduation$/m, 'and the reserve against the threshold');
+  assert.ok(!/1.68 of 4.2/.test(card), 'the cap must never be shown as progress toward the threshold');
+});
+
+test('a graduated curve says so rather than reporting zero progress', () => {
+  // Its reserve went to the pool. "0 of 4.2" would read as a launch that never
+  // got anywhere rather than one that finished.
+  const line = renderDefaultCard(makeScan({
+    phaseName: 'PoolCreated', realQuoteReserve: 0n, buyers: 3,
+  }), 'b').split('\n').find((l) => /graduat/.test(l));
+  assert.match(line, /graduated$/);
+  assert.ok(!/0 of 4.2/.test(line), line);
+});
+
+test('an unreadable threshold states no distance rather than zero', () => {
+  // The percentage this used to fall back to came from the same missing number,
+  // so it was always a confident "0% to graduation" about a curve nothing had
+  // been read from.
+  const card = renderDefaultCard(makeScan({ graduationThreshold: 0n, buyers: 5, roundTrippers: 1 }), 'b');
+  assert.ok(!/graduation/.test(card), `a distance was claimed without a threshold:\n${card}`);
+  assert.ok(!/0%/.test(card), 'and certainly not as a zero');
+  assert.match(card, /^1 of 5 sold$/m, 'what IS known still renders');
+});
+
+test('no percentage survives on the default card', () => {
+  // Same information, and the absolute says what the finish line is.
+  for (const reserve of [0n, 186_200000000000000n, 4_200000000000000000n]) {
+    const card = renderDefaultCard(makeScan({ realQuoteReserve: reserve, buyers: 5 }), 'b');
+    const grad = card.split('\n').find((l) => /to graduation/.test(l));
+    assert.ok(grad && !/%/.test(grad), `a percentage survived: ${grad}`);
+  }
+});
+
 // ------------------------------------------------------- the receipt line
 test('the first scan is reported once there has been one', () => {
   const line = (over) =>
@@ -447,7 +506,7 @@ test('card order: concerns, then the buyer count, then concentration, then the r
     '',
     '38 buyers \u2014 median at this age is 12',
     'top 5 hold 44% \u00b7 23 holders',
-    '3 of 38 sold \u00b7 12.4% to graduation',
+    '3 of 38 sold \u00b7 0 of 4.2 ETH to graduation',
     'buyers 12 \u2192 38 in 20 min',
     '',
     '@vitalscheck_bot \u00b7 not financial advice',

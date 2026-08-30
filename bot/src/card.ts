@@ -556,11 +556,39 @@ export function buyerLine(r: ScanResult): string {
  * toward graduation. `activityLine` keeps the older combined phrasing for the
  * image, which renders one line rather than three.
  */
+/**
+ * How far the curve is from graduating, in the asset it is measured in.
+ *
+ * The absolute rather than the percentage: "0.19 of 4.2 ETH" says the same
+ * thing as "4.4%" and also says what the finish line is, which the percentage
+ * does not.
+ *
+ * Deliberately NOT the market cap. The threshold gates the curve's quote
+ * RESERVE, and the two are far apart -- $CHIPPER carries a 1.68 ETH market cap
+ * against a 0.0000 ETH reserve, so pairing the cap with the threshold would
+ * have read "1.7 of 4.2" for a token that is 0.000% of the way there. Same
+ * units, different quantities.
+ */
+export function graduationProgress(r: ScanResult): string | null {
+  const dec = r.reads.pairDecimals ?? 18;
+  const unit = clamp(r.reads.pairSymbol ?? 'ETH', MAX_TICKER);
+  const threshold = Number(r.reads.graduationThreshold ?? 0n) / 10 ** dec;
+  const reserve = Number(r.reads.realQuoteReserve ?? 0n) / 10 ** dec;
+  // A graduated curve has handed its reserve to the pool; "0 of 4.2" would read
+  // as a launch that never got anywhere rather than one that finished.
+  if (r.reads.phaseName && r.reads.phaseName !== 'NotGraduated') return 'graduated';
+  // No threshold means no distance to state. The percentage this used to fall
+  // back to was derived from the same missing number, so it was always a
+  // confident "0% to graduation" about a curve nothing had been read from.
+  if (!Number.isFinite(threshold) || threshold <= 0) return null;
+  return `${compactAmount(reserve)} of ${compactAmount(threshold)} ${unit} to graduation`;
+}
+
 export function sellingLine(r: ScanResult): string {
   const t = r.traction;
   const buyers = t.uniqueBuyers30m;
-  const progress = `${formatProgress(r.reads.progressPct)}% to graduation`;
-  if (buyers === 0) return progress;
+  const progress = graduationProgress(r);
+  if (buyers === 0) return progress ?? 'no buyers and no reserve read yet';
   const sold =
     t.roundTrippers === 0
       ? 'none sold yet'
@@ -569,7 +597,7 @@ export function sellingLine(r: ScanResult): string {
           ? 'both already sold'
           : 'all already sold'
         : `${t.roundTrippers} of ${buyers} sold`;
-  return `${sold} \u00b7 ${progress}`;
+  return progress ? `${sold} \u00b7 ${progress}` : sold;
 }
 
 export function concentrationLine(r: ScanResult): string | null {

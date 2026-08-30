@@ -34,6 +34,9 @@ export function makeScan(over = {}) {
       phaseName: 'NotGraduated',
       progressPct: over.progressPct ?? 0,
       mcapInQuote: 'mcapInQuote' in over ? over.mcapInQuote : 0,
+      phaseName: over.phaseName ?? 'NotGraduated',
+      graduationThreshold: over.graduationThreshold ?? 4_200000000000000000n,
+      realQuoteReserve: over.realQuoteReserve ?? 0n,
       ...(over.reads ?? {}),
     },
     traction: {
