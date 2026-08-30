@@ -53,7 +53,13 @@ assert.doesNotMatch(full, /progress velocity/i, '/full printed progress velocity
 assert.doesNotMatch(compact, /traction/i, 'the default card names traction at all');
 assert.match(full, new RegExp(`launched ${r.ageSeconds}s ago — too early for traction`));
 assert.match(full, /traction unavailable — the snipe tax window is still open\. re-scan in 2 minutes\./);
-assert.match(compact, new RegExp(`^VITALS .* · ${r.ageSeconds}s$`, 'm'), `default header was: ${compact.split('\n')[0]}`);
+// The header carries the market cap after the age when the curve can be read,
+// and nothing when it cannot -- so the age is no longer the last field.
+assert.match(
+  compact,
+  new RegExp(`^VITALS .* · ${r.ageSeconds}s( · [0-9.KM]+ [A-Za-z0-9]+ mc)?$`, 'm'),
+  `default header was: ${compact.split('\n')[0]}`,
+);
 ok('/full renders early mode; the default card carries no traction verdict');
 
 // ---- inline ----------------------------------------------------------------
