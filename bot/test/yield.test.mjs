@@ -82,3 +82,30 @@ test('background requests wait while interactive ones do not', async () => {
   const scanAt = order.indexOf('scan');
   assert.ok(scanAt >= 0 && scanAt < order.length, 'the scan completed while bulk work was still going');
 });
+
+test('sustained scanning starves background work without deadlocking it', async () => {
+  // A scan every 900ms sits inside the one-second quiet window, so background
+  // work should be squeezed almost to nothing -- which is what was asked for.
+  // What must NOT happen is zero forever: "yields to scans" turning into "never
+  // runs" is a stall, and it would look identical from the outside.
+  const URL = 'https://rpc.mainnet.chain.robinhood.com';
+  let served = 0;
+  let stop = false;
+  const bulkLoop = (async () => {
+    while (!stop) {
+      await R.bulk(() => fetch(URL, { method: 'POST', body: '{"id":1}' }));
+      served++;
+    }
+  })();
+
+  const started = Date.now();
+  while (Date.now() - started < 5_000) {
+    await R.interactive(() => fetch(URL, { method: 'POST', body: '{"id":2}' }));
+    await new Promise((r) => setTimeout(r, 900));
+  }
+  stop = true;
+  await Promise.race([bulkLoop, new Promise((r) => setTimeout(r, 2_000))]);
+
+  assert.ok(served > 0, 'background work made no progress at all in five seconds — that is a stall, not a yield');
+  assert.ok(served < 25, `background work took ${served} tokens while scans were arriving constantly`);
+});
