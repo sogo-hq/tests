@@ -185,3 +185,35 @@ test('a burst of 429s cuts the rate once, and never below the serving floor', as
       `longer fit its budget and the user pays for background work's refusals.`,
   );
 });
+
+/**
+ * A scan's own 429 must not stop the indexer.
+ *
+ * Standing background work down whenever the node refuses anything is the
+ * obvious rule and the wrong one. Scans on this node trip 429s by themselves --
+ * two in a single cold scan, measured -- so a 30-second stand-down per refusal
+ * means a busy bot never indexes, and the buyer benchmark and the exempted
+ * median never reach the 30 observations they refuse to report below.
+ *
+ * Only work that was itself refused pays.
+ */
+test('an interactive 429 cuts the rate without pausing background work', async () => {
+  const { spareCapacity, bulk } = await import('../dist/ratelimit.js');
+  retryAfterHeader = null;
+
+  // Refused while interactive: the indexer must still be allowed to work.
+  await limitOf(2_000);
+  await new Promise((r) => setTimeout(r, 1_100)); // clear the quiet window
+  assert.ok(
+    spareCapacity() > 0,
+    'a scan tripping a 429 stood the indexer down; on a busy bot that is never indexing again',
+  );
+
+  // Refused while bulk: that is the case which yields.
+  await bulk(() => limitOf(2_000));
+  await new Promise((r) => setTimeout(r, 1_100));
+  assert.equal(
+    spareCapacity(), 0,
+    'background work kept its allowance after its own request was refused',
+  );
+});

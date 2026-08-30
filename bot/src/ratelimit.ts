@@ -131,8 +131,11 @@ class TokenBucket {
    *
    * THE WORK THAT EARNED IT PAYS. The refusals above came from a background
    * holder reading. Cutting a shared rate makes the user's scan serve the
-   * penalty for it, which is exactly backwards, so bulk stops entirely while a
-   * penalty is live and the reduced capacity goes to whoever is waiting.
+   * penalty for it, which is exactly backwards, so a refused BULK request stops
+   * more background work from being started and the reduced capacity goes to
+   * whoever is waiting. A refused interactive request does not: scans trip 429s
+   * on this node by themselves, and pausing the indexer for each one would mean
+   * a busy bot never indexes.
    *
    * A FLOOR THAT STILL SERVES. With bulk stopped, the only load left is scans,
    * and a scan cannot fit its reads into its budget below about 4/s. Sustained
@@ -143,10 +146,15 @@ class TokenBucket {
    * Logged, because a silent collapse to 1/s is indistinguishable from a slow
    * node from the outside, and we spent a run of the latency suite guessing.
    */
-  penalise(): void {
+  penalise(earnedBy: Priority): void {
     this.tokens = 0;
     const now = Date.now();
-    this.penalisedUntil = now + PENALTY_MS;
+    // Only work that was itself refused stands down. An interactive 429 cuts
+    // the rate like any other, but must not pause the indexer: scans on this
+    // node trip the occasional 429 on their own, and standing background work
+    // down for 30s on each one would leave a busy bot never indexing at all --
+    // which is the buyer benchmark and the exempted median never filling.
+    if (earnedBy === 'bulk') this.penalisedUntil = now + PENALTY_MS;
     if (now - this.lastPenaltyAt < PENALTY_COOLDOWN_MS) return;
     this.lastPenaltyAt = now;
 
@@ -154,8 +162,8 @@ class TokenBucket {
     this.rate = Math.max(RATE_PER_SEC * PENALTY_FLOOR, this.rate * 0.6);
     if (this.rate !== was) {
       console.warn(
-        `[limiter] 429 -- rate ${was.toFixed(1)}/s -> ${this.rate.toFixed(1)}/s, ` +
-          `background work paused for ${PENALTY_MS / 1000}s`,
+        `[limiter] 429 on ${earnedBy} -- rate ${was.toFixed(1)}/s -> ${this.rate.toFixed(1)}/s` +
+          (earnedBy === 'bulk' ? `, background work paused for ${PENALTY_MS / 1000}s` : ''),
       );
     }
     setTimeout(() => {
@@ -194,9 +202,6 @@ class TokenBucket {
    * reserve of tokens left untouched for whatever arrives next.
    */
   private bulkMayProceed(): boolean {
-    // Whatever tripped the 429 was going too fast for the node; background work
-    // is what yields, not the person waiting on a card.
-    if (this.penalised()) return false;
     if (this.queue.some((q) => q.priority === 'interactive')) return false;
     if (Date.now() - this.lastInteractiveAt < BULK_QUIET_MS) return false;
     return this.tokens >= 1 + this.capacity * BULK_RESERVE_FRACTION;
@@ -227,9 +232,18 @@ class TokenBucket {
     }
   }
 
-  /** Tokens beyond the interactive reserve, for sizing a background batch. */
+  /**
+   * Tokens beyond the interactive reserve, for sizing a background batch.
+   *
+   * The 429 stand-down lives here rather than in the queue gate. Refusing a
+   * queued bulk request for the length of the penalty strands one that is
+   * already mid-ladder -- it re-acquires between retries -- and holds it open
+   * for 30 seconds until the transport gives up. What should stop is background
+   * work being STARTED, which is a question the schedulers ask here.
+   */
   spareTokens(): number {
     this.refill();
+    if (this.penalised()) return 0;
     if (!this.bulkMayProceed()) return 0;
     return Math.max(0, Math.floor(this.tokens - this.capacity * BULK_RESERVE_FRACTION));
   }
@@ -372,7 +386,7 @@ export function installRateLimit(): void {
       if (attempt >= MAX_429_RETRIES || waited + waitMs > BUDGET_MS || signal?.aborted) {
         throw new RpcRateLimited(Math.max(1, Math.round(waitMs / 1000)));
       }
-      bucket.penalise();
+      bucket.penalise(priorityStore.getStore() ?? 'interactive');
       const thisWait = waitMs + Math.random() * 250;
       waited += thisWait;
       await sleep(thisWait);
