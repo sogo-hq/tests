@@ -1,6 +1,6 @@
 import { getAddress, isAddress } from 'viem';
 import { printVerify } from './verify.js';
-import { backfill, indexNew, decodePending, startDecodeLoop, startIndexLoop } from './indexer/launches.js';
+import { backfill, indexNew, decodePending, decodeBacklog, startDecodeLoop, startIndexLoop, MAX_DECODE_ATTEMPTS_LABEL } from './indexer/launches.js';
 import { startRecovery } from './recovery.js';
 import { scanToken } from './scan.js';
 import { renderCardText, renderDefaultCard } from './card.js';
@@ -61,10 +61,28 @@ async function main(): Promise<void> {
     }
 
     case 'decode': {
+      // `decode retry` clears the attempt counters, for when a new entry point's
+      // ABI has been added and the rows that were given up on are worth another
+      // look. Nothing else resets them: a row is left alone precisely so it
+      // stops costing requests.
+      if (rest[0] === 'retry') {
+        const n = db.prepare('UPDATE launches SET decode_attempts = 0 WHERE decode_attempts > 0').run().changes;
+        console.log(`Reset ${n.toLocaleString()} attempt counters. Run \`decode\` to try them again.`);
+        break;
+      }
       const limit = rest[0] ? Number(rest[0]) : Infinity;
-      const pending = (db.prepare('SELECT COUNT(*) n FROM launches WHERE snipe_exemption_count IS NULL').get() as any).n;
+      const backlog = decodeBacklog();
+      const pending = backlog.pending;
       if (!pending) {
-        console.log('Every indexed launch already has its creation transaction decoded.');
+        // Carefully worded. Rows that were given up on are NOT decoded, and
+        // saying they were would turn "we stopped asking" into an answer.
+        console.log(
+          backlog.exhausted
+            ? `Nothing left to attempt. ${backlog.exhausted.toLocaleString()} launches remain undetermined — ` +
+              'their creation transactions use entry points this build has no ABI for. ' +
+              'Add one and run `decode retry` to attempt them again.'
+            : 'Every indexed launch already has its creation transaction decoded.',
+        );
         break;
       }
       console.log(`Decoding creation transactions for ${Math.min(pending, Number(limit)).toLocaleString()} launches.`);
@@ -82,7 +100,13 @@ async function main(): Promise<void> {
       process.stdout.write('\r' + ' '.repeat(78) + '\r');
       console.log(`Decoded ${res.decoded} launches in ${((Date.now() - t0) / 1000).toFixed(1)}s.`);
       if (res.failed) console.log(`${res.failed} could not be decoded — recorded as undetermined, never as clean.`);
-      if (res.remaining) console.log(`${res.remaining} still pending.`);
+      if (res.remaining) console.log(`${res.remaining.toLocaleString()} still pending.`);
+      if (res.exhausted) {
+        console.log(
+          `${res.exhausted.toLocaleString()} left as undetermined after ${MAX_DECODE_ATTEMPTS_LABEL} attempts — ` +
+          'not retried again, and never reported as clean.',
+        );
+      }
       break;
     }
 

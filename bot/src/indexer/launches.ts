@@ -26,6 +26,9 @@ import { TokenLaunched, LaunchSwept, PoolGraduated } from '../abi.js';
  */
 const MAX_DECODE_ATTEMPTS = Math.max(1, Number(process.env.MAX_DECODE_ATTEMPTS || 2) || 2);
 
+/** For messages that quote the cap. */
+export const MAX_DECODE_ATTEMPTS_LABEL = String(MAX_DECODE_ATTEMPTS);
+
 const CURSOR = 'launches';
 
 const insertLaunch = db.prepare(`

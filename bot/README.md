@@ -820,6 +820,7 @@ Tables: `launches`, `trades`, `scans`, `rechecks`, `token_peaks`, `cursors`.
 | `npm run verify` | re-assert every chain fact against the live chain |
 | `npm run backfill [days]` | index `TokenLaunched` (add `--decode` to decode inline) |
 | `npm run decode [n]` | decode creation txs for exemptions; resumable |
+| `npm run decode retry` | clear attempt counters, for after a new entry point's ABI is added |
 | `npm run index` | index launches since the stored cursor |
 | `npm run scan -- <addr>` | scan one token, print the card |
 | `npm run recheck [n]` | run due rechecks once (`--loop` to stay running) |
