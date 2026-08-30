@@ -223,7 +223,7 @@ test('the comparison never reads as a verdict', () => {
 
 test('holder concentration appears only when it is a measurement', () => {
   const conc = (over) =>
-    renderDefaultCard(makeScan(over), 'b').split('\n').find((l) => /top 5 wallets/.test(l));
+    renderDefaultCard(makeScan(over), 'b').split('\n').find((l) => /top 5 hold/.test(l));
 
   // unreadable, and below the arithmetic floor: absent from the card, because a
   // top-5 share of five or fewer holders is 100% whatever the distribution is
@@ -232,8 +232,8 @@ test('holder concentration appears only when it is a measurement', () => {
   assert.equal(conc({ concentration: { top5Share: 100, holders: 5, circulating: 1n } }), undefined);
 
   assert.equal(
-    conc({ concentration: { top5Share: 44.2, holders: 23, circulating: 1n } }),
-    'top 5 wallets hold 44% \u00b7 23 holders',
+    conc({ concentration: { top5Share: 44.2, top1Share: 0, holders: 23, circulating: 1n } }),
+    'top 5 hold 44% \u00b7 23 holders',
   );
 });
 
@@ -290,6 +290,88 @@ test('lifting is emphasis, not a verdict', () => {
   }
 });
 
+// ------------------------------------------------ market cap in the header
+test('the header carries the market cap, in the asset the launch is priced in', () => {
+  const head = (over) => renderDefaultCard(makeScan(over), 'b').split('\n')[0];
+  assert.equal(head({ symbol: 'NPC', ageSeconds: 158400, mcapInQuote: 1.68 }), 'VITALS  $NPC · 44h · 1.68 ETH mc');
+  assert.equal(
+    head({ symbol: 'NPC', ageSeconds: 158400, mcapInQuote: 57000, pairSymbol: 'NVDA' }),
+    'VITALS  $NPC · 44h · 57K NVDA mc',
+    'priced in a tokenised equity, and said so — there is no stablecoin pair on this chain to read dollars from',
+  );
+});
+
+test('an unreadable market cap is omitted, never printed as zero', () => {
+  // A graduated curve reports 0 because it no longer holds the supply. "0 mc"
+  // in a header reads as a worthless token rather than a finished one.
+  for (const v of [0, -1, NaN, Infinity]) {
+    const head = renderDefaultCard(makeScan({ symbol: 'NPC', ageSeconds: 158400, mcapInQuote: v }), 'b').split('\n')[0];
+    assert.equal(head, 'VITALS  $NPC · 44h', `mcap ${v} reached the header`);
+  }
+});
+
+test('the market cap is scaled, not spelled out', () => {
+  const mc = (v) => renderDefaultCard(makeScan({ mcapInQuote: v }), 'b').split('\n')[0].split(' · ').pop();
+  assert.equal(mc(0.4237), '0.424 ETH mc');
+  assert.equal(mc(1.68), '1.68 ETH mc');
+  assert.equal(mc(12.42), '12.4 ETH mc');
+  assert.equal(mc(340.7), '341 ETH mc');
+  assert.equal(mc(5218), '5.2K ETH mc');
+  assert.equal(mc(1_120_000), '1.1M ETH mc');
+});
+
+// ------------------------------------------------------- the receipt line
+test('the first scan is reported once there has been one', () => {
+  const line = (over) =>
+    renderDefaultCard(makeScan(over), 'b').split('\n').find((l) => l.startsWith('first scanned'));
+  assert.equal(
+    line({ firstScan: { mcap: 1.2, at: 1_700_000_000, since: 22 } }),
+    'first scanned here at 1.2 ETH · 22 scans since',
+  );
+  assert.equal(line({ firstScan: { mcap: 1.2, at: 1, since: 1 } }), 'first scanned here at 1.2 ETH · 1 scan since');
+  assert.equal(line({ firstScan: { mcap: 1.2, at: 1, since: 0 } }), 'first scanned here at 1.2 ETH');
+});
+
+test('a first scan says nothing at all', () => {
+  // No "you are first", no badge. There is nothing to report yet.
+  const card = renderDefaultCard(makeScan({ firstScan: null }), 'b');
+  assert.ok(!/first scanned|you are first|first here/i.test(card), `a first scan announced itself:\n${card}`);
+});
+
+test('the receipt is a fact, with no framing on it', () => {
+  const FRAMING = /\b(early|good call|nice|well spotted|you (found|called)|congrat|winner|gem)\b/i;
+  for (const since of [0, 1, 22, 5000]) {
+    for (const mcap of [0.001, 1.2, 900, 120000]) {
+      const card = renderDefaultCard(makeScan({ firstScan: { mcap, at: 1, since } }), 'b');
+      assert.ok(!FRAMING.test(card), `framing reached the card at ${mcap}/${since}`);
+    }
+  }
+});
+
+// --------------------------------------------------- the largest single holder
+test('the largest single holder is stated beside the aggregate', () => {
+  const conc = (over) =>
+    renderDefaultCard(makeScan(over), 'b').split('\n').find((l) => /top 5 hold/.test(l));
+  // One wallet at 17% and five at 4% both aggregate to 21%, and they are not
+  // the same situation.
+  assert.equal(
+    conc({ concentration: { top5Share: 21, top1Share: 17, holders: 40, circulating: 1n } }),
+    'top 5 hold 21% — largest 17% · 40 holders',
+  );
+  assert.equal(
+    conc({ concentration: { top5Share: 21, top1Share: 4.4, holders: 40, circulating: 1n } }),
+    'top 5 hold 21% — largest 4% · 40 holders',
+  );
+});
+
+test('a reading taken before the largest was recorded omits it rather than saying zero', () => {
+  const line = renderDefaultCard(makeScan({
+    concentration: { top5Share: 21, top1Share: 0, holders: 40, circulating: 1n },
+  }), 'b').split('\n').find((l) => /top 5 hold/.test(l));
+  assert.equal(line, 'top 5 hold 21% · 40 holders');
+  assert.ok(!/largest/.test(line), 'a legacy row must not claim a largest holder of 0%');
+});
+
 test('the card is bounded at 14 lines with every optional line rendering', () => {
   const r = makeScan({
     ageSeconds: 1200, symbol: 'TOKEN', buyers: 38, roundTrippers: 3, progressPct: 12.4,
@@ -314,13 +396,13 @@ test('concentration is stated once, not twice with two roundings', () => {
   const raised = {
     key: 'holder_concentration', label: 'Holder concentration', state: 'raised',
     detail: 'technical', compactDetail: 'x',
-    plain: 'top 5 wallets hold 44% of supply \u00b7 23 holders', severity: 60,
+    plain: 'top 5 hold 44% of supply \u00b7 23 holders', severity: 60,
   };
   const card = renderDefaultCard(makeScan({
     ageSeconds: 1200, buyers: 38, windowMinutes: 20, benchmarkMedian: 12, benchmarkN: 412,
     concentration: { top5Share: 44.2, holders: 23, circulating: 1n }, flags: [raised],
   }), 'b');
-  const mentions = card.split('\n').filter((l) => /top 5 wallets/.test(l));
+  const mentions = card.split('\n').filter((l) => /top 5 hold/.test(l));
   assert.equal(mentions.length, 1, `stated ${mentions.length} times:\n${card}`);
   assert.match(mentions[0], /^(\u26a0\ufe0f|\u00b7) /, 'when it is a concern it belongs in the concerns block');
   assert.ok(mentions[0].includes('23 holders'), 'and it must not lose the holder count in the move');
@@ -331,8 +413,8 @@ test('concentration is stated once, not twice with two roundings', () => {
     concentration: { top5Share: 44.2, holders: 23, circulating: 1n },
   }), 'b');
   const lines = plainCard.split('\n');
-  assert.equal(lines.filter((l) => /top 5 wallets/.test(l)).length, 1);
-  assert.ok(lines.indexOf('top 5 wallets hold 44% \u00b7 23 holders') > lines.findIndex((l) => /^38 buyers/.test(l)));
+  assert.equal(lines.filter((l) => /top 5 hold/.test(l)).length, 1);
+  assert.ok(lines.indexOf('top 5 hold 44% \u00b7 23 holders') > lines.findIndex((l) => /^38 buyers/.test(l)));
 });
 
 test('a window under a minute is never rendered as "0 min"', () => {
@@ -364,7 +446,7 @@ test('card order: concerns, then the buyer count, then concentration, then the r
     '\u26a0\ufe0f 8 wallets got in tax-free before you could',
     '',
     '38 buyers \u2014 median at this age is 12',
-    'top 5 wallets hold 44% \u00b7 23 holders',
+    'top 5 hold 44% \u00b7 23 holders',
     '3 of 38 sold \u00b7 12.4% to graduation',
     'buyers 12 \u2192 38 in 20 min',
     '',

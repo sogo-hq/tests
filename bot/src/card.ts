@@ -413,6 +413,57 @@ function formatProgress(pct: number): string {
   return pct.toFixed(2).replace(/0+$/, '').replace(/\.$/, '');
 }
 
+/**
+ * Market cap for the header, in the asset the launch is actually priced in.
+ *
+ * Read from the curve's own state, so it is verifiable like everything else
+ * here -- and therefore denominated in the pair asset, because that is what the
+ * curve holds. On this chain 70% of launches are paired against native ETH and
+ * the rest against tokenised equities (SPCX, DJT, TTWO, RDDT, NVDA); there is
+ * no stablecoin pair, so no launch has a dollar figure to read. Printing one
+ * would mean a price feed, which is both a third-party dependency and price
+ * data -- two things this bot does not carry.
+ *
+ * Returns null rather than a zero. A graduated token's curve reports 0 because
+ * it no longer holds the supply, and "0 mc" in a header would be read as a
+ * worthless token rather than a finished one.
+ */
+export function headerMcap(r: ScanResult): string | null {
+  const v = r.reads.mcapInQuote;
+  if (!Number.isFinite(v) || v <= 0) return null;
+  const unit = clamp(r.reads.pairSymbol ?? 'ETH', MAX_TICKER);
+  return `${compactAmount(v)} ${unit} mc`;
+}
+
+/** 0.42, 1.7, 12, 340, 5.2K, 1.1M — two significant figures of scale, no more. */
+export function compactAmount(v: number): string {
+  const abs = Math.abs(v);
+  if (abs >= 1_000_000) return `${trimZeros((v / 1_000_000).toFixed(1))}M`;
+  if (abs >= 1_000) return `${trimZeros((v / 1_000).toFixed(1))}K`;
+  if (abs >= 100) return String(Math.round(v));
+  if (abs >= 10) return trimZeros(v.toFixed(1));
+  if (abs >= 1) return trimZeros(v.toFixed(2));
+  return trimZeros(v.toFixed(3));
+}
+
+function trimZeros(s: string): string {
+  return s.includes('.') ? s.replace(/0+$/, '').replace(/\.$/, '') : s;
+}
+
+/**
+ * The receipt line: what this token was worth the first time anyone looked.
+ *
+ * Absent on a first scan -- there is nothing to report, and a badge for being
+ * first would be the kind of framing this card does not do.
+ */
+export function firstScanLine(r: ScanResult): string | null {
+  const f = r.firstScan;
+  if (!f) return null;
+  const unit = clamp(r.reads.pairSymbol ?? 'ETH', MAX_TICKER);
+  const since = f.since > 0 ? ` \u00b7 ${f.since.toLocaleString()} scan${f.since === 1 ? '' : 's'} since` : '';
+  return `first scanned here at ${compactAmount(f.mcap)} ${unit}${since}`;
+}
+
 /** Compact age for the header: 47s, 2m, 3h, 5d. */
 export function headerAge(seconds: number): string {
   const s = Math.max(0, Math.floor(seconds));
@@ -529,7 +580,11 @@ export function concentrationLine(r: ScanResult): string | null {
   // -- "top 5 wallets hold 44.2% of supply" over "top 5 wallets hold 44%".
   const raised = r.flags.flags.some((f) => f.key === 'holder_concentration' && f.state === 'raised');
   if (raised) return null;
-  return `top 5 wallets hold ${c.top5Share.toFixed(0)}% \u00b7 ${c.holders} holders`;
+  // The aggregate hides the shape: one wallet at 17% and five at 4% both read
+  // as "top 5 hold 21%", and they are not the same situation. The largest
+  // single share is stated beside it; the full breakdown stays in /full.
+  const largest = c.top1Share > 0 ? ` \u2014 largest ${c.top1Share.toFixed(0)}%` : '';
+  return `top 5 hold ${c.top5Share.toFixed(0)}%${largest} \u00b7 ${c.holders} holders`;
 }
 
 /**
@@ -560,7 +615,8 @@ export function renderDefaultCard(r: ScanResult, botUsername?: string): string {
   const f = r.flags;
   const L: string[] = [];
 
-  L.push(`VITALS  ${defaultTicker(r)} \u00b7 ${headerAge(r.ageSeconds)}`);
+  const mc = headerMcap(r);
+  L.push(`VITALS  ${defaultTicker(r)} \u00b7 ${headerAge(r.ageSeconds)}${mc ? ` \u00b7 ${mc}` : ''}`);
   L.push('');
 
   const raised = f.flags
@@ -609,6 +665,8 @@ export function renderDefaultCard(r: ScanResult, botUsername?: string): string {
   L.push(sellingLine(r));
   const growth = growthLine(r);
   if (growth) L.push(growth);
+  const first = firstScanLine(r);
+  if (first) L.push(first);
 
   L.push('');
   L.push(botUsername ? `@${plainField(botUsername, 40)} \u00b7 ${PLAIN_FOOTER}` : PLAIN_FOOTER);

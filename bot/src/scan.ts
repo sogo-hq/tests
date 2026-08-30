@@ -16,6 +16,7 @@ import {
 } from './metrics/concentration.js';
 import { queueHolderRefresh } from './indexer/windows.js';
 import { PhaseTimer, Budget, withDeadline } from './timing.js';
+import { firstScan, type FirstScan } from './history.js';
 import { SCAN_BUDGET_MS, CONCENTRATION_DEADLINE_MS } from './config.js';
 import { isRateLimit } from './ratelimit.js';
 import { TokenLaunched } from './abi.js';
@@ -74,6 +75,8 @@ export interface ScanResult {
   slowestPhase: string | null;
   /** True when the scan ran past its budget; the log says which phase ate it. */
   overBudget: boolean;
+  /** What this token was worth when it was first scanned here. Null on a first scan. */
+  firstScan: FirstScan | null;
 }
 
 /** Locate a token's launch, from the index if present, otherwise from the chain. */
@@ -360,6 +363,10 @@ async function scanTokenInner(token: string, requestedBy?: number): Promise<Scan
         traction,
         flags,
         benchmark,
+        // Excluding this token's own early row, which is reused rather than
+        // appended: without that a re-scan inside the early window would report
+        // itself as the first scan.
+        firstScan: firstScan(reads.token, existing.id),
         launchBlock: launch.block,
         launchedAt: launchedAtExact,
         ageSeconds,
@@ -432,6 +439,9 @@ async function scanTokenInner(token: string, requestedBy?: number): Promise<Scan
     traction,
     flags,
     benchmark,
+    // The row for THIS scan was just inserted, so it is excluded: a token's
+    // very first scan must find nothing and print nothing.
+    firstScan: firstScan(reads.token, scanId),
     launchBlock: launch.block,
     launchedAt: launchedAtExact,
     ageSeconds,

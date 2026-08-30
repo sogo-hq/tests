@@ -28,7 +28,7 @@ function inTempDb(body, env = {}) {
       const A = (n) => '0x' + String(n).padStart(40, '0');
       /** Record an observation the way a scan would. */
       const obs = (token, share, holders) =>
-        C.recordConcentration(token, { top5Share: share, holders, circulating: 100n }, 1);
+        C.recordConcentration(token, { top5Share: share, top1Share: share / 5, holders, circulating: 100n }, 1);
       /** The most even share this many wallets can produce. */
       const floorOf = (h) => C.arithmeticFloor(h);
       /** A share that sits a given fraction of the way from that floor to 100%. */
@@ -68,7 +68,7 @@ test('the pool is not a wallet', () => {
 test('five holders or fewer is undetermined, never a raised flag', () => {
   const out = inTempDb(`
     const res = [1, 2, 5].map((h) => {
-      const f = flagFor({ top5Share: 100, holders: h, circulating: 100n });
+      const f = flagFor({ top5Share: 100, top1Share: 20, holders: h, circulating: 100n });
       return { h, state: f.state, detail: f.detail };
     });
     console.log(JSON.stringify(res));
@@ -94,12 +94,13 @@ test('an unreadable measurement is undetermined, never a low number', () => {
 test('a measurable share with no distribution behind it is undetermined, not clean', () => {
   const out = inTempDb(`
     for (let i = 0; i < 10; i++) obs(A(100 + i), 50 + i, 30);
-    const f = flagFor({ top5Share: 44, holders: 30, circulating: 100n });
+    const f = flagFor({ top5Share: 44, top1Share: 9, holders: 30, circulating: 100n });
     console.log(JSON.stringify({ state: f.state, detail: f.detail }));
   `);
   const f = JSON.parse(out);
   assert.equal(f.state, 'unknown', 'ten observations is not a threshold');
-  assert.match(f.detail, /top 5 wallets hold 44\.0%/, 'the measurement is still reported as a fact');
+  assert.match(f.detail, /top 5 hold 44\.0%/, 'the measurement is still reported as a fact');
+  assert.match(f.detail, /largest single wallet 9\.0%/, 'and the largest single wallet travels with it');
   assert.match(f.detail, /no threshold yet/);
   assert.match(f.detail, /n=10/, 'the sample size is published so the gap is visible');
 });
@@ -128,7 +129,7 @@ test('at the floor the threshold comes from the distribution and is auditable', 
   assert.match(r.overDetail, /90th percentile of 40 launches/);
   // Rounded as the card rounds, and carrying the holder count: when this is
   // raised it is the only line the reader sees about concentration.
-  assert.match(r.overPlain, /^top 5 wallets hold \d+% of supply · \d+ holders$/, r.overPlain);
+  assert.match(r.overPlain, /^top 5 hold \d+% of supply( — largest \d+%)? · \d+ holders$/, r.overPlain);
 });
 
 test('a share the holder count forces cannot be flagged, however low the threshold', () => {
@@ -160,7 +161,7 @@ test('forced shares from tiny launches cannot bury real concentration', () => {
   `);
   const r = JSON.parse(out);
   assert.equal(r.state, 'raised', 'five wallets holding 96% of a twenty-holder supply is the finding');
-  assert.match(r.detail, /top 5 wallets hold 96\.0%/);
+  assert.match(r.detail, /top 5 hold 96\.0%/);
 });
 
 test('excess is scale-free: the same distribution shape scores the same at any size', () => {
@@ -222,4 +223,33 @@ test('an observation is one row per token, refreshed not appended', () => {
   assert.equal(r.n, 1, 'a re-scanned token must not vote twice in its own distribution');
   assert.equal(r.s, 55);
   assert.equal(r.h, 44);
+});
+
+test('a reading without a largest-holder share degrades, it does not throw', () => {
+  // top1Share arrived after the first readings were stored, so rows written
+  // before it carry undefined. A card that throws on a missing optional field
+  // is worse than one that omits it -- and this one crashed a whole scan.
+  const out = inTempDb(`
+    const shapes = {
+      missing: { top5Share: 44, holders: 23, circulating: 1n },
+      null_: { top5Share: 44, top1Share: null, holders: 23, circulating: 1n },
+      nan: { top5Share: 44, top1Share: NaN, holders: 23, circulating: 1n },
+    };
+    const out = {};
+    for (const [name, c] of Object.entries(shapes)) {
+      const f = flagFor(c);
+      out[name] = { state: f.state, plain: f.plain };
+    }
+    // and recording one must not fail on the bind either
+    C.recordConcentration(A(7), { top5Share: 44, holders: 23, circulating: 1n });
+    out.recorded = db.prepare('SELECT top1_share FROM holder_snapshots WHERE token = ?').get(A(7));
+    console.log(JSON.stringify(out));
+  `);
+  const r = JSON.parse(out);
+  for (const key of ['missing', 'null_', 'nan']) {
+    assert.equal(r[key].state, 'unknown', `${key} changed the verdict`);
+    assert.ok(!/largest/.test(r[key].plain), `${key} claimed a largest holder: ${r[key].plain}`);
+    assert.ok(!/NaN|undefined|null/.test(r[key].plain), `${key} leaked a non-number: ${r[key].plain}`);
+  }
+  assert.equal(r.recorded.top1_share, 0, 'stored as zero, which the renderers treat as absent');
 });

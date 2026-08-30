@@ -430,7 +430,11 @@ export function computeFlags(opts: {
   // flag every small token and no large one. Both the threshold and the sample
   // behind it are printed in /full so the reader can audit the rule rather than
   // trust it.
-  const conc = opts.concentration ?? null;
+  // Normalised once. top1Share arrived after the first readings were stored, so
+  // a row written before it exists carries undefined -- and a card that throws
+  // on a missing optional field is worse than one that omits it.
+  const rawConc = opts.concentration ?? null;
+  const conc = rawConc ? { ...rawConc, top1Share: Number(rawConc.top1Share) || 0 } : null;
   const thr = conc ? concentrationThreshold(conc.holders, opts.token) : null;
   const shareStr = conc ? `${conc.top5Share.toFixed(1)}%` : null;
 
@@ -464,9 +468,9 @@ export function computeFlags(opts: {
       key: 'holder_concentration',
       label: 'Holder concentration',
       state: 'unknown',
-      detail: `top 5 wallets hold ${shareStr} of circulating (${conc.holders} holders, ${arithmeticFloor(conc.holders).toFixed(1)}% is the least ${conc.holders} wallets can hold) — no threshold yet (n=${n}, need ${MIN_CONCENTRATION_SAMPLES})`,
+      detail: `top 5 hold ${shareStr} of circulating, largest single wallet ${conc.top1Share.toFixed(1)}% (${conc.holders} holders, ${arithmeticFloor(conc.holders).toFixed(1)}% is the least ${conc.holders} wallets can hold) — no threshold yet (n=${n}, need ${MIN_CONCENTRATION_SAMPLES})`,
       compactDetail: `top 5 hold ${shareStr}, no threshold yet (n=${n})`,
-      plain: `top 5 wallets hold ${shareStr} (no reference yet)`,
+      plain: `top 5 hold ${shareStr}${conc.top1Share > 0 ? ` \u2014 largest ${conc.top1Share.toFixed(0)}%` : ''} (no reference yet)`,
       severity: 3,
     });
   } else {
@@ -483,15 +487,15 @@ export function computeFlags(opts: {
       key: 'holder_concentration',
       label: 'Holder concentration',
       state: over ? 'raised' : 'clean',
-      detail: `top 5 wallets hold ${shareStr} of circulating (${conc.holders} holders) — ${audit}`,
+      detail: `top 5 hold ${shareStr} of circulating, largest single wallet ${conc.top1Share.toFixed(1)}% (${conc.holders} holders) — ${audit}`,
       compactDetail: over
-        ? `top 5 wallets hold ${shareStr} (over ${thr.thresholdShare.toFixed(1)}%)`
+        ? `top 5 hold ${shareStr}${conc.top1Share > 0 ? ` \u2014 largest ${conc.top1Share.toFixed(0)}%` : ''} (over ${thr.thresholdShare.toFixed(1)}%)`
         : `top 5 wallets hold ${shareStr}`,
       // Rounded as the card rounds, and carrying the holder count, because when
       // this is raised it is the only place the reader sees either.
       plain: over
-        ? `top 5 wallets hold ${conc.top5Share.toFixed(0)}% of supply \u00b7 ${conc.holders} holders`
-        : `top 5 wallets hold ${conc.top5Share.toFixed(0)}%`,
+        ? `top 5 hold ${conc.top5Share.toFixed(0)}% of supply${conc.top1Share > 0 ? ` \u2014 largest ${conc.top1Share.toFixed(0)}%` : ''} \u00b7 ${conc.holders} holders`
+        : `top 5 hold ${conc.top5Share.toFixed(0)}%${conc.top1Share > 0 ? ` \u2014 largest ${conc.top1Share.toFixed(0)}%` : ''}`,
       severity: over ? 60 : 0,
     });
   }

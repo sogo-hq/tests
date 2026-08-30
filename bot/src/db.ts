@@ -258,6 +258,7 @@ for (const [table, column, decl] of [
   ['launches', 'decode_attempts', 'INTEGER NOT NULL DEFAULT 0'],
   ['holder_snapshots', 'balances', 'TEXT'],
   ['holder_snapshots', 'read_to_block', 'INTEGER'],
+  ['holder_snapshots', 'top1_share', 'REAL'],
 ] as const) {
   if (!columnsOf(table).includes(column)) {
     db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${decl}`);

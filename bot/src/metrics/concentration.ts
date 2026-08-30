@@ -85,6 +85,15 @@ export const CONCENTRATION_PERCENTILE = Math.min(
 export interface Concentration {
   /** Top five wallets as a share of circulating supply, 0-100. */
   top5Share: number;
+  /**
+   * The single largest wallet's share, 0-100.
+   *
+   * One wallet at 17% and five at 4% are different situations and the
+   * aggregate hides it. The check still judges the top five, because that is
+   * what the threshold distribution is built from; this is reported beside it
+   * so the reader can tell the two apart.
+   */
+  top1Share: number;
   /** Wallets with a positive balance, excluding the curve and the protocol. */
   holders: number;
   /** Circulating supply the share was taken over, excluding the curve. */
@@ -175,12 +184,16 @@ export async function readConcentration(
   // not a failed one, and the difference matters: the flag says "too few
   // holders to measure" rather than "could not be read", which is what it would
   // say about a token whose log we never got.
-  if (circulating <= 0n) return { top5Share: 0, holders: 0, circulating: 0n };
+  if (circulating <= 0n) return { top5Share: 0, top1Share: 0, holders: 0, circulating: 0n };
 
-  const top5 = held.slice(0, 5).reduce((a, v) => a + v, 0n);
   // basis points first, so the division stays in bigint
-  const share = Number((top5 * 10_000n) / circulating) / 100;
-  return { top5Share: share, holders: held.length, circulating };
+  const pct = (v: bigint) => Number((v * 10_000n) / circulating) / 100;
+  return {
+    top5Share: pct(held.slice(0, 5).reduce((a, v) => a + v, 0n)),
+    top1Share: pct(held[0]!),
+    holders: held.length,
+    circulating,
+  };
 }
 
 /** Record an observation so the threshold has a distribution to come from. */
@@ -188,14 +201,18 @@ export function recordConcentration(token: string, c: Concentration, at?: number
   const excess = excessConcentration(c);
   if (excess === null) return; // a forced share is not an observation of anything
   db.prepare(
-    `INSERT INTO holder_snapshots (token, top5_share, holders, excess, measured_at)
-     VALUES (?, ?, ?, ?, ?)
+    `INSERT INTO holder_snapshots (token, top5_share, top1_share, holders, excess, measured_at)
+     VALUES (?, ?, ?, ?, ?, ?)
      ON CONFLICT(token) DO UPDATE SET
        top5_share = excluded.top5_share,
+       top1_share = excluded.top1_share,
        holders = excluded.holders,
        excess = excluded.excess,
        measured_at = excluded.measured_at`,
-  ).run(token.toLowerCase(), c.top5Share, c.holders, excess, at ?? Math.floor(Date.now() / 1000));
+    // Coerced rather than bound raw: SQLite refuses undefined outright, and a
+    // caller that predates this column should not be able to fail a scan over
+    // a field it never knew about.
+  ).run(token.toLowerCase(), c.top5Share, c.top1Share ?? 0, c.holders, excess, at ?? Math.floor(Date.now() / 1000));
 }
 
 export interface ConcentrationThreshold {
@@ -279,12 +296,15 @@ export interface StoredConcentration extends Concentration {
  */
 export function readStoredConcentration(token: string, now?: number): StoredConcentration | null {
   const row = db
-    .prepare('SELECT top5_share, holders, measured_at FROM holder_snapshots WHERE token = ?')
-    .get(token.toLowerCase()) as { top5_share: number; holders: number; measured_at: number } | undefined;
+    .prepare('SELECT top5_share, top1_share, holders, measured_at FROM holder_snapshots WHERE token = ?')
+    .get(token.toLowerCase()) as
+    | { top5_share: number; top1_share: number | null; holders: number; measured_at: number }
+    | undefined;
   if (!row) return null;
   const at = now ?? Math.floor(Date.now() / 1000);
   return {
     top5Share: row.top5_share,
+    top1Share: row.top1_share ?? 0,
     holders: row.holders,
     // Not stored: the share and the holder count are what the check uses, and
     // circulating supply is only meaningful at the moment it was read.
@@ -355,9 +375,14 @@ function summarise(balances: Map<string, bigint>, excluded: Set<string>): Concen
     .map(([, v]) => v)
     .sort((a, b) => (a < b ? 1 : a > b ? -1 : 0));
   const circulating = held.reduce((a, v) => a + v, 0n);
-  if (circulating <= 0n) return { top5Share: 0, holders: 0, circulating: 0n };
-  const top5 = held.slice(0, 5).reduce((a, v) => a + v, 0n);
-  return { top5Share: Number((top5 * 10_000n) / circulating) / 100, holders: held.length, circulating };
+  if (circulating <= 0n) return { top5Share: 0, top1Share: 0, holders: 0, circulating: 0n };
+  const pct = (v: bigint) => Number((v * 10_000n) / circulating) / 100;
+  return {
+    top5Share: pct(held.slice(0, 5).reduce((a, v) => a + v, 0n)),
+    top1Share: pct(held[0]!),
+    holders: held.length,
+    circulating,
+  };
 }
 
 export interface RefreshResult {
@@ -433,13 +458,14 @@ export async function refreshConcentration(
 
   if (complete) {
     db.prepare(
-      `INSERT INTO holder_snapshots (token, top5_share, holders, excess, measured_at, balances, read_to_block)
-       VALUES (?,?,?,?,?,?,?)
+      `INSERT INTO holder_snapshots (token, top5_share, top1_share, holders, excess, measured_at, balances, read_to_block)
+       VALUES (?,?,?,?,?,?,?,?)
        ON CONFLICT(token) DO UPDATE SET
-         top5_share = excluded.top5_share, holders = excluded.holders,
+         top5_share = excluded.top5_share, top1_share = excluded.top1_share,
+         holders = excluded.holders,
          excess = excluded.excess, measured_at = excluded.measured_at,
          balances = excluded.balances, read_to_block = excluded.read_to_block`,
-    ).run(token.toLowerCase(), concentration.top5Share, concentration.holders, excess ?? 0, now, JSON.stringify(keep), Number(head));
+    ).run(token.toLowerCase(), concentration.top5Share, concentration.top1Share, concentration.holders, excess ?? 0, now, JSON.stringify(keep), Number(head));
   } else if (chunks > 0) {
     // Partial progress. The balance map is correct as of readTo, so it is kept
     // and the next attempt resumes from there -- but the published share and
@@ -448,11 +474,11 @@ export async function refreshConcentration(
     // stamping it with the current time would be exactly the quiet lie this
     // product exists not to tell.
     db.prepare(
-      `INSERT INTO holder_snapshots (token, top5_share, holders, excess, measured_at, balances, read_to_block)
-       VALUES (?,?,?,?,?,?,?)
+      `INSERT INTO holder_snapshots (token, top5_share, top1_share, holders, excess, measured_at, balances, read_to_block)
+       VALUES (?,?,?,?,?,?,?,?)
        ON CONFLICT(token) DO UPDATE SET
          balances = excluded.balances, read_to_block = excluded.read_to_block`,
-    ).run(token.toLowerCase(), concentration.top5Share, concentration.holders, excess ?? 0, now, JSON.stringify(keep), Number(readTo));
+    ).run(token.toLowerCase(), concentration.top5Share, concentration.top1Share, concentration.holders, excess ?? 0, now, JSON.stringify(keep), Number(readTo));
   }
 
   return { concentration, blocksRead, incremental, complete };

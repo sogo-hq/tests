@@ -33,6 +33,7 @@ export function makeScan(over = {}) {
       pairToken: '0x0000000000000000000000000000000000000000',
       phaseName: 'NotGraduated',
       progressPct: over.progressPct ?? 0,
+      mcapInQuote: 'mcapInQuote' in over ? over.mcapInQuote : 0,
       ...(over.reads ?? {}),
     },
     traction: {
@@ -83,6 +84,9 @@ export function makeScan(over = {}) {
       // 30-minute cap, and only then can the card say "at this age"
       measuredAtAge: 'measuredAtAge' in over ? over.measuredAtAge : ageSeconds / 60 <= 30.001,
     },
+    // Null unless a test supplies one: a first scan has no history to report,
+    // and that is the state the card must be correct in.
+    firstScan: over.firstScan ?? null,
   };
 }
 
