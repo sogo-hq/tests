@@ -4,7 +4,8 @@ import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 import type { ScanResult } from './scan.js';
 import {
-  defaultTicker, headerAge, buyerLine, concentrationLine, sellingLine, growthLine, MAX_DEFAULT_FLAGS,
+  defaultTicker, headerAge, headerMcap, buyerLine, concentrationLine, sellingLine, growthLine,
+  firstScanLine, MAX_DEFAULT_FLAGS,
 } from './card.js';
 
 /**
@@ -145,7 +146,12 @@ export function cardSvg(r: ScanResult, renderedAt = new Date()): string {
   parts.push(text(WIDTH - PAD, PAD + 24, utcStamp(renderedAt), { size: 20, fill: DIM, anchor: 'end' }));
 
   // --- identity -------------------------------------------------------------
-  const ticker = `${defaultTicker(r)} · ${headerAge(r.ageSeconds)}`;
+  // The market cap rides with the identity, exactly as it does on the text
+  // card. It was absent here entirely: the image built its own header instead
+  // of asking the card for one, so a feature added to the card silently did not
+  // reach the picture of it.
+  const mc = headerMcap(r);
+  const ticker = `${defaultTicker(r)} · ${headerAge(r.ageSeconds)}${mc ? ` · ${mc}` : ''}`;
   parts.push(text(PAD, 176, ticker, { size: fitSize(ticker, CONTENT_W, 52, 22), fill: INK, weight: 600 }));
 
   // The address in full, so a reader can verify what they are looking at.
@@ -157,10 +163,10 @@ export function cardSvg(r: ScanResult, renderedAt = new Date()): string {
   // --- concerns, or what was checked ---------------------------------------
   // Identical treatment either way: same colours, same sizes, same positions.
   // Nothing in the styling says good or bad -- only the words differ.
-  const ZONE_TOP = 276;
-  const ZONE_BOTTOM = 430;
-  const FLAG_LEADING = 44;
-  const EXTRA_LEADING = 34;
+  const ZONE_TOP = 272;
+  const ZONE_BOTTOM = 408;
+  const FLAG_LEADING = 42;
+  const EXTRA_LEADING = 30;
 
   const raised = f.flags
     .filter((fl) => fl.state === 'raised')
@@ -184,9 +190,9 @@ export function cardSvg(r: ScanResult, renderedAt = new Date()): string {
       ? FLAG_LEADING + (shown.length > 1 ? 12 + (shown.length - 1) * EXTRA_LEADING : 0)
       : FLAG_LEADING) +
     (extraLine ? EXTRA_LEADING : 0);
-  // Nudged up rather than centred low: the text card puts a blank line between
-  // the concerns and the measurements, and without the equivalent gap here the
-  // small dim "+N more" line ran straight into the large buyer line below it.
+  // Centred in its zone when there is room, but never lower than its own top:
+  // the measurements below flow from wherever this ends, so a tall concern
+  // block pushes them down rather than being drawn over by them.
   let y = ZONE_TOP + Math.max(0, (ZONE_BOTTOM - ZONE_TOP - blockHeight) / 2) + 16;
 
   if (shown.length) {
@@ -223,6 +229,10 @@ export function cardSvg(r: ScanResult, renderedAt = new Date()): string {
   }
   if (extraLine) {
     parts.push(text(PAD + 30, y, extraLine, { size: fitSize(extraLine, CONTENT_W - 30, 22, 14), fill: DIM }));
+    // Advanced past it. Without this `y` still pointed AT the extras line, so
+    // the measurements below — which now flow from here — were laid out on top
+    // of it.
+    y += EXTRA_LEADING;
   }
 
   // --- what was measured ----------------------------------------------------
@@ -233,14 +243,36 @@ export function cardSvg(r: ScanResult, renderedAt = new Date()): string {
   // 552, and lifting the worst concern made the block above taller. At the old
   // leading the growth line fell off the bottom whenever concentration
   // rendered, silently: the card simply stopped saying something it knew.
-  const M_TOP = 458;
-  const M_LEADING = 26;
-  const buyers = buyerLine(r);
-  parts.push(text(PAD, M_TOP, buyers, { size: fitSize(buyers, CONTENT_W, 30, 18), fill: INK }));
+  // Five lines can now follow the buyer count -- concentration, what the buyers
+  // did, growth, and the first-scan receipt -- so the block starts higher and
+  // sits tighter. The receipt was missing from the image entirely for the same
+  // reason the market cap was: this list is written out by hand and a line
+  // added to the card does not arrive here on its own.
+  // Flowed from where the concerns actually ended, not from a fixed y. Two
+  // features were added to the card and rendered here at hardcoded
+  // coordinates; the block grew, and the buyer line was drawn straight through
+  // the "+N more" line above it. The footer rule at 552 is the only fixed point
+  // that matters, and lines that cannot fit above it are dropped rather than
+  // drawn over it.
+  const FOOTER_RULE = 552;
+  const M_LEADING = 22;
+  // Ordered by what survives a squeeze. The image has a fixed height and the
+  // last line is dropped rather than drawn over the footer, so the order is the
+  // priority order: growth goes before the receipt does, because growth restates
+  // the buyer count directly above it while the receipt is the one line here
+  // that is worth forwarding on its own.
+  const measured = [concentrationLine(r), sellingLine(r), firstScanLine(r), growthLine(r)].filter(Boolean) as string[];
 
-  let my = M_TOP + 30;
-  for (const line of [concentrationLine(r), sellingLine(r), growthLine(r)]) {
-    if (!line || my > 544) continue;
+  // Enough room for the buyer line and everything under it, or as much of it as
+  // there is space for.
+  const needed = 30 + measured.length * M_LEADING;
+  let my = Math.max(y + 14, FOOTER_RULE - 18 - needed);
+
+  const buyers = buyerLine(r);
+  parts.push(text(PAD, my, buyers, { size: fitSize(buyers, CONTENT_W, 30, 18), fill: INK }));
+  my += 26;
+  for (const line of measured) {
+    if (my > FOOTER_RULE - 18) break;
     parts.push(text(PAD, my, line, { size: fitSize(line, CONTENT_W, 24, 14), fill: DIM }));
     my += M_LEADING;
   }

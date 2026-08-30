@@ -155,3 +155,64 @@ test('rendering is fast enough to sit behind a button', () => {
   const ms = Date.now() - t0;
   assert.ok(ms < 2000, `render took ${ms}ms`);
 });
+
+// ------------------------------------------- the image keeps up with the card
+test('the PNG carries the market cap and the receipt, and clears the footer', async () => {
+  const { cardSvg } = await import('../dist/image.js');
+  const r = makeScan({
+    ageSeconds: 158400, symbol: 'NPC', buyers: 38, roundTrippers: 3, windowMinutes: 30,
+    flagsTotal: 9, benchmarkMedian: 20, benchmarkN: 412, measuredAtAge: false,
+    mcapInQuote: 2.07, realQuoteReserve: 186_200000000000000n,
+    concentration: { top5Share: 44.2, top1Share: 17.3, holders: 23, circulating: 1n },
+    firstScan: { mcap: 1.2, at: 1, since: 22 },
+    flags: [
+      f('a', '38 other tokens use this exact ticker', 100),
+      f('b', 'creator takes 3% of every trade', 60),
+      f('c', 'deployer launched 91 tokens this week', 55),
+      f('d', 'fourth', 50), f('u', 'x', 1, 'unknown'),
+    ],
+  });
+  r.traction.uniqueBuyers10m = 20;
+  const svg = cardSvg(r);
+
+  // Both were added to the text card and rendered here from hardcoded
+  // coordinates, so neither reached the picture until this test existed.
+  assert.match(svg, /2\.07 ETH mc/, 'the header lost the market cap');
+  assert.match(svg, /first scanned here at 1\.2 ETH · 22 scans since/, 'the image lost the receipt');
+  assert.match(svg, /0\.186 of 4\.2 ETH to graduation/, 'and the absolute distance to graduation');
+  assert.ok(!/% to graduation/.test(svg), 'no percentage survives here either');
+
+  // Nothing may land in the gap between the last body line and the footer
+  // rule at y=552. The footer's own two lines sit at 578, below it by design.
+  const baselines = [...svg.matchAll(/<text[^>]*y="(\d+)"/g)].map((m) => Number(m[1]));
+  const onRule = baselines.filter((y) => y >= 546 && y < 570);
+  assert.equal(onRule.length, 0, `text drawn onto the footer rule: ${onRule.join(', ')}`);
+
+  // And the stacked block must not overlap itself: every line in the body sits
+  // at least 20px below the one before it.
+  const body = baselines.filter((y) => y > 252 && y < 552).sort((a, b) => a - b);
+  for (let i = 1; i < body.length; i++) {
+    assert.ok(body[i] - body[i - 1] >= 20, `lines at y=${body[i - 1]} and y=${body[i]} overlap`);
+  }
+});
+
+test('when the body cannot fit, growth yields before the receipt does', async () => {
+  const { cardSvg } = await import('../dist/image.js');
+  // Everything on at once: three concerns, an extras line, and five body lines.
+  const r = makeScan({
+    ageSeconds: 158400, symbol: 'NPC', buyers: 38, roundTrippers: 3, windowMinutes: 30,
+    flagsTotal: 9, benchmarkMedian: 20, benchmarkN: 412, measuredAtAge: false,
+    mcapInQuote: 2.07, realQuoteReserve: 186_200000000000000n,
+    concentration: { top5Share: 44.2, top1Share: 17.3, holders: 23, circulating: 1n },
+    firstScan: { mcap: 1.2, at: 1, since: 22 },
+    flags: [
+      f('a', 'first concern', 100), f('b', 'second concern', 60), f('c', 'third concern', 55),
+      f('d', 'fourth', 50), f('u', 'x', 1, 'unknown'),
+    ],
+  });
+  r.traction.uniqueBuyers10m = 20;
+  const svg = cardSvg(r);
+  // The receipt is the one line here worth forwarding on its own; growth
+  // restates the buyer count directly above it.
+  assert.match(svg, /first scanned here/, 'the receipt must outrank growth for the last slot');
+});
