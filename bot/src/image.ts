@@ -158,7 +158,7 @@ export function cardSvg(r: ScanResult, renderedAt = new Date()): string {
   // Identical treatment either way: same colours, same sizes, same positions.
   // Nothing in the styling says good or bad -- only the words differ.
   const ZONE_TOP = 276;
-  const ZONE_BOTTOM = 446;
+  const ZONE_BOTTOM = 430;
   const FLAG_LEADING = 44;
   const EXTRA_LEADING = 34;
 
@@ -177,18 +177,42 @@ export function cardSvg(r: ScanResult, renderedAt = new Date()): string {
 
   // Centred in its zone so one concern does not leave a hole where three would
   // sit, and three cannot spill into the measurements below.
+  // Height of what is about to be drawn, so the block stays centred in its zone
+  // rather than growing into the measurements below it.
   const blockHeight =
-    (shown.length ? shown.length * FLAG_LEADING : FLAG_LEADING) +
+    (shown.length
+      ? FLAG_LEADING + (shown.length > 1 ? 12 + (shown.length - 1) * EXTRA_LEADING : 0)
+      : FLAG_LEADING) +
     (extraLine ? EXTRA_LEADING : 0);
-  let y = ZONE_TOP + Math.max(0, (ZONE_BOTTOM - ZONE_TOP - blockHeight) / 2) + 30;
+  // Nudged up rather than centred low: the text card puts a blank line between
+  // the concerns and the measurements, and without the equivalent gap here the
+  // small dim "+N more" line ran straight into the large buyer line below it.
+  let y = ZONE_TOP + Math.max(0, (ZONE_BOTTOM - ZONE_TOP - blockHeight) / 2) + 16;
 
   if (shown.length) {
-    for (const fl of shown) {
-      // A drawn bullet, not a glyph: no bundled subset carries a square, and a
-      // missing glyph would render as tofu.
-      parts.push(`<rect x="${PAD}" y="${y - 13}" width="10" height="10" fill="${DIM}"/>`);
-      parts.push(text(PAD + 30, y, fl.plain, { size: fitSize(fl.plain, CONTENT_W - 30, 28, 16), fill: INK }));
-      y += FLAG_LEADING;
+    // Same shape as the text card: the worst one alone and larger, the rest
+    // below it at a lower weight. Emphasis by size and tone only -- no colour
+    // is spent on it, because a red or a green here would be read as a verdict
+    // and this card does not give one.
+    //
+    // Markers are drawn, not typed: no bundled font subset carries a warning
+    // glyph or a square, and a missing one renders as tofu. A triangle for the
+    // one that matters, small squares for the others.
+    const [top, ...rest] = shown;
+    const topSize = fitSize(top!.plain, CONTENT_W - 34, 32, 18);
+    parts.push(
+      `<path d="M ${PAD + 11} ${y - 20} L ${PAD + 22} ${y - 2} L ${PAD} ${y - 2} Z" fill="${INK}"/>`,
+    );
+    parts.push(text(PAD + 34, y, top!.plain, { size: topSize, fill: INK, weight: 600 }));
+    y += FLAG_LEADING;
+
+    if (rest.length) {
+      y += 12; // the gap that does the lifting, matching the card's blank line
+      for (const fl of rest) {
+        parts.push(`<rect x="${PAD + 3}" y="${y - 11}" width="8" height="8" fill="${DIM}"/>`);
+        parts.push(text(PAD + 30, y, fl.plain, { size: fitSize(fl.plain, CONTENT_W - 30, 24, 15), fill: DIM }));
+        y += EXTRA_LEADING;
+      }
     }
   } else {
     const bits = [`no concerns raised · ${f.total - f.unknown} of ${f.total} checked`];
@@ -205,21 +229,20 @@ export function cardSvg(r: ScanResult, renderedAt = new Date()): string {
   // Same order as the text card: the benchmarked buyer count first, because it
   // is the one measurement a reader can act on, then who holds the supply, then
   // the rest. The buyer count leads at full size; the supporting lines are dim.
+  // Four lines have to fit between the concerns above and the footer rule at
+  // 552, and lifting the worst concern made the block above taller. At the old
+  // leading the growth line fell off the bottom whenever concentration
+  // rendered, silently: the card simply stopped saying something it knew.
+  const M_TOP = 458;
+  const M_LEADING = 26;
   const buyers = buyerLine(r);
-  parts.push(text(PAD, 466, buyers, { size: fitSize(buyers, CONTENT_W, 30, 18), fill: INK }));
+  parts.push(text(PAD, M_TOP, buyers, { size: fitSize(buyers, CONTENT_W, 30, 18), fill: INK }));
 
-  let my = 498;
-  const conc = concentrationLine(r);
-  if (conc) {
-    parts.push(text(PAD, my, conc, { size: fitSize(conc, CONTENT_W, 24, 14), fill: DIM }));
-    my += 28;
-  }
-  const selling = sellingLine(r);
-  parts.push(text(PAD, my, selling, { size: fitSize(selling, CONTENT_W, 24, 14), fill: DIM }));
-  my += 28;
-  const growth = growthLine(r);
-  if (growth && my <= 548) {
-    parts.push(text(PAD, my, growth, { size: fitSize(growth, CONTENT_W, 24, 14), fill: DIM }));
+  let my = M_TOP + 30;
+  for (const line of [concentrationLine(r), sellingLine(r), growthLine(r)]) {
+    if (!line || my > 544) continue;
+    parts.push(text(PAD, my, line, { size: fitSize(line, CONTENT_W, 24, 14), fill: DIM }));
+    my += M_LEADING;
   }
 
   // --- footer ---------------------------------------------------------------

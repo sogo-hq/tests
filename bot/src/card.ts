@@ -351,10 +351,15 @@ export function compactMeta(r: ScanResult): CompactMeta {
  */
 export function inlineDescription(m: CompactMeta): string {
   if (m.notFound) return 'not a pons v2 launch on this chain';
+  // Same shape as the card in the space of one line: the worst concern first,
+  // in its own words, and the rest as a count behind it. Leading with "3
+  // concerns" put a number where the finding should be, and a number is the
+  // part a reader can least act on.
+  const others = m.flagsRaised - 1;
   const s = m.flagsRaised > 0
     ? [
-        `${m.flagsRaised} concern${m.flagsRaised === 1 ? '' : 's'}`,
-        ...(m.topFlag ? [m.topFlag] : []),
+        ...(m.topFlag ? [m.topFlag] : [`${m.flagsRaised} concern${m.flagsRaised === 1 ? '' : 's'}`]),
+        ...(m.topFlag && others > 0 ? [`+${others} more`] : []),
         ...(m.flagsUnknown ? [`${m.flagsUnknown} undetermined`] : []),
       ].join(' \u00b7 ')
     : [
@@ -563,15 +568,31 @@ export function renderDefaultCard(r: ScanResult, botUsername?: string): string {
     .sort((a, b) => b.severity - a.severity);
 
   if (raised.length) {
-    for (const fl of raised.slice(0, MAX_DEFAULT_FLAGS)) {
-      L.push(`\ud83d\udea9 ${plainField(fl.plain, 70)}`);
-    }
+    // The worst one, alone, with room around it.
+    //
+    // Every concern used to render at the same weight behind the same marker,
+    // so three of them competed and none of them landed -- two testers
+    // independently said the worst one did not stand out. The ordering that
+    // picks it has always been here; this only makes it visible. It is
+    // emphasis and nothing more: no new judgement, no second opinion, and the
+    // ones below are still there to be read.
+    L.push(`\u26a0\ufe0f ${plainField(raised[0]!.plain, 70)}`);
+
+    const rest: string[] = raised
+      .slice(1, MAX_DEFAULT_FLAGS)
+      .map((fl) => `\u00b7 ${plainField(fl.plain, 70)}`);
+
     const hidden = raised.length - MAX_DEFAULT_FLAGS;
     const extras: string[] = [];
     if (hidden > 0) extras.push(`+${hidden} more`);
     // Undetermined is never dropped, even when the flag slots are full.
     if (f.unknown > 0) extras.push(`${f.unknown} undetermined`);
-    if (extras.length) L.push(`${extras.join(' \u00b7 ')} \u00b7 /full`);
+    if (extras.length) rest.push(`${extras.join(' \u00b7 ')} \u00b7 /full`);
+
+    // The blank line belongs to the top concern, so it is only spent when
+    // something follows. One concern and nothing else leaves a single break
+    // before the measurements rather than two.
+    if (rest.length) L.push('', ...rest);
   } else {
     const parts = [`no concerns raised \u00b7 ${f.total - f.unknown} of ${f.total} checked`];
     if (f.unknown > 0) parts.push(`${f.unknown} undetermined`);

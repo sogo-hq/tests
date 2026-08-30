@@ -662,5 +662,79 @@ await bot.handleUpdate(inline(SOL, 9500));
   ok(`the PNG renders the reordered card in order (${(png.length / 1024).toFixed(0)}KB)`);
 }
 
+// ===========================================================================
+// The worst concern is lifted, on every surface
+// ===========================================================================
+{
+  const { renderDefaultCard, inlineDescription, compactMeta } = await import('../dist/card.js');
+  const { cardSvg } = await import('../dist/image.js');
+  const { makeScan } = await import('./fixtures.mjs');
+  const fl = (k, plain, severity, state = 'raised') =>
+    ({ key: k, label: k, state, detail: k, compactDetail: k, plain, severity });
+
+  const three = makeScan({
+    ageSeconds: 158400, symbol: 'NPC', buyers: 38, roundTrippers: 3, progressPct: 12.4,
+    windowMinutes: 30, flagsTotal: 9, benchmarkMedian: 20, benchmarkN: 412, measuredAtAge: false,
+    flags: [
+      fl('collision', '38 other tokens use this exact ticker', 100),
+      fl('tax', 'creator takes 3% of every trade', 60),
+      fl('u1', 'x', 1, 'unknown'), fl('u2', 'y', 1, 'unknown'),
+    ],
+  });
+
+  // --- the shape the feedback asked for, exactly ---------------------------
+  const lines = renderDefaultCard(three, 'vitalscheck_bot').split('\n');
+  assert.equal(lines[2], '\u26a0\ufe0f 38 other tokens use this exact ticker');
+  assert.equal(lines[3], '');
+  assert.equal(lines[4], '\u00b7 creator takes 3% of every trade');
+  assert.equal(lines[5], '2 undetermined \u00b7 /full');
+  ok(`the worst concern is lifted: "${lines[2]}" with "${lines[4]}" beneath it`);
+
+  // --- group and inline carry the same card --------------------------------
+  scanCache.drop(TOKEN);
+  await bot.handleUpdate(msg('group', `/scan ${TOKEN}`, -900));
+  const gc = drain();
+  const groupText = gc[gc.length - 1].payload.text;
+  const groupLifted = groupText.split('\n').filter((l) => l.startsWith('\u26a0\ufe0f'));
+  const groupRaised = groupText.split('\n').filter((l) => /^(\u26a0\ufe0f|\u00b7) /.test(l));
+  assert.ok(groupRaised.length === 0 || groupLifted.length === 1,
+    `group card lifted ${groupLifted.length} of ${groupRaised.length} concerns:\n${groupText}`);
+  assert.ok(!groupText.includes('\ud83d\udea9'), 'the old uniform marker must be gone from the group card');
+
+  await bot.handleUpdate(inline(TOKEN, 9800));
+  const ic = drain();
+  const article = ic[0].payload.results[0];
+  const inlineText = article.input_message_content.message_text;
+  assert.ok(!inlineText.includes('\ud83d\udea9'), 'and from the inline card');
+  const inlineLifted = inlineText.split('\n').filter((l) => l.startsWith('\u26a0\ufe0f'));
+  assert.ok(inlineLifted.length <= 1, `inline lifted ${inlineLifted.length} concerns`);
+  ok(`group and inline carry the same shape (${groupLifted.length} lifted, ${inlineLifted.length} inline)`);
+
+  // --- the inline SUBTITLE leads with the concern, not a count -------------
+  const desc = inlineDescription(compactMeta(three));
+  assert.match(desc, /^38 other tokens use this exact ticker/,
+    `the subtitle should lead with the finding, got: ${desc}`);
+  assert.match(desc, /\+1 more/);
+  assert.match(desc, /2 undetermined/);
+  ok(`inline subtitle leads with the finding: "${desc}"`);
+
+  // --- and the PNG does it by size and tone, never by colour ---------------
+  const svg = cardSvg(three);
+  const drawn = [...svg.matchAll(/<text[^>]*font-size="(\d+)"[^>]*fill="([^"]+)"[^>]*>([^<]*)<\/text>/g)]
+    .map((m) => ({ size: Number(m[1]), fill: m[2], t: m[3] }));
+  const top = drawn.find((d) => /38 other tokens/.test(d.t));
+  const second = drawn.find((d) => /creator takes/.test(d.t));
+  assert.ok(top && second, `the PNG lost a concern: ${JSON.stringify(drawn.map((d) => d.t))}`);
+  assert.ok(top.size > second.size, `top is ${top.size}px, second ${second.size}px — no emphasis`);
+  assert.notEqual(top.fill, second.fill, 'the rest should sit at a lower tone');
+  // Emphasis by size and tone only. A red or a green here would be read as a
+  // verdict, and this card does not give one.
+  for (const d of [top, second]) {
+    assert.match(d.fill, /^#(E8F0DE|6E7A66|080B09|C6F73A)$/i, `off-palette colour ${d.fill} implies a verdict`);
+  }
+  assert.equal((svg.match(/<path d="M /g) ?? []).length, 1, 'exactly one lifted marker is drawn');
+  ok(`the PNG lifts by size (${top.size}px vs ${second.size}px) and tone, with no colour spent on it`);
+}
+
 console.log('\nAll handler checks passed.');
 process.exit(0);

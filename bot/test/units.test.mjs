@@ -194,7 +194,9 @@ test('inline description leads with concerns, in the card\'s own words', () => {
   const r = makeScan({ flags: [flag('snipe', 'raised', '1 wallet pre-exempted', 100)] });
   r.flags.flags[0].plain = '1 wallet got in tax-free before you could';
   const d = inlineDescription(compactMeta(r));
-  assert.equal(d, '1 concern · 1 wallet got in tax-free before you could');
+  // The finding first, not a count: "1 concern" put a number where the thing a
+  // reader can act on should be.
+  assert.equal(d, '1 wallet got in tax-free before you could');
   assert.doesNotMatch(d, /traction/i, 'the preview must not carry a verdict the card stopped making');
 });
 

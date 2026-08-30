@@ -20,9 +20,10 @@ test('concerns-raised card matches the specified shape exactly', () => {
   assert.deepEqual(renderDefaultCard(r, 'vitalscheck_bot').split('\n'), [
     'VITALS  $GHATS · 47s',
     '',
-    '🚩 8 wallets got in tax-free before you could',
-    '🚩 same ticker as the asset it trades against',
-    '🚩 deployer launched 91 tokens this week',
+    '⚠️ 8 wallets got in tax-free before you could',
+    '',
+    '· same ticker as the asset it trades against',
+    '· deployer launched 91 tokens this week',
     '',
     '2 buyers',
     'both already sold · 0.00% to graduation',
@@ -56,15 +57,18 @@ test('at most three flags, highest severity first', () => {
   const r = makeScan({ flags: [
     f('low', 'lowest', 10), f('top', 'highest', 100), f('mid', 'middle', 50), f('x', 'fourth', 20),
   ]});
-  const lines = renderDefaultCard(r, 'b').split('\n').filter((l) => l.startsWith('🚩'));
-  assert.deepEqual(lines, ['🚩 highest', '🚩 middle', '🚩 fourth']);
+  const lines = renderDefaultCard(r, 'b').split('\n').filter((l) => /^(⚠️|·) /.test(l));
+  assert.deepEqual(lines, ['⚠️ highest', '· middle', '· fourth'],
+    'the worst one is lifted; the rest stay, at a lower weight');
 });
 
 test('more than three raised flags adds "+N more · /full"', () => {
   const r = makeScan({ flags: Array.from({ length: 6 }, (_, i) => f(`f${i}`, `finding ${i}`, 100 - i)) });
   const text = renderDefaultCard(r, 'b');
   assert.match(text, /^\+3 more · \/full$/m);
-  assert.equal(text.split('\n').filter((l) => l.startsWith('🚩')).length, 3);
+  const shown = text.split('\n').filter((l) => /^(⚠️|·) /.test(l));
+  assert.equal(shown.length, 3, 'three shown however they are marked');
+  assert.equal(shown.filter((l) => l.startsWith('⚠️')).length, 1, 'exactly one is lifted');
 });
 
 test('undetermined is never hidden — with flags raised or without', () => {
@@ -139,18 +143,18 @@ test('plain text: no tags, no HTML entities, survives a copy-paste', () => {
 test('a hostile ticker cannot add lines or blow the height budget', () => {
   const r = makeScan({ symbol: 'A\nB\nC'.repeat(40), flags: [f('a', 'x', 90)] });
   const lines = renderDefaultCard(r, 'b').split('\n');
-  assert.ok(lines.length <= 12, `hostile ticker produced ${lines.length} lines`);
+  assert.ok(lines.length <= 14, `hostile ticker produced ${lines.length} lines`);
   assert.equal(lines[0].split('\n').length, 1);
 });
 
-test('every shape stays under twelve lines', () => {
+test('every shape stays within the card ceiling', () => {
   for (const over of [
     { flags: Array.from({ length: 8 }, (_, i) => f(`f${i}`, `finding number ${i}`, 100 - i)) },
     { ageSeconds: 1800, buyers: 50, roundTrippers: 4, windowMinutes: 30, flags: [] },
     { buyers: 0, roundTrippers: 0, flags: [] },
   ]) {
     const n = renderDefaultCard(makeScan(over), 'vitalscheck_bot').split('\n').length;
-    assert.ok(n <= 12, `card was ${n} lines`);
+    assert.ok(n <= 14, `card was ${n} lines`);
   }
 });
 
@@ -233,7 +237,60 @@ test('holder concentration appears only when it is a measurement', () => {
   );
 });
 
-test('the card is bounded at 13 lines with every optional line rendering', () => {
+// --------------------------------------------------- lifting the worst concern
+test('the worst concern gets its own line, its own marker, and room under it', () => {
+  const lines = renderDefaultCard(makeScan({ flags: [
+    f('top', '38 other tokens use this exact ticker', 100),
+    f('mid', 'creator takes 3% of every trade', 60),
+  ]}), 'b').split('\n');
+  const i = lines.indexOf('\u26a0\ufe0f 38 other tokens use this exact ticker');
+  assert.ok(i > 0, `the worst concern is not lifted:\n${lines.join('\n')}`);
+  assert.equal(lines[i + 1], '', 'a blank line under it is what does the lifting');
+  assert.equal(lines[i + 2], '\u00b7 creator takes 3% of every trade', 'the rest drop to a plain bullet');
+});
+
+test('one concern is the top one, with nothing below it', () => {
+  const lines = renderDefaultCard(makeScan({ flags: [f('a', 'the only concern', 90)] }), 'b').split('\n');
+  assert.equal(lines[2], '\u26a0\ufe0f the only concern');
+  // One blank before the measurements, not two: the blank belongs to the top
+  // concern and is only spent when something follows.
+  assert.equal(lines[3], '');
+  assert.match(lines[4], /buyer/, `a second blank opened a hole:\n${lines.join('\n')}`);
+});
+
+test('exactly one concern is ever lifted, at any count', () => {
+  for (const n of [1, 2, 3, 4, 9]) {
+    const flags = Array.from({ length: n }, (_, i) => f(`f${i}`, `finding ${i}`, 100 - i));
+    const lines = renderDefaultCard(makeScan({ flags }), 'b').split('\n');
+    const lifted = lines.filter((l) => l.startsWith('\u26a0\ufe0f'));
+    assert.equal(lifted.length, 1, `${n} concerns lifted ${lifted.length}`);
+    assert.equal(lifted[0], '\u26a0\ufe0f finding 0', 'and it is the highest severity');
+    assert.equal(lines.filter((l) => l.startsWith('\ud83d\udea9')).length, 0, 'the old marker is gone');
+  }
+});
+
+test('nothing raised prints no concern block at all', () => {
+  const card = renderDefaultCard(makeScan({ flags: [f('u', 'x', 1, 'unknown')] }), 'b');
+  assert.ok(!card.includes('\u26a0\ufe0f'), 'no marker with nothing to mark');
+  assert.ok(!/^\u00b7 /m.test(card), 'and no orphaned bullets');
+  // The summary line stays: it carries the undetermined count and the "of N
+  // checked" framing, without which an absence of findings reads as an
+  // all-clear -- which this card must never imply.
+  assert.match(card, /^no concerns raised · \d+ of \d+ checked · 1 undetermined$/m);
+});
+
+test('lifting is emphasis, not a verdict', () => {
+  // Nothing about the marker or its neighbours may say whether this is good or
+  // bad. The card ranks; it does not conclude.
+  const VERDICT = /\b(safe|unsafe|danger|dangerous|risky|warning|avoid|scam|rug|clean|good|bad)\b/i;
+  for (const n of [1, 3, 5]) {
+    const flags = Array.from({ length: n }, (_, i) => f(`f${i}`, `finding ${i}`, 100 - i));
+    const card = renderDefaultCard(makeScan({ flags }), 'b');
+    assert.ok(!VERDICT.test(card), `a verdict word reached the card at ${n} concerns:\n${card}`);
+  }
+});
+
+test('the card is bounded at 14 lines with every optional line rendering', () => {
   const r = makeScan({
     ageSeconds: 1200, symbol: 'TOKEN', buyers: 38, roundTrippers: 3, progressPct: 12.4,
     windowMinutes: 20, flagsTotal: 9, benchmarkMedian: 12, benchmarkN: 412,
@@ -245,10 +302,11 @@ test('the card is bounded at 13 lines with every optional line rendering', () =>
   });
   r.traction.uniqueBuyers10m = 12;
   const lines = renderDefaultCard(r, 'vitalscheck_bot').split('\n');
-  // header, blank, 3 flags, "+N more", blank, buyers, concentration, sold,
-  // growth, blank, footer. This card is forwarded into groups, so the ceiling
-  // is deliberate rather than incidental.
-  assert.equal(lines.length, 13, lines.join('\n'));
+  // header, blank, the lifted concern, blank, two more, "+N more", blank,
+  // buyers, concentration, sold, growth, blank, footer. Fourteen: it gained the
+  // blank line that does the lifting. This card is forwarded into groups, so
+  // the ceiling is deliberate rather than incidental.
+  assert.equal(lines.length, 14, lines.join('\n'));
   assert.equal(lines[lines.length - 1], '@vitalscheck_bot \u00b7 not financial advice');
 });
 
@@ -264,7 +322,7 @@ test('concentration is stated once, not twice with two roundings', () => {
   }), 'b');
   const mentions = card.split('\n').filter((l) => /top 5 wallets/.test(l));
   assert.equal(mentions.length, 1, `stated ${mentions.length} times:\n${card}`);
-  assert.ok(mentions[0].startsWith('\ud83d\udea9'), 'when it is a concern it belongs in the concerns block');
+  assert.match(mentions[0], /^(\u26a0\ufe0f|\u00b7) /, 'when it is a concern it belongs in the concerns block');
   assert.ok(mentions[0].includes('23 holders'), 'and it must not lose the holder count in the move');
 
   // unraised, it keeps its own slot below the buyer count
@@ -303,7 +361,7 @@ test('card order: concerns, then the buyer count, then concentration, then the r
   assert.deepEqual(renderDefaultCard(r, 'vitalscheck_bot').split('\n'), [
     'VITALS  $TOKEN \u00b7 20m',
     '',
-    '\ud83d\udea9 8 wallets got in tax-free before you could',
+    '\u26a0\ufe0f 8 wallets got in tax-free before you could',
     '',
     '38 buyers \u2014 median at this age is 12',
     'top 5 wallets hold 44% \u00b7 23 holders',

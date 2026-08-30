@@ -29,20 +29,27 @@ for (const t of tokens) {
   if (BANNED.test(compText)) problems.push('banned language in compact card');
 
   const cl = compText.split('\n');
-  // 13 is the maximum the renderer can produce: header, blank, three flags, the
-  // "+N more" line, blank, the benchmarked buyer count, concentration, what
-  // happened to those buyers, growth, blank, footer. It grew by one when
-  // concentration was added; anything past that is a regression in a card whose
-  // whole point is being readable when forwarded into a group.
-  if (cl.length > 13) problems.push(`default card ${cl.length} lines`);
-  if (cl.filter((l) => l.startsWith('🚩')).length > 3) problems.push('more than 3 flag lines');
+  // 14 is the maximum the renderer can produce: header, blank, the lifted
+  // concern, blank, two more, the "+N more" line, blank, the benchmarked buyer
+  // count, concentration, what happened to those buyers, growth, blank, footer.
+  // It grew by one for concentration and one for the blank that lifts the worst
+  // concern; anything past that is a regression in a card whose whole point is
+  // being readable when forwarded into a group.
+  if (cl.length > 14) problems.push(`default card ${cl.length} lines`);
+  const concernLines = cl.filter((l) => /^(\u26a0\ufe0f|\u00b7) /.test(l));
+  if (concernLines.length > 3) problems.push('more than 3 concern lines');
+  // Emphasis is exactly one line, or none. Two lifted concerns compete again,
+  // which is the whole complaint this answered.
+  const lifted = cl.filter((l) => l.startsWith('\u26a0\ufe0f')).length;
+  if (lifted > 1) problems.push(`${lifted} concerns lifted, expected at most one`);
+  if (lifted === 0 && concernLines.length > 0) problems.push('concerns shown with none lifted');
   if (!/^VITALS /.test(cl[0])) problems.push('default card header malformed');
   if (/<[a-z/]/i.test(comp)) problems.push('markup in the default card');
   if (/\b(clean|safe)\b|looks good/i.test(comp)) problems.push('all-clear language in the default card');
 
   // the compact card must never claim fewer raised flags than the full card
   const fullRaised = r.flags.raised;
-  const shown = cl.filter((l) => l.startsWith('🚩')).length;
+  const shown = concernLines.length;
   const more = compText.match(/\+(\d+) more/);
   const accounted = shown + (more ? Number(more[1]) : 0);
   if (fullRaised > 0 && accounted !== fullRaised) problems.push(`default card accounts for ${accounted} raised flags, full card has ${fullRaised}`);
@@ -50,7 +57,7 @@ for (const t of tokens) {
 
   // undetermined must never be rendered as a finding
   for (const fl of r.flags.flags) {
-    if (fl.state === 'unknown' && compText.includes(`🚩 ${fl.plain}`)) {
+    if (fl.state === 'unknown' && (compText.includes(`\u26a0\ufe0f ${fl.plain}`) || compText.includes(`\u00b7 ${fl.plain}`))) {
       problems.push(`undetermined flag "${fl.key}" rendered as a finding`);
     }
   }
