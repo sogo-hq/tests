@@ -14,8 +14,16 @@ const BOT_INFO = {
 };
 const ok = (m) => console.log(`  PASS  ${m}`);
 
-// a real contract that is not a pons launch, and an address with no code at all
-const NON_PONS = '0x49bac47750F3dCdBa49350B5D74fd399e90f97C6';
+// A real contract that is not a pons launch, and an address with no code at all.
+//
+// This used to be 0x49bac477…, described here as "not a pons launch". It is
+// one: the factory reports exists=true, phase=2, launched 23 days ago. The
+// scan called it "not a pons v2 launch" only because it is older than the
+// ten-day log lookback, and this test asserted that answer was correct — which
+// is how a real launch being reported as not-a-launch survived until a user hit
+// it. The replacement is verified against getLaunchedToken: the pair asset
+// $NVDA is a genuine contract the factory has never launched.
+const NON_PONS = '0xd0601ce157db5bdc3162bbac2a2c8af5320d9eec';
 const NO_CODE = '0x00000000000000000000000000000000deadbeef';
 // a real pons v2 launch, used where the reads themselves are the subject
 const LIVE_TOKEN = '0xd384722f6adfe7d79E8e6623896DF199afD31B76';
