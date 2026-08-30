@@ -119,3 +119,20 @@ test('when the image runs out of room it says so', () => {
     'lines were dropped from the image with nothing saying so',
   );
 });
+
+test('the undetermined card reaches the image too', () => {
+  // A card state that did not exist when the shared line list was built: an
+  // unindexed window renders one undetermined line in place of four figures.
+  // It is in the picture because it is in cardLines(), and for no other reason
+  // -- image.ts was not touched to add it.
+  const r = makeScan({ windowIndexed: false, ageSeconds: 23 * 86_400, symbol: 'BULL' });
+  const drawn = svgText(r);
+  for (const line of expectedInImage(r)) {
+    assert.ok(drawn.some((t) => t === line), `the image dropped "${line}"`);
+  }
+  assert.ok(
+    drawn.some((t) => /undetermined/.test(t)),
+    'the picture must carry the undetermined statement, not silently omit it',
+  );
+  assert.ok(!drawn.some((t) => /no buyers/.test(t)), 'and must never render the zero');
+});
