@@ -171,6 +171,24 @@ CREATE TABLE IF NOT EXISTS watches (
 );
 CREATE INDEX IF NOT EXISTS idx_watches_address ON watches(address);
 
+-- Filter subscriptions. A separate table from the address watches because a
+-- filter has no address: overloading that column with a filter name would make
+-- every query against it ambiguous, and the CHECK on kind exists to stop that.
+CREATE TABLE IF NOT EXISTS filter_watches (
+  user_id    INTEGER NOT NULL,
+  filter     TEXT NOT NULL,
+  dm_chat_id INTEGER NOT NULL,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (user_id, filter)
+);
+
+-- When a user was last told their hourly alert cap had been reached, so being
+-- over the cap costs them one message rather than one per suppressed alert.
+CREATE TABLE IF NOT EXISTS alert_cap_notices (
+  user_id     INTEGER PRIMARY KEY,
+  notified_at INTEGER NOT NULL
+);
+
 -- What has already been delivered, so one launch never fires twice to the same
 -- user -- including when they watch both its deployer and one of its exempted
 -- wallets, which is the case that would otherwise double-send.

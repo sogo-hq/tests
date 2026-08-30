@@ -1,5 +1,9 @@
 import { db } from './db.js';
-import { matchesFor, claimDelivery, whyLine, type Match } from './watch.js';
+import {
+  matchesFor, claimDelivery, whyLine, filterMatchesFor, alertsSentSince, claimCapNotice,
+  type Match,
+} from './watch.js';
+import { matchingFilters } from './filters.js';
 import { performScan } from './service.js';
 import { interactivelyBusy } from './ratelimit.js';
 
@@ -18,6 +22,17 @@ import { interactivelyBusy } from './ratelimit.js';
 
 /** How many alerts one pass will send before leaving the rest for the next. */
 const ALERT_BATCH = Number(process.env.ALERT_BATCH || 10) || 10;
+
+/**
+ * The most alerts one user may receive in an hour.
+ *
+ * A filter is a standing subscription to a shape, and one of them --
+ * no-exemptions -- matches most launches on this chain. Without a ceiling, a
+ * busy hour turns a subscription into a denial of service against the person
+ * who subscribed.
+ */
+export const ALERTS_PER_HOUR = Number(process.env.ALERTS_PER_HOUR || 20) || 20;
+const HOUR_SECONDS = 3_600;
 
 export interface AlertSend {
   chatId: number;
@@ -50,7 +65,15 @@ export function pendingAlerts(tokens: string[]): { token: string; match: Match }
         exemptions = [];
       }
     }
-    for (const match of matchesFor({ deployer: row.deployer, exemptions })) {
+    // Address watches first: a user watching this launch's deployer AND
+    // subscribed to a filter it matches gets one alert, and the deployer is the
+    // more specific reason to have asked for it.
+    const matches = matchesFor({ deployer: row.deployer, exemptions });
+    const already = new Set(matches.map((m) => m.userId));
+    for (const m of filterMatchesFor(matchingFilters(token))) {
+      if (!already.has(m.userId)) matches.push(m);
+    }
+    for (const match of matches) {
       out.push({ token: token.toLowerCase(), match });
     }
   }
@@ -67,10 +90,11 @@ export async function buildAlerts(
   tokens: string[],
   botUsername?: string,
   limit = ALERT_BATCH,
-): Promise<{ sends: AlertSend[]; deferred: number }> {
+): Promise<{ sends: AlertSend[]; deferred: number; capped: number }> {
   const pending = pendingAlerts(tokens);
   const sends: AlertSend[] = [];
   let deferred = 0;
+  let capped = 0;
 
   for (const { token, match } of pending) {
     if (sends.length >= limit) { deferred++; continue; }
@@ -78,6 +102,24 @@ export async function buildAlerts(
     // second and the claim has not been made yet, so this token comes back
     // around on the next pass rather than competing now.
     if (interactivelyBusy()) { deferred++; continue; }
+
+    // The hourly ceiling, checked before the claim so a capped alert is not
+    // marked delivered -- it is suppressed, not consumed.
+    const since = Math.floor(Date.now() / 1000) - HOUR_SECONDS;
+    if (alertsSentSince(match.userId, since) >= ALERTS_PER_HOUR) {
+      if (claimCapNotice(match.userId, since)) {
+        sends.push({
+          chatId: match.dmChatId,
+          userId: match.userId,
+          token,
+          text:
+            `that is ${ALERTS_PER_HOUR} alerts this hour, which is the cap — ` +
+            `holding the rest until it clears. /watching shows what you are subscribed to.`,
+        });
+      }
+      capped++;
+      continue;
+    }
 
     // Claimed before sending: a crash between the two loses an alert, which is
     // better than sending one twice to somebody who did not ask for it twice.
@@ -109,5 +151,5 @@ export async function buildAlerts(
     });
   }
 
-  return { sends, deferred };
+  return { sends, deferred, capped };
 }

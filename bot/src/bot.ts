@@ -4,7 +4,12 @@ import { performScan, scanImage, normaliseToken, looksLikeTxHash, looksLikeSolan
 import { scanCache, startCacheReporter } from './cache.js';
 import { userQuota, floodQuota, scanSemaphore, startQuotaSweeper } from './quota.js';
 import { benchmarkCoverageLine } from './metrics/benchmark.js';
-import { addWatch, listWatches, removeWatch, countWatches, rememberDm, dmChatFor, MAX_WATCHES } from './watch.js';
+import {
+  addWatch, listWatches, removeWatch, countWatches, rememberDm, dmChatFor, MAX_WATCHES,
+  addFilterWatch, listFilterWatches, removeFilterWatch,
+} from './watch.js';
+import { isFilterKey, filterDef, filterRates, rateLine } from './filters.js';
+import { ALERTS_PER_HOUR } from './alerts.js';
 import { buildAlerts } from './alerts.js';
 import { exemptedHoldTime, holdTimeLine, MIN_HOLD_SAMPLES, type HoldTime } from './holdtime.js';
 export { exemptedHoldTime, holdTimeLine, MIN_HOLD_SAMPLES, type HoldTime };
@@ -114,7 +119,9 @@ const HELP = [
   'Alerts, delivered here and only here — never into a group:',
   '  • /watch deployer <address> — when that address launches again',
   '  • /watch wallet <address> — when that address is pre-exempted on a launch',
-  '  • /watching lists them, /unwatch <address> removes one',
+  '  • /watch filter <name> — when a new launch has a shape you picked',
+  '  • /filters lists the filters and how often each fires',
+  '  • /watching lists your subscriptions, /unwatch <address|filter> removes one',
   '',
   'The card leads with concerns — the things fixed at creation, which are',
   'readable the second a token exists — and puts the counts underneath. There',
@@ -614,12 +621,12 @@ export function createBot(token = TELEGRAM_BOT_TOKEN): Bot {
     const kind = parts[0]?.toLowerCase();
     const address = normaliseAddress(parts.slice(1).join(' '));
 
-    if (kind !== 'deployer' && kind !== 'wallet') {
-      await replyOrPrompt(ctx, 'watch a deployer or a wallet:\n/watch deployer 0x…\n/watch wallet 0x…');
-      return;
-    }
-    if (!address) {
-      await replyOrPrompt(ctx, `send an address to watch — /watch ${kind} 0x…`);
+    if (kind !== 'deployer' && kind !== 'wallet' && kind !== 'filter') {
+      await replyOrPrompt(
+        ctx,
+        'watch a deployer, a wallet, or a filter:\n/watch deployer 0x…\n/watch wallet 0x…\n' +
+          '/watch filter <name> — /filters lists them',
+      );
       return;
     }
 
@@ -632,6 +639,54 @@ export function createBot(token = TELEGRAM_BOT_TOKEN): Bot {
     const dm = dmChatFor(userId);
     if (dm === null) {
       await replyEphemeralOnce(ctx, userId, 'message me directly first — alerts only ever go to a DM, never to a group');
+      return;
+    }
+
+    if (kind === 'filter') {
+      const name = (parts[1] ?? '').toLowerCase();
+      if (!isFilterKey(name)) {
+        await replyOrPrompt(
+          ctx,
+          // The name is echoed back, so it is stripped to what a filter name
+          // can contain rather than trusted: this is user text on its way into
+          // a reply.
+          `unknown filter${name ? ` "${name.replace(/[^a-z0-9-]/g, '').slice(0, 24)}"` : ''}. ` +
+            '/filters lists them with how often each fires.',
+        );
+        return;
+      }
+      const res = addFilterWatch(userId, name, dm);
+      if ('reason' in res && res.reason === 'limit') {
+        await ctx.reply(`that is ${res.count} watches, which is the limit. /unwatch one first.`);
+        return;
+      }
+      if ('reason' in res) {
+        await ctx.reply(`already watching the ${name} filter`);
+        return;
+      }
+      const def = filterDef(name);
+      const rate = filterRates().find((r) => r.key === name);
+      const lines = [
+        `watching filter ${name} — ${def.describe}.`,
+        `${countWatches(userId)} of ${MAX_WATCHES}. alerts arrive here.`,
+      ];
+      // Said before the feed starts, not discovered from it: a filter matching
+      // most launches is a subscription to nearly everything, and the number is
+      // the only honest way to say so.
+      if (def.loud) {
+        lines.push(
+          rate?.perDay != null
+            ? `heads up: this one fires on most launches — about ${Math.round(rate.perDay)} a day.`
+            : 'heads up: this one fires on most launches.',
+        );
+      }
+      lines.push(`capped at ${ALERTS_PER_HOUR} alerts an hour.`);
+      await ctx.reply(lines.join('\n'));
+      return;
+    }
+
+    if (!address) {
+      await replyOrPrompt(ctx, `send an address to watch — /watch ${kind} 0x…`);
       return;
     }
 
@@ -654,25 +709,53 @@ export function createBot(token = TELEGRAM_BOT_TOKEN): Bot {
     const userId = ctx.from?.id;
     if (userId === undefined) return;
     const list = listWatches(userId);
-    if (!list.length) {
-      await ctx.reply('not watching anything yet — /watch deployer 0x… or /watch wallet 0x…');
+    const filters = listFilterWatches(userId);
+    if (!list.length && !filters.length) {
+      await ctx.reply(
+        'not watching anything yet — /watch deployer 0x…, /watch wallet 0x…, or /watch filter <name> (/filters)',
+      );
       return;
     }
     await ctx.reply(
-      [`${list.length} of ${MAX_WATCHES} watches`, ...list.map((w) => `${w.kind}  ${w.address}`)].join('\n'),
+      [
+        `${list.length + filters.length} of ${MAX_WATCHES} watches`,
+        ...list.map((w) => `${w.kind}  ${w.address}`),
+        ...filters.map((f) => `filter  ${f.filter}`),
+      ].join('\n'),
     );
   });
 
   bot.command('unwatch', async (ctx) => {
     const userId = ctx.from?.id;
     if (userId === undefined) return;
-    const address = normaliseAddress((ctx.match ?? '').toString());
+    const raw = (ctx.match ?? '').toString().trim();
+    if (isFilterKey(raw.toLowerCase())) {
+      const gone = removeFilterWatch(userId, raw.toLowerCase());
+      await ctx.reply(gone ? `stopped watching the ${raw.toLowerCase()} filter` : 'not watching that filter');
+      return;
+    }
+    const address = normaliseAddress(raw);
     if (!address) {
-      await replyOrPrompt(ctx, 'send the address to stop watching — /unwatch 0x…');
+      await replyOrPrompt(ctx, 'send the address or filter name to stop watching — /unwatch 0x… or /unwatch <filter>');
       return;
     }
     const gone = removeWatch(userId, address);
     await ctx.reply(gone ? `stopped watching ${address.slice(0, 6)}…${address.slice(-4)}` : 'not watching that address');
+  });
+
+  bot.command('filters', async (ctx) => {
+    // The rates come from COUNT over the index, so this goes through the same
+    // flood cap as anything else that touches the database on the event loop.
+    const rates = filterRates();
+    await ctx.reply(
+      [
+        'filters — subscribe with /watch filter <name>',
+        '',
+        ...rates.map((r) => rateLine(r)),
+        '',
+        `alerts are capped at ${ALERTS_PER_HOUR} an hour and only ever arrive by DM.`,
+      ].join('\n'),
+    );
   });
 
   bot.command('stats', async (ctx) => {
@@ -731,7 +814,7 @@ let liveBot: Bot | null = null;
 
 export async function deliverAlerts(tokens: string[]): Promise<number> {
   if (!liveBot || !tokens.length) return 0;
-  const { sends, deferred } = await buildAlerts(tokens, liveBot.botInfo?.username);
+  const { sends, deferred, capped } = await buildAlerts(tokens, liveBot.botInfo?.username);
   let sent = 0;
   for (const s of sends) {
     try {
@@ -744,8 +827,12 @@ export async function deliverAlerts(tokens: string[]): Promise<number> {
       console.warn(`[alerts] could not deliver ${s.token.slice(0, 10)} to ${s.userId}:`, String((err as any)?.message ?? err).slice(0, 120));
     }
   }
-  if (sent || deferred) {
-    console.log(`[alerts] ${sent} sent${deferred ? `, ${deferred} deferred to the next pass` : ''}`);
+  if (sent || deferred || capped) {
+    console.log(
+      `[alerts] ${sent} sent` +
+        `${deferred ? `, ${deferred} deferred to the next pass` : ''}` +
+        `${capped ? `, ${capped} held by the hourly cap` : ''}`,
+    );
   }
   return sent;
 }

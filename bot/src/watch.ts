@@ -1,4 +1,5 @@
 import { db } from './db.js';
+import { type FilterKey } from './filters.js';
 
 /**
  * Alerts on facts the index already holds.
@@ -65,7 +66,9 @@ export function addWatch(
 }
 
 export function countWatches(userId: number): number {
-  return (db.prepare('SELECT COUNT(*) AS n FROM watches WHERE user_id = ?').get(userId) as { n: number }).n;
+  const a = (db.prepare('SELECT COUNT(*) AS n FROM watches WHERE user_id = ?').get(userId) as { n: number }).n;
+  const b = (db.prepare('SELECT COUNT(*) AS n FROM filter_watches WHERE user_id = ?').get(userId) as { n: number }).n;
+  return a + b;
 }
 
 export function listWatches(userId: number): Watch[] {
@@ -82,13 +85,21 @@ export function removeWatch(userId: number, address: string): number {
     .run(userId, address.toLowerCase()).changes;
 }
 
-export interface Match {
+interface MatchBase {
   userId: number;
   dmChatId: number;
-  kind: WatchKind;
-  /** The watched address that matched, for the line above the card. */
-  address: string;
 }
+
+/**
+ * Why an alert is being sent, in a shape that cannot describe itself wrongly.
+ *
+ * A union rather than a `kind` beside an optional address: a filter match has
+ * no address and an address match has no filter, and the one field that would
+ * have carried both would have to be read differently depending on the other.
+ */
+export type Match =
+  | (MatchBase & { kind: WatchKind; address: string })
+  | (MatchBase & { kind: 'filter'; filter: FilterKey });
 
 /**
  * Who should hear about this launch, and why.
@@ -143,8 +154,110 @@ export function claimDelivery(userId: number, token: string, now = Math.floor(Da
 
 /** The line above the card, saying why it arrived. */
 export function whyLine(match: Match, ticker: string): string {
+  // The filter's name and nothing else. Never "alpha", never "opportunity",
+  // never "worth a look" -- the user chose the shape, and saying anything about
+  // what it means would be this tool making the call it exists not to make.
+  if (match.kind === 'filter') return `matches your ${match.filter} filter`;
   const short = `${match.address.slice(0, 6)}…${match.address.slice(-4)}`;
   return match.kind === 'deployer'
     ? `${short} launched ${ticker} — you watch this deployer`
     : `${short} was pre-exempted on ${ticker} — you watch this wallet`;
+}
+
+// ---------------------------------------------------------------- filters
+
+
+export interface FilterWatch {
+  filter: FilterKey;
+  createdAt: number;
+}
+
+export function addFilterWatch(
+  userId: number,
+  filter: FilterKey,
+  dmChatId: number,
+  now = Math.floor(Date.now() / 1000),
+): AddResult | { ok: true; filter: FilterKey } {
+  const existing = db
+    .prepare('SELECT 1 FROM filter_watches WHERE user_id = ? AND filter = ?')
+    .get(userId, filter);
+  if (existing) return { ok: false, reason: 'duplicate' };
+
+  // Filters and address watches share one allowance. "20 watches per user" is
+  // about how much mail the bot may send someone, and that does not care which
+  // table the subscription lives in.
+  const count = countWatches(userId);
+  if (count >= MAX_WATCHES) return { ok: false, reason: 'limit', count };
+
+  db.prepare(
+    'INSERT INTO filter_watches (user_id, filter, dm_chat_id, created_at) VALUES (?,?,?,?)',
+  ).run(userId, filter, dmChatId, now);
+  return { ok: true, filter };
+}
+
+export function listFilterWatches(userId: number): FilterWatch[] {
+  return (db
+    .prepare('SELECT filter, created_at FROM filter_watches WHERE user_id = ? ORDER BY created_at ASC')
+    .all(userId) as { filter: FilterKey; created_at: number }[])
+    .map((r) => ({ filter: r.filter, createdAt: r.created_at }));
+}
+
+export function removeFilterWatch(userId: number, filter: string): number {
+  return db
+    .prepare('DELETE FROM filter_watches WHERE user_id = ? AND filter = ?')
+    .run(userId, filter).changes;
+}
+
+/** Users subscribed to any of the filters this launch matches. */
+export function filterMatchesFor(matched: FilterKey[]): Match[] {
+  if (!matched.length) return [];
+  const rows = db
+    .prepare(
+      `SELECT user_id, dm_chat_id, filter FROM filter_watches
+        WHERE filter IN (${matched.map(() => '?').join(',')})`,
+    )
+    .all(...matched) as { user_id: number; dm_chat_id: number; filter: FilterKey }[];
+
+  const byUser = new Map<number, Match>();
+  for (const r of rows) {
+    // One alert per user per launch even when two of their filters match: the
+    // card is the same card, and naming one filter is enough to say why it came.
+    if (byUser.has(r.user_id)) continue;
+    byUser.set(r.user_id, {
+      userId: r.user_id, dmChatId: r.dm_chat_id, kind: 'filter', filter: r.filter,
+    });
+  }
+  return [...byUser.values()];
+}
+
+/**
+ * Alerts already delivered to this user in the last hour.
+ *
+ * Counted from what was actually claimed, so it holds across a restart and
+ * cannot be reset by the bot forgetting.
+ */
+export function alertsSentSince(userId: number, since: number): number {
+  return (db
+    .prepare('SELECT COUNT(*) AS n FROM watch_fired WHERE user_id = ? AND fired_at >= ?')
+    .get(userId, since) as { n: number }).n;
+}
+
+/**
+ * Claim the one message that says the cap has been reached.
+ *
+ * Returns false when the user has already been told within the window. Being
+ * over the cap must cost one message, not one per suppressed alert -- the
+ * failure mode this exists to prevent is a flood, and a flood of "you are being
+ * flooded" is the same bug.
+ */
+export function claimCapNotice(userId: number, since: number, now = Math.floor(Date.now() / 1000)): boolean {
+  const row = db
+    .prepare('SELECT notified_at FROM alert_cap_notices WHERE user_id = ?')
+    .get(userId) as { notified_at: number } | undefined;
+  if (row && row.notified_at >= since) return false;
+  db.prepare(
+    `INSERT INTO alert_cap_notices (user_id, notified_at) VALUES (?,?)
+     ON CONFLICT(user_id) DO UPDATE SET notified_at = excluded.notified_at`,
+  ).run(userId, now);
+  return true;
 }
