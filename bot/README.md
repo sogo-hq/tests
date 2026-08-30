@@ -421,6 +421,60 @@ One-off cost on an existing index: rows start at zero attempts, so the backlog
 is worked twice more before it drains. That is finite, where the previous
 behaviour was not.
 
+## Alerts
+
+Two kinds, both facts the index already holds:
+
+| command | fires when |
+|---|---|
+| `/watch deployer 0x…` | that address launches another token |
+| `/watch wallet 0x…` | that address appears on a new launch's snipe-tax exemption list |
+
+`/watching` lists them, `/unwatch 0x…` removes one, twenty per user.
+
+**DM only, structurally.** A watch stores the private chat it will deliver to,
+so one cannot exist without somewhere private to send it — `/watch` from a group
+with no DM on record refuses, says so once, and stays quiet if repeated. An
+alert nobody in the room asked for is spam, and it is what gets a bot removed.
+
+The message is the reason, then the card:
+
+```
+0xaf0d…dc71 launched $CHIPPER — you watch this deployer
+
+VITALS  $CHIPPER · 12s · 0.04 ETH mc
+…
+```
+
+Delivery rides the index loop, which already sees every launch within three
+seconds; a second poller would compete for the same rate limit to learn what
+this one already knows. **An alert is a scan** — same `performScan`, same
+limiter, same cache, same budget — so thirty launches in one block become one
+scan per token served from cache to every subscriber, not one per subscriber.
+It carries no quota key, because that allowance belongs to scans the user asked
+for, and it defers entirely while anyone is scanning.
+
+One alert per launch per user, claimed before sending. Watching both a launch's
+deployer and a wallet it exempted is one message, and the deployer is reported —
+it made the launch, where the wallet was merely listed by it. Claiming first
+means a crash between claim and send loses an alert rather than repeating one.
+
+No price alerts, no volume triggers, no "smart money": those need a price feed
+or a judgement about which wallets are smart, and this tool has neither.
+
+## One card, two renderers
+
+The image silently missed three features — the growth line, the market cap, the
+first-scan receipt — because it built its own header and its own list of body
+lines from the same `ScanResult`. Nothing failed any of those times, and that is
+the point: a renderer that forgets a line still produces a perfectly valid
+smaller picture.
+
+`cardLines()` produces the card once, as lines with roles. The text renderer
+joins them; the image draws them by role and knows nothing about what any of
+them mean. A line added to the card appears in both or in neither, and the
+image reports when it runs out of room rather than quietly drawing less.
+
 ## Filling the trade history
 
 Trades were only ever indexed as a side effect of somebody scanning a token, and
@@ -852,6 +906,10 @@ Tables: `launches`, `trades`, `scans`, `rechecks`, `token_peaks`, `cursors`.
 | `CONCENTRATION_PERCENTILE` | `90` | where in the recorded distribution check 09 raises |
 | `WINDOW_INDEX_BATCH` | `25` | launches the background window indexer reads per pass |
 | `WINDOW_INDEX_TARGET` | `40` | coverage aimed for per age bucket, above the floor rather than on it |
+| `MAX_WATCHES` | `20` | alert subscriptions per user |
+| `ALERT_BATCH` | `10` | alerts delivered per index pass, the rest deferred |
+| `BULK_QUIET_MS` | `1000` | how long after a scan background work stays out of the way |
+| `BULK_RESERVE_FRACTION` | `0.5` | share of the rate limiter never spent on background work |
 | `WINDOW_SAMPLE_CEILING` | `2000` | most launches the sample will ever read, so an unfillable threshold cannot pull it through the whole index |
 | `SCAN_BUDGET_MS` | `5000` | hard ceiling on a scan; optional checks race what is left of it |
 | `CONCENTRATION_DEADLINE_MS` | `2000` | longest holder concentration may hold up a card |
