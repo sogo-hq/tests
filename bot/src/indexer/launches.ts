@@ -65,6 +65,8 @@ export interface IndexResult {
   toBlock: bigint;
   undecodable: number;
   pendingDecode: number;
+  /** Tokens this pass saw for the first time. Populated by indexNew only. */
+  newTokens?: string[];
 }
 
 /**
@@ -315,7 +317,9 @@ export async function indexNew(opts: { lifecycle?: boolean } = {}) {
   const head = await client.getBlockNumber({ cacheTime: 0 });
   const cursor = getCursor(CURSOR);
   if (!cursor) return backfill();
-  if (cursor >= head) return { launches: 0, fromBlock: cursor, toBlock: head, undecodable: 0, pendingDecode: 0 };
+  if (cursor >= head) {
+    return { launches: 0, fromBlock: cursor, toBlock: head, undecodable: 0, pendingDecode: 0, newTokens: [] };
+  }
 
   const from = cursor + 1n;
   const to = head - from > BigInt(TAIL_MAX_BLOCKS) ? from + BigInt(TAIL_MAX_BLOCKS) : head;
@@ -323,9 +327,20 @@ export async function indexNew(opts: { lifecycle?: boolean } = {}) {
     console.log(`[index] catching up: ${head - to} block(s) still behind after this pass`);
   }
   // The tail is small, so decode inline -- new launches arrive fully populated.
+  // Tokens that were not in the index before this pass. The alert loop reads
+  // this rather than polling: the indexer already sees every launch within
+  // about three seconds, and a second poller would be a second thing competing
+  // for the same rate limit to learn what this one already knows.
+  const before = new Set(
+    (db.prepare('SELECT token FROM launches WHERE block_number >= ?').all(Number(from)) as { token: string }[])
+      .map((r) => r.token),
+  );
   const res = await indexLaunches(from, to, { decode: true });
   if (lifecycle) await indexLifecycle(from, to);
-  return res;
+  const after = (db
+    .prepare('SELECT token FROM launches WHERE block_number >= ? AND block_number <= ?')
+    .all(Number(from), Number(to)) as { token: string }[]).map((r) => r.token);
+  return { ...res, newTokens: after.filter((t) => !before.has(t)) };
 }
 
 /**
@@ -386,7 +401,9 @@ export function startDecodeLoop(batch = 200, intervalMs = 15_000): NodeJS.Timeou
  * A pass that finds nothing is silent: at roughly two launches a minute, logging
  * every empty poll would bury the lines that matter.
  */
-export function startIndexLoop(intervalMs = 3_000): NodeJS.Timeout {
+export type NewLaunchHandler = (tokens: string[]) => void | Promise<void>;
+
+export function startIndexLoop(intervalMs = 3_000, onNewLaunches?: NewLaunchHandler): NodeJS.Timeout {
   let running = false;
   let consecutiveErrors = 0;
   let tick_n = 0;
@@ -410,6 +427,14 @@ export function startIndexLoop(intervalMs = 3_000): NodeJS.Timeout {
       const res = await bulk(() => indexNew({ lifecycle: tick_n % LIFECYCLE_EVERY === 0 }));
       tick_n++;
       consecutiveErrors = 0;
+      // Handed to whoever is listening, without awaiting: a slow alert pass
+      // must not hold up the next index tick, which is what keeps a fresh
+      // launch scannable within three seconds.
+      if (res.newTokens?.length && onNewLaunches) {
+        void Promise.resolve(onNewLaunches(res.newTokens)).catch((err) =>
+          console.error('[alerts] handler failed:', String((err as Error)?.message ?? err).slice(0, 160)),
+        );
+      }
       if (res.launches > 0) {
         console.log(`[index] +${res.launches} launch${res.launches === 1 ? '' : 'es'} (through block ${res.toBlock})`);
       }

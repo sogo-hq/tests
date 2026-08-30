@@ -144,6 +144,43 @@ CREATE TABLE IF NOT EXISTS rechecks (
 );
 CREATE INDEX IF NOT EXISTS idx_rechecks_due ON rechecks(completed_at, due_at);
 
+-- Private chats we know about, so an alert has somewhere to go.
+--
+-- Telegram gives no way to open a DM unprompted: the user must message first.
+-- Recorded on any private message rather than inferred from scan history --
+-- somebody whose only DM was /help still has a reachable chat, and inferring it
+-- from scans told them to "message me first" when they already had.
+CREATE TABLE IF NOT EXISTS dm_chats (
+  user_id  INTEGER PRIMARY KEY,
+  chat_id  INTEGER NOT NULL,
+  seen_at  INTEGER NOT NULL
+);
+
+-- Alert subscriptions. One row per (user, kind, address).
+--
+-- Delivery is DM-only, so the chat is the user's own private chat and is
+-- recorded when the watch is created: a watch set up from a group must still
+-- fire privately, and firing into the group is what gets a bot removed.
+CREATE TABLE IF NOT EXISTS watches (
+  user_id    INTEGER NOT NULL,
+  kind       TEXT NOT NULL CHECK (kind IN ('deployer','wallet')),
+  address    TEXT NOT NULL,
+  dm_chat_id INTEGER NOT NULL,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (user_id, kind, address)
+);
+CREATE INDEX IF NOT EXISTS idx_watches_address ON watches(address);
+
+-- What has already been delivered, so one launch never fires twice to the same
+-- user -- including when they watch both its deployer and one of its exempted
+-- wallets, which is the case that would otherwise double-send.
+CREATE TABLE IF NOT EXISTS watch_fired (
+  user_id  INTEGER NOT NULL,
+  token    TEXT NOT NULL,
+  fired_at INTEGER NOT NULL,
+  PRIMARY KEY (user_id, token)
+);
+
 -- Holder concentration observations, one per token, refreshed on every scan.
 -- The distribution these rows form is where the concentration threshold comes
 -- from; no threshold is hardcoded anywhere. Tokens with too few holders for the

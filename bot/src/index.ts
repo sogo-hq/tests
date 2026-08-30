@@ -6,6 +6,7 @@ import { scanToken } from './scan.js';
 import { renderCardText, renderDefaultCard } from './card.js';
 import { runDueRechecks, startRecheckLoop } from './recheck.js';
 import { startWindowLoop, windowBacklog, indexWindows } from './indexer/windows.js';
+import { deliverAlerts } from './bot.js';
 import { startBot } from './bot.js';
 import { db } from './db.js';
 import { BACKFILL_DAYS, BLOCKS_PER_DAY } from './config.js';
@@ -188,7 +189,10 @@ async function main(): Promise<void> {
       // immediately; the bot answers scans throughout, and any check that
       // depends on the index reports undetermined until it can be trusted.
       startRecovery();
-      startIndexLoop();
+      // Alerts ride the index loop rather than polling: it already sees every
+      // launch within three seconds, and a second poller would compete for the
+      // same rate limit to learn what this one already knows.
+      startIndexLoop(3_000, async (tokens) => { await deliverAlerts(tokens); });
       startRecheckLoop();
       // Started unconditionally. It used to start only when a backlog already
       // existed, which meant a container that came up with an empty database

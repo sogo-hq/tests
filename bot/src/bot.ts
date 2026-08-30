@@ -4,6 +4,8 @@ import { performScan, scanImage, normaliseToken, looksLikeTxHash, looksLikeSolan
 import { scanCache, startCacheReporter } from './cache.js';
 import { userQuota, floodQuota, scanSemaphore, startQuotaSweeper } from './quota.js';
 import { benchmarkCoverageLine } from './metrics/benchmark.js';
+import { addWatch, listWatches, removeWatch, countWatches, rememberDm, dmChatFor, MAX_WATCHES } from './watch.js';
+import { buildAlerts } from './alerts.js';
 import { exemptedHoldTime, holdTimeLine, MIN_HOLD_SAMPLES, type HoldTime } from './holdtime.js';
 export { exemptedHoldTime, holdTimeLine, MIN_HOLD_SAMPLES, type HoldTime };
 import { concentrationCoverageLine } from './metrics/concentration.js';
@@ -108,6 +110,11 @@ const HELP = [
   '',
   '/full <address> adds the technical detail behind every line.',
   '/stats shows what has been indexed.',
+  '',
+  'Alerts, delivered here and only here — never into a group:',
+  '  • /watch deployer <address> — when that address launches again',
+  '  • /watch wallet <address> — when that address is pre-exempted on a launch',
+  '  • /watching lists them, /unwatch <address> removes one',
   '',
   'The card leads with concerns — the things fixed at creation, which are',
   'readable the second a token exists — and puts the counts underneath. There',
@@ -539,6 +546,22 @@ export function createBot(token = TELEGRAM_BOT_TOKEN): Bot {
   if (!token) throw new Error('TELEGRAM_BOT_TOKEN is not set');
   const bot = new Bot(token);
 
+  // Recorded so the index loop can deliver alerts through this same bot. It was
+  // declared and never assigned at first, which would have made every alert
+  // silently do nothing -- the exact shape of failure this codebase keeps
+  // producing when one half of a pair is written and the other is assumed.
+  liveBot = bot;
+
+  // Any private message means this user is reachable. Recorded here rather than
+  // inferred from what they scanned: /help in a DM is just as good a proof of a
+  // reachable chat as a scan, and inferring it told people who had already
+  // written to "message me first".
+  bot.use(async (ctx, next) => {
+    const uid = ctx.from?.id;
+    if (uid !== undefined && ctx.chat?.type === 'private') rememberDm(uid, ctx.chat.id);
+    await next();
+  });
+
   bot.command(['start', 'help'], (ctx) =>
     ctx.reply(HELP.replace(/BOTNAME/g, usernameOf(ctx) ?? 'bot'), {
       // No preview: the footer carries a domain, and a link card would push the
@@ -554,6 +577,103 @@ export function createBot(token = TELEGRAM_BOT_TOKEN): Bot {
   // Everything the default card leaves out: the technical wording of every
   // flag, the traction block, phase, pair and links.
   bot.command('full', (ctx) => handleScan(ctx, ctx.match || '', true));
+
+    const normaliseAddress = (raw: string): string | null => {
+    const m = String(raw).match(/0x[a-fA-F0-9]{40}/);
+    return m ? m[0].toLowerCase() : null;
+  };
+
+  /** A DM gets the full prompt; a group gets one short line that deletes itself. */
+  const replyOrPrompt = async (ctx: Context, text: string): Promise<void> => {
+    if (sourceOf(ctx) === 'group') {
+      await replyEphemeral(ctx, text.split('\n')[0]!, ctx.msg
+        ? { reply_parameters: { message_id: ctx.msg.message_id, allow_sending_without_reply: true } as const }
+        : {});
+      return;
+    }
+    await ctx.reply(text);
+  };
+
+  /**
+   * Said once per user, then never again.
+   *
+   * Somebody who keeps typing /watch in a group should not keep producing
+   * messages there. The reply is ephemeral in a group for the same reason.
+   */
+  const toldToDm = new Set<number>();
+  const replyEphemeralOnce = async (ctx: Context, userId: number, text: string): Promise<void> => {
+    if (toldToDm.has(userId)) return;
+    toldToDm.add(userId);
+    await replyOrPrompt(ctx, text);
+  };
+
+  // ---------------------------------------------------------------- alerts
+  bot.command('watch', async (ctx) => {
+    const raw = (ctx.match ?? '').toString().trim();
+    const parts = raw.split(/\s+/).filter(Boolean);
+    const kind = parts[0]?.toLowerCase();
+    const address = normaliseAddress(parts.slice(1).join(' '));
+
+    if (kind !== 'deployer' && kind !== 'wallet') {
+      await replyOrPrompt(ctx, 'watch a deployer or a wallet:\n/watch deployer 0x…\n/watch wallet 0x…');
+      return;
+    }
+    if (!address) {
+      await replyOrPrompt(ctx, `send an address to watch — /watch ${kind} 0x…`);
+      return;
+    }
+
+    const userId = ctx.from?.id;
+    if (userId === undefined) return;
+
+    // DM only, always. An alert nobody in the room asked for is spam, and it
+    // is what gets a bot removed from a group -- so a watch cannot even be
+    // created without somewhere private to deliver it.
+    const dm = dmChatFor(userId);
+    if (dm === null) {
+      await replyEphemeralOnce(ctx, userId, 'message me directly first — alerts only ever go to a DM, never to a group');
+      return;
+    }
+
+    const res = addWatch(userId, kind, address, dm);
+    if (!res.ok && res.reason === 'limit') {
+      await ctx.reply(`that is ${res.count} watches, which is the limit. /unwatch one first.`);
+      return;
+    }
+    if (!res.ok) {
+      await ctx.reply(`already watching that ${kind}`);
+      return;
+    }
+    await ctx.reply(
+      `watching ${kind} ${address.slice(0, 6)}…${address.slice(-4)} — ` +
+        `${countWatches(userId)} of ${MAX_WATCHES}. alerts arrive here.`,
+    );
+  });
+
+  bot.command('watching', async (ctx) => {
+    const userId = ctx.from?.id;
+    if (userId === undefined) return;
+    const list = listWatches(userId);
+    if (!list.length) {
+      await ctx.reply('not watching anything yet — /watch deployer 0x… or /watch wallet 0x…');
+      return;
+    }
+    await ctx.reply(
+      [`${list.length} of ${MAX_WATCHES} watches`, ...list.map((w) => `${w.kind}  ${w.address}`)].join('\n'),
+    );
+  });
+
+  bot.command('unwatch', async (ctx) => {
+    const userId = ctx.from?.id;
+    if (userId === undefined) return;
+    const address = normaliseAddress((ctx.match ?? '').toString());
+    if (!address) {
+      await replyOrPrompt(ctx, 'send the address to stop watching — /unwatch 0x…');
+      return;
+    }
+    const gone = removeWatch(userId, address);
+    await ctx.reply(gone ? `stopped watching ${address.slice(0, 6)}…${address.slice(-4)}` : 'not watching that address');
+  });
 
   bot.command('stats', async (ctx) => {
     // /stats runs several COUNT(*) queries against SQLite on the event loop, so
@@ -599,6 +719,37 @@ export function createBot(token = TELEGRAM_BOT_TOKEN): Bot {
  * a line that reads as a pitch has no place in a tool whose whole claim is that
  * it does not make calls.
  */
+/**
+ * Send the alerts for a batch of new launches.
+ *
+ * Held here because this is where the Telegram transport lives; everything
+ * about which alerts exist and what they say is in alerts.ts, which needs no
+ * bot token to test. A null bot means alerts are built and dropped, which is
+ * what happens in every non-bot mode.
+ */
+let liveBot: Bot | null = null;
+
+export async function deliverAlerts(tokens: string[]): Promise<number> {
+  if (!liveBot || !tokens.length) return 0;
+  const { sends, deferred } = await buildAlerts(tokens, liveBot.botInfo?.username);
+  let sent = 0;
+  for (const s of sends) {
+    try {
+      await liveBot.api.sendMessage(s.chatId, s.text, { link_preview_options: { is_disabled: true } });
+      sent++;
+    } catch (err) {
+      // A user who blocked the bot or deleted the chat is not an error worth
+      // retrying; the delivery is already claimed and will not be attempted
+      // again for this token.
+      console.warn(`[alerts] could not deliver ${s.token.slice(0, 10)} to ${s.userId}:`, String((err as any)?.message ?? err).slice(0, 120));
+    }
+  }
+  if (sent || deferred) {
+    console.log(`[alerts] ${sent} sent${deferred ? `, ${deferred} deferred to the next pass` : ''}`);
+  }
+  return sent;
+}
+
 export function statsText(): string {
   const q = (sql: string) => (db.prepare(sql).get() as { n: number }).n;
 

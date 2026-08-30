@@ -737,5 +737,105 @@ await bot.handleUpdate(inline(SOL, 9500));
   ok(`the PNG lifts by size (${top.size}px vs ${second.size}px) and tone, with no colour spent on it`);
 }
 
+// ===========================================================================
+// Alerts: DM only, and never a word more in a group than necessary
+// ===========================================================================
+{
+  const { countWatches, listWatches } = await import('../dist/watch.js');
+  const DEP = '0x' + '5a'.repeat(20);
+
+  // --- a group /watch from someone who has never DM'd -----------------------
+  const grpUser = 6600;
+  {
+    const upd = msg('group', `/watch deployer ${DEP}`, -1000);
+    upd.message.from.id = grpUser;
+    await bot.handleUpdate(upd);
+    const c = drain();
+    assert.equal(c.length, 1, `a group /watch sent ${c.length} messages`);
+    assert.match(c[0].payload.text, /message me directly/i);
+    assert.ok(!/watching deployer/i.test(c[0].payload.text), 'it must not claim to have created a watch');
+    assert.equal(countWatches(grpUser), 0, 'no watch may exist without a DM to deliver it to');
+    assert.ok(c[0].payload.reply_parameters?.message_id, 'and it is a reply, in a group');
+    ok('a group /watch with no DM refuses and explains, creating nothing');
+  }
+
+  // --- and it says so once, not every time ---------------------------------
+  {
+    for (let i = 0; i < 3; i++) {
+      const upd = msg('group', `/watch deployer ${DEP}`, -1000);
+      upd.message.from.id = grpUser;
+      await bot.handleUpdate(upd);
+    }
+    const c = drain().filter((x) => x.method === 'sendMessage');
+    assert.equal(c.length, 0, `repeating it in a group sent ${c.length} more messages`);
+    ok('repeating it in a group stays quiet');
+  }
+
+  // --- a DM user can watch, and is told where alerts go ---------------------
+  const dmUser = 6601;
+  {
+    const warm = msg('private', `/scan ${TOKEN}`, dmUser);
+    warm.message.from.id = dmUser;
+    await bot.handleUpdate(warm);
+    drain();
+    const upd = msg('private', `/watch deployer ${DEP}`, dmUser);
+    upd.message.from.id = dmUser;
+    await bot.handleUpdate(upd);
+    const c = drain();
+    assert.match(c[c.length - 1].payload.text, /watching deployer/i);
+    assert.match(c[c.length - 1].payload.text, /1 of 20/);
+    assert.equal(countWatches(dmUser), 1);
+    ok('a DM /watch is created and says where alerts will arrive');
+  }
+
+  // --- /watching and /unwatch ----------------------------------------------
+  {
+    const l = msg('private', '/watching', dmUser);
+    l.message.from.id = dmUser;
+    await bot.handleUpdate(l);
+    const listed = drain();
+    assert.match(listed[listed.length - 1].payload.text, new RegExp(DEP));
+
+    const u = msg('private', `/unwatch ${DEP}`, dmUser);
+    u.message.from.id = dmUser;
+    await bot.handleUpdate(u);
+    const removed = drain();
+    assert.match(removed[removed.length - 1].payload.text, /stopped watching/i);
+    assert.equal(countWatches(dmUser), 0);
+    ok('/watching lists them and /unwatch removes one');
+  }
+
+  // --- an alert is a DM, with the reason above the card ---------------------
+  {
+    const { buildAlerts } = await import('../dist/alerts.js');
+    const { addWatch } = await import('../dist/watch.js');
+    const { db } = await import('../dist/db.js');
+    const row = db.prepare('SELECT deployer FROM launches WHERE token = ?').get(TOKEN.toLowerCase());
+    assert.ok(row, 'the subject token should be indexed by now');
+
+    const watcher = 6602;
+    addWatch(watcher, 'deployer', row.deployer, 7777);
+    // Alerts defer while anyone is scanning, and this suite has been scanning
+    // continuously. Waiting for quiet is the behaviour, not a workaround: an
+    // alert nobody asked for must never be ahead of a scan somebody did.
+    await new Promise((r) => setTimeout(r, 2_500));
+    const { sends } = await buildAlerts([TOKEN]);
+    const mine = sends.filter((s) => s.userId === watcher);
+    assert.equal(mine.length, 1, `expected one alert, got ${mine.length}`);
+    assert.equal(mine[0].chatId, 7777, 'delivered to the DM chat, never to a group');
+    const [why, blank, ...card] = mine[0].text.split('\n');
+    assert.match(why, /launched .* — you watch this deployer$/);
+    assert.equal(blank, '');
+    assert.match(card[0], /^VITALS  /, 'the card follows, unchanged');
+    ok(`an alert is the reason then the card: "${why}"`);
+
+    // and it never fires twice
+    const again = await buildAlerts([TOKEN]);
+    assert.equal(again.sends.filter((s) => s.userId === watcher).length, 0,
+      'the same launch fired at the same user twice');
+    ok('the same launch never fires twice to one user');
+  }
+}
+
 console.log('\nAll handler checks passed.');
 process.exit(0);
