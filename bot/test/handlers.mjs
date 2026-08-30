@@ -805,6 +805,58 @@ await bot.handleUpdate(inline(SOL, 9500));
     ok('/watching lists them and /unwatch removes one');
   }
 
+  // --- filters through the real command surface ----------------------------
+  {
+    const { listFilterWatches } = await import('../dist/watch.js');
+
+    // /filters must answer without a subscription and without a verdict.
+    const fl = msg('private', '/filters', dmUser);
+    fl.message.from.id = dmUser;
+    await bot.handleUpdate(fl);
+    const listed = drain();
+    const text = listed[listed.length - 1].payload.text;
+    assert.match(text, /buyback/);
+    assert.match(text, /clean-deployer/);
+    assert.match(text, /no-exemptions/);
+    for (const banned of [/alpha/i, /opportunit/i, /worth a look/i]) {
+      assert.doesNotMatch(text, banned, `/filters carried a verdict: ${text}`);
+    }
+    ok('/filters lists all three with no judgement attached');
+
+    // An unknown filter name is refused, and nothing is created.
+    const bad = msg('private', '/watch filter alpha', dmUser);
+    bad.message.from.id = dmUser;
+    await bot.handleUpdate(bad);
+    const refused = drain();
+    assert.match(refused[refused.length - 1].payload.text, /unknown filter/i);
+    assert.equal(listFilterWatches(dmUser).length, 0, 'a bad name must not create a subscription');
+    ok('/watch filter with an unknown name refuses and creates nothing');
+
+    // The noisy one warns before it starts, not after 200 messages.
+    const loud = msg('private', '/watch filter no-exemptions', dmUser);
+    loud.message.from.id = dmUser;
+    await bot.handleUpdate(loud);
+    const made = drain();
+    const reply = made[made.length - 1].payload.text;
+    assert.match(reply, /fires on most launches/i, `no warning on the loud filter: ${reply}`);
+    assert.match(reply, /capped at \d+ alerts an hour/i);
+    assert.deepEqual(listFilterWatches(dmUser).map((f) => f.filter), ['no-exemptions']);
+    ok('/watch filter warns about the noisy one and states the cap');
+
+    // /watching shows it, /unwatch by name removes it.
+    const w = msg('private', '/watching', dmUser);
+    w.message.from.id = dmUser;
+    await bot.handleUpdate(w);
+    assert.match(drain().pop().payload.text, /filter\s+no-exemptions/);
+
+    const un = msg('private', '/unwatch no-exemptions', dmUser);
+    un.message.from.id = dmUser;
+    await bot.handleUpdate(un);
+    assert.match(drain().pop().payload.text, /stopped watching the no-exemptions filter/i);
+    assert.equal(listFilterWatches(dmUser).length, 0);
+    ok('/watching lists a filter and /unwatch removes it by name');
+  }
+
   // --- an alert is a DM, with the reason above the card ---------------------
   {
     const { buildAlerts } = await import('../dist/alerts.js');
