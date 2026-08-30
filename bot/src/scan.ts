@@ -78,6 +78,8 @@ export interface ScanResult {
   /** True when the scan ran past its budget; the log says which phase ate it. */
   overBudget: boolean;
   /** Milliseconds this scan's requests spent queued for a rate-limiter token. */
+  /** RPC requests this scan made through the limiter. */
+  limiterRequests: number;
   waitMs: number;
   /** Deepest queue any of its requests arrived into. */
   maxQueue: number;
@@ -273,6 +275,7 @@ export async function scanToken(token: string, requestedBy?: number): Promise<Sc
   // reporting "slow" is not evidence of contention; this is.
   const { value, waits } = await measuringWaits(() => interactive(() => scanTokenInner(token, requestedBy)));
   if (value) {
+    value.limiterRequests = waits.requests;
     value.waitMs = waits.waitMs;
     value.maxQueue = waits.maxQueue;
     value.bulkAhead = waits.bulkAhead;
@@ -521,6 +524,7 @@ async function scanTokenInner(token: string, requestedBy?: number): Promise<Scan
         creation,
         isEarly,
         earlyThresholdSeconds: earlyThreshold,
+        limiterRequests: 0,
         waitMs: 0,
         maxQueue: 0,
         bulkAhead: 0,
@@ -600,6 +604,7 @@ async function scanTokenInner(token: string, requestedBy?: number): Promise<Scan
     creation,
     isEarly,
     earlyThresholdSeconds: earlyThreshold,
+    limiterRequests: 0,
     waitMs: 0,
     maxQueue: 0,
     bulkAhead: 0,

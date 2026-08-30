@@ -155,3 +155,33 @@ test('a range that is genuinely too wide is still split', async () => {
     globalThis.fetch = saved;
   }
 });
+
+/**
+ * A burst of refusals is one signal, and the user must not serve its sentence.
+ *
+ * A whole-life Transfer read is 43 getLogs calls and the node refused seven of
+ * them within a few seconds. Each refusal multiplied a shared rate by 0.6, so
+ * 10/s became the 1/s floor, and the next scan -- 17 reads -- took 16.8s
+ * against a 5s budget. The scan had done nothing wrong; it inherited a penalty
+ * that background work had earned.
+ *
+ * Two properties hold it shut: a burst cuts once, and the floor stays high
+ * enough that a scan's reads still fit in its budget.
+ */
+test('a burst of 429s cuts the rate once, and never below the serving floor', async () => {
+  const { effectiveRate } = await import('../dist/ratelimit.js');
+  retryAfterHeader = null;
+
+  const before = effectiveRate();
+  // Several ladders back to back is the shape of a heavy read being refused
+  // over and over: many more than the seven that collapsed it in production.
+  for (let i = 0; i < 6; i++) await limitOf(2_000);
+  const after = effectiveRate();
+
+  assert.ok(after < before, `rate did not respond to refusals at all: ${before} -> ${after}`);
+  assert.ok(
+    after >= before * 0.5,
+    `rate fell to ${after}/s from ${before}/s. Below half, a scan's reads no ` +
+      `longer fit its budget and the user pays for background work's refusals.`,
+  );
+});

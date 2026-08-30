@@ -3,7 +3,7 @@ import { scanToken, LaunchLookupIncomplete, type ScanResult } from './scan.js';
 import { renderCard, renderDefaultCard, renderDefaultNotFound, compactMeta, type CompactMeta } from './card.js';
 import { scanCache, type CachedScan } from './cache.js';
 import { userQuota, floodQuota, scanSemaphore, SlotTimeout, formatRetry } from './quota.js';
-import { RpcRateLimited } from './ratelimit.js';
+import { RpcRateLimited, effectiveRate } from './ratelimit.js';
 import { db } from './db.js';
 import { renderCardPng } from './image.js';
 import { EARLY_CACHE_TTL_MS, EARLY_WINDOW_SECONDS } from './config.js';
@@ -135,6 +135,7 @@ function logScanLine(
     phases: string;
     slowestPhase: string | null;
     overBudget: boolean;
+    requests?: number;
     waitMs?: number;
     maxQueue?: number;
     bulkAhead?: number;
@@ -159,7 +160,7 @@ function logScanLine(
     // when it looks bad: "scans feel slow" needs a number to confirm or refute,
     // and a number that appears only on bad scans cannot establish a baseline.
     parts.push(
-      `limiter[wait=${Math.round(timing.waitMs ?? 0)}ms queue=${timing.maxQueue ?? 0} bulkAhead=${timing.bulkAhead ?? 0}]`,
+      `limiter[wait=${Math.round(timing.waitMs ?? 0)}ms reqs=${timing.requests ?? 0} queue=${timing.maxQueue ?? 0} bulkAhead=${timing.bulkAhead ?? 0} rate=${effectiveRate().toFixed(1)}/s]`,
     );
     if (timing.overBudget) parts.push(`OVER_BUDGET slowest=${timing.slowestPhase ?? 'unknown'}`);
   }
@@ -180,6 +181,7 @@ function logEvent(
     phases: string;
     slowestPhase: string | null;
     overBudget: boolean;
+    requests?: number;
     waitMs?: number;
     maxQueue?: number;
     bulkAhead?: number;
@@ -310,6 +312,7 @@ interface RenderedScan {
     phases: string;
     slowestPhase: string | null;
     overBudget: boolean;
+    requests?: number;
     waitMs?: number;
     maxQueue?: number;
     bulkAhead?: number;
@@ -355,6 +358,7 @@ function render(token: string, result: Awaited<ReturnType<typeof scanToken>>, bo
     scanId: result.scanId,
     timing: {
       phases: result.phases, slowestPhase: result.slowestPhase, overBudget: result.overBudget,
+      requests: result.limiterRequests,
       waitMs: result.waitMs, maxQueue: result.maxQueue, bulkAhead: result.bulkAhead,
     },
   };

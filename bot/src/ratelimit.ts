@@ -21,6 +21,13 @@ import { RPC_URL } from './config.js';
 
 const RATE_PER_SEC = Number(process.env.RPC_RATE_PER_SEC || 10);
 const BURST = Number(process.env.RPC_BURST || 10);
+
+/** One rate cut per burst of refusals; the rest are the same signal. */
+const PENALTY_COOLDOWN_MS = Number(process.env.RPC_PENALTY_COOLDOWN_MS || 2_000) || 2_000;
+/** How long a cut lasts, and how long background work stands down for. */
+const PENALTY_MS = Number(process.env.RPC_PENALTY_MS || 30_000) || 30_000;
+/** The rate never falls below this fraction: users stay served, bulk stops. */
+const PENALTY_FLOOR = 0.5;
 const MAX_429_RETRIES = 6;
 
 /** How long after interactive work background requests stay out of the way. */
@@ -110,13 +117,66 @@ class TokenBucket {
     this.last = now;
   }
 
-  /** Temporarily slow down after a 429, then recover. */
+  /**
+   * Slow down after a 429, then recover.
+   *
+   * Three rules, each paid for by a measurement.
+   *
+   * ONE CUT PER BURST. A whole-life Transfer read is 43 getLogs calls, and the
+   * node refuses seven of them within a few seconds. That is the node saying
+   * "slow down" once, not seven times. Compounding 0.6 per refusal took the
+   * rate from 10/s to the 1/s floor, and the next scan -- 17 reads -- took
+   * 16.8s for it. Refusals inside the cooldown still cost their retry, they
+   * just do not cut the rate again.
+   *
+   * THE WORK THAT EARNED IT PAYS. The refusals above came from a background
+   * holder reading. Cutting a shared rate makes the user's scan serve the
+   * penalty for it, which is exactly backwards, so bulk stops entirely while a
+   * penalty is live and the reduced capacity goes to whoever is waiting.
+   *
+   * A FLOOR THAT STILL SERVES. With bulk stopped, the only load left is scans,
+   * and a scan cannot fit its reads into its budget below about 4/s. Sustained
+   * refusals should slow background work to a stop, never slow a user to a
+   * crawl -- so the rate floors at half, and the per-request 429 ladder does
+   * the rest of the backing off.
+   *
+   * Logged, because a silent collapse to 1/s is indistinguishable from a slow
+   * node from the outside, and we spent a run of the latency suite guessing.
+   */
   penalise(): void {
     this.tokens = 0;
-    this.rate = Math.max(1, this.rate * 0.6);
+    const now = Date.now();
+    this.penalisedUntil = now + PENALTY_MS;
+    if (now - this.lastPenaltyAt < PENALTY_COOLDOWN_MS) return;
+    this.lastPenaltyAt = now;
+
+    const was = this.rate;
+    this.rate = Math.max(RATE_PER_SEC * PENALTY_FLOOR, this.rate * 0.6);
+    if (this.rate !== was) {
+      console.warn(
+        `[limiter] 429 -- rate ${was.toFixed(1)}/s -> ${this.rate.toFixed(1)}/s, ` +
+          `background work paused for ${PENALTY_MS / 1000}s`,
+      );
+    }
     setTimeout(() => {
       this.rate = Math.min(RATE_PER_SEC, this.rate / 0.6);
-    }, 30_000);
+    }, PENALTY_MS).unref?.();
+  }
+
+  /** When the last rate cut happened, to coalesce a burst into one. */
+  private lastPenaltyAt = 0;
+
+  /** While this is in the future, background work stands down entirely. */
+  private penalisedUntil = 0;
+
+  /** Whether a 429 penalty is currently in force. */
+  penalised(): boolean {
+    return Date.now() < this.penalisedUntil;
+  }
+
+  /** The rate now in effect, which a 429 may have cut. */
+  currentRate(): number {
+    return this.rate;
   }
 
   /**
@@ -134,6 +194,9 @@ class TokenBucket {
    * reserve of tokens left untouched for whatever arrives next.
    */
   private bulkMayProceed(): boolean {
+    // Whatever tripped the 429 was going too fast for the node; background work
+    // is what yields, not the person waiting on a card.
+    if (this.penalised()) return false;
     if (this.queue.some((q) => q.priority === 'interactive')) return false;
     if (Date.now() - this.lastInteractiveAt < BULK_QUIET_MS) return false;
     return this.tokens >= 1 + this.capacity * BULK_RESERVE_FRACTION;
@@ -226,6 +289,11 @@ export interface WaitStats {
   waitMs: number;
   maxQueue: number;
   bulkAhead: number;
+}
+
+/** The limiter's effective rate per second, after any 429 penalty. */
+export function effectiveRate(): number {
+  return bucket.currentRate();
 }
 
 const waitStore = new AsyncLocalStorage<WaitStats>();
