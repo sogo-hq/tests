@@ -332,6 +332,58 @@ ones. The log says which state it ended in:
 [boot] recovery finished — 36,268 indexed, 0 decoded; index-derived negatives still withheld until decode catches up
 ```
 
+## Keeping the card under two seconds
+
+Holder concentration reads a token's Transfer log to rank holders. On a busy
+launch that is 9,001 logs across four million blocks, and putting it on the path
+between a request and a card took scans from **1.1s to 56s**. A tester read the
+delay as the bot being broken rather than slow, which is the correct reading: a
+card that arrives after the decision is not a slow card, it is no card.
+
+| | |
+|---|---|
+| before | 56,000ms |
+| warm — reading served from the index | **918ms** |
+| cold — no stored reading at all | **1,579ms** |
+| four consecutive scans | 1605, 1678, 1600, 1608ms |
+
+Four things get it there, and the first three each looked like the whole fix:
+
+**The reading is stored with the block it was read to**, so a refresh reads only
+what happened since. A token's first reading is 33.6s and four million blocks;
+every one after it is **616ms and 330 blocks**.
+
+**A completed trade window is not re-indexed.** The first thirty minutes of a
+four-day-old launch is immutable and already in the index, yet every scan
+re-read it — 2.6s of a five-second budget confirming what was already known. A
+token still inside its own window is re-read, because that window is still
+filling.
+
+**A first reading never happens on the scan path.** This is the subtle one: a
+deadline caps how long the *card* waits, not how long the *work* runs. The
+losing read carried on at interactive priority, and one four-million-block read
+left every scan for the next half minute sitting at eight seconds. Bounding it,
+chunking it, pacing it and making it yield between chunks all failed for the
+same reason. First readings belong to the background loop, which does them
+chunked, paced, and abandoning mid-read the moment anything interactive appears
+— partial progress is kept, because a balance map is correct as of the block it
+was read to. What runs inline is only ever a delta.
+
+**Background work defers rather than queues.** Waiting for quiet and then
+proceeding regardless simply moved the collision later, and took a concurrent
+scan to 8.5s.
+
+Every scan logs where its time went, and names the phase that ate the budget
+when it runs over:
+
+```
+[scan] source=dm token=0x2ca4… duration=2384ms outcome=ok phases[reads=756 head=95 findLaunch=1012 launchRow=100 trades=394]
+[scan] source=dm token=0x2ca4… duration=8456ms outcome=ok phases[reads=7979 …] OVER_BUDGET slowest=reads=7979ms
+```
+
+That line is why this section exists. A 56-second scan was a single number with
+nothing to blame, which is how it shipped in the first place.
+
 ## Filling the trade history
 
 Trades were only ever indexed as a side effect of somebody scanning a token, and
@@ -757,6 +809,13 @@ Tables: `launches`, `trades`, `scans`, `rechecks`, `token_peaks`, `cursors`.
 | `WINDOW_INDEX_BATCH` | `25` | launches the background window indexer reads per pass |
 | `WINDOW_INDEX_TARGET` | `40` | coverage aimed for per age bucket, above the floor rather than on it |
 | `WINDOW_SAMPLE_CEILING` | `2000` | most launches the sample will ever read, so an unfillable threshold cannot pull it through the whole index |
+| `SCAN_BUDGET_MS` | `5000` | hard ceiling on a scan; optional checks race what is left of it |
+| `CONCENTRATION_DEADLINE_MS` | `2000` | longest holder concentration may hold up a card |
+| `HOLDER_REFRESH_TTL_MS` | `1800000` | how stale a stored reading gets before a refresh is worth its cost |
+| `HOLDER_REFRESH_CHUNK` | `100000` | blocks per query when a holder reading is read in the background |
+| `HOLDER_REFRESH_PAUSE_MS` | `400` | pause between those chunks, so the read is a trickle rather than a spike |
+| `HOLDER_REFRESH_OFF` | — | set to `1` to disable background holder refreshes entirely |
+| `LATENCY_MIN_HOLDERS` | `300` | holder count `test/latency.mjs` wants before its ceiling proves anything |
 | `SCAN_CACHE_TTL_MS` | `60000` | rendered-card cache TTL |
 | `SCAN_CACHE_MAX` | `500` | cache entry cap |
 | `SCANS_PER_MINUTE` | `10` | per-user quota |
