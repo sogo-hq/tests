@@ -1,11 +1,12 @@
 import { db } from '../db.js';
-import { bulk, isRateLimit, interactivelyBusy } from '../ratelimit.js';
+import { bulk, isRateLimit, interactivelyBusy, spareCapacity } from '../ratelimit.js';
 import { client } from '../chain.js';
 import { indexOneCurve, markWindowIndexed } from './trades.js';
 import { readConcentration, recordConcentration, excessConcentration, readStoredConcentration, refreshConcentration, hasStoredBalances } from '../metrics/concentration.js';
 import { WINDOW_30_MIN_BLOCKS, BLOCKS_PER_MINUTE } from '../config.js';
 import { AGE_BUCKETS, MIN_BENCHMARK_SAMPLES } from '../metrics/benchmark.js';
 import { MIN_CONCENTRATION_SAMPLES, MIN_HOLDERS_FOR_SHARE, concentrationCoverage } from '../metrics/concentration.js';
+import { exemptedHoldTime, MIN_HOLD_SAMPLES } from '../holdtime.js';
 
 /**
  * Fill in the opening trade window of launches nobody has scanned.
@@ -127,14 +128,21 @@ function sampledSoFar(): number {
 export function selectTargets(limit = BATCH): Candidate[] {
   const out: Candidate[] = [];
 
-  const exempt = uncovered(
-    WINDOW_30_MIN_BLOCKS,
-    'snipe_exemption_count > 0',
-    [],
-    limit,
-  ).map((c) => ({ ...c, reason: 'exempt' as const }));
-  out.push(...exempt);
-  if (out.length >= limit) return out.slice(0, limit);
+  // Exempted-wallet launches, but only while the median they feed still needs
+  // them. Reading all of them was the earlier instruction and it was right when
+  // the index held 183; against 69,192 unindexed launches it is days of work
+  // for a median that is complete at thirty pairs. The floor is the target --
+  // the same n<30 that decides whether the figure is published at all.
+  if (exemptedHoldTime().pairs < holdTimeTarget()) {
+    const exempt = uncovered(
+      WINDOW_30_MIN_BLOCKS,
+      'snipe_exemption_count > 0',
+      [],
+      limit,
+    ).map((c) => ({ ...c, reason: 'exempt' as const }));
+    out.push(...exempt);
+    if (out.length >= limit) return out.slice(0, limit);
+  }
 
   // Buckets below the thirty-minute cap need only their own span read; the ones
   // above it need the full window, because that is all the buyer count uses.
@@ -235,6 +243,16 @@ function unreadHolderCandidates(): number {
   ).n;
 }
 
+/**
+ * Pairs the exempted-wallet median needs before it is worth publishing, which
+ * is also the point at which reading more launches for it stops buying
+ * anything. Headroom above the floor for the same reason the buckets have it:
+ * a population resting exactly on the threshold falls under it on any recount.
+ */
+function holdTimeTarget(): number {
+  return Math.max(MIN_HOLD_SAMPLES, Number(process.env.WINDOW_INDEX_TARGET || 40) || 40);
+}
+
 /** Observations aimed for, above check 09's floor for the same reason as above. */
 function concentrationTarget(): number {
   return Math.max(MIN_CONCENTRATION_SAMPLES, Number(process.env.WINDOW_INDEX_TARGET || 40) || 40);
@@ -251,14 +269,29 @@ export interface WindowPass {
   concentration: number;
   /** The node said no and the pass gave up rather than argue with it. */
   rateLimited: boolean;
+  /** The limiter had nothing spare, so the pass did not start. */
+  yielded: boolean;
 }
 
 /** Read one batch of opening windows. */
 export async function indexWindows(limit = BATCH): Promise<WindowPass> {
-  const targets = selectTargets(limit);
+  // Sized by what the limiter can spare, not by a fixed number. A pass of
+  // twenty-five queued twenty-five background requests whatever else was
+  // happening; measured, that took a scan's cumulative queue wait from 1.5s to
+  // 12s. Spare capacity is zero whenever a scan is in flight or was served in
+  // the last second, so a busy bot indexes nothing at all -- which is the
+  // intended behaviour, not a degradation.
+  const spare = spareCapacity();
+  if (spare <= 0) {
+    return {
+      attempted: 0, indexed: 0, trades: 0, failed: 0, exempt: 0, sample: 0,
+      concentration: 0, rateLimited: false, yielded: true,
+    };
+  }
+  const targets = selectTargets(Math.max(1, Math.min(limit, spare)));
   const pass: WindowPass = {
     attempted: targets.length, indexed: 0, trades: 0, failed: 0, exempt: 0, sample: 0,
-    concentration: 0, rateLimited: false,
+    concentration: 0, rateLimited: false, yielded: false,
   };
   if (!targets.length) return pass;
 
@@ -268,6 +301,9 @@ export async function indexWindows(limit = BATCH): Promise<WindowPass> {
     // A launch younger than the window has not finished happening yet. Reading
     // it now would record a partial window as though it were the whole one, so
     // it is left for a later pass.
+    // Re-checked per launch: a scan arriving mid-pass should stop the pass, not
+    // wait behind the twenty-four launches still queued in front of it.
+    if (spareCapacity() <= 0) { pass.yielded = true; break; }
     const windowEnd = t.block_number + WINDOW_30_MIN_BLOCKS;
     if (windowEnd > head) continue;
     try {

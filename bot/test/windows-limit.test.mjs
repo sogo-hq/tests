@@ -55,7 +55,8 @@ test('a rate limit ends the pass instead of being paid once per launch', async (
   const elapsed = Date.now() - started;
   mode = 'ok';
 
-  assert.equal(pass.attempted, 25, 'it selected a full batch');
+  // Sized by spare limiter capacity now, not by the number asked for.
+  assert.ok(pass.attempted > 0 && pass.attempted <= 25, `selected ${pass.attempted}`);
   assert.equal(pass.rateLimited, true, 'and reported why it stopped');
   assert.equal(pass.indexed, 0);
   assert.equal(pass.failed, 0, 'a limit is not counted as an unreadable launch');

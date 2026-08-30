@@ -1,6 +1,6 @@
 import type { Hex } from 'viem';
 import { client, getLogsAdaptive } from './chain.js';
-import { interactive } from './ratelimit.js';
+import { interactive, measuringWaits } from './ratelimit.js';
 import { db, normaliseKey } from './db.js';
 import { readToken, type TokenReads } from './reads.js';
 import { indexOneCurve, markWindowIndexed, coveredThrough } from './indexer/trades.js';
@@ -75,6 +75,12 @@ export interface ScanResult {
   slowestPhase: string | null;
   /** True when the scan ran past its budget; the log says which phase ate it. */
   overBudget: boolean;
+  /** Milliseconds this scan's requests spent queued for a rate-limiter token. */
+  waitMs: number;
+  /** Deepest queue any of its requests arrived into. */
+  maxQueue: number;
+  /** Most background requests queued ahead of one of its requests. */
+  bulkAhead: number;
   /** What this token was worth when it was first scanned here. Null on a first scan. */
   firstScan: FirstScan | null;
 }
@@ -162,7 +168,16 @@ async function ensureLaunchRow(
 }
 
 export async function scanToken(token: string, requestedBy?: number): Promise<ScanResult | null> {
-  return interactive(() => scanTokenInner(token, requestedBy));
+  // Wrapped so every scan carries what it spent waiting for the rate limiter,
+  // and how much of the queue it arrived behind was background work. Users
+  // reporting "slow" is not evidence of contention; this is.
+  const { value, waits } = await measuringWaits(() => interactive(() => scanTokenInner(token, requestedBy)));
+  if (value) {
+    value.waitMs = waits.waitMs;
+    value.maxQueue = waits.maxQueue;
+    value.bulkAhead = waits.bulkAhead;
+  }
+  return value;
 }
 
 async function scanTokenInner(token: string, requestedBy?: number): Promise<ScanResult | null> {
@@ -374,6 +389,9 @@ async function scanTokenInner(token: string, requestedBy?: number): Promise<Scan
         creation,
         isEarly,
         earlyThresholdSeconds: earlyThreshold,
+        waitMs: 0,
+        maxQueue: 0,
+        bulkAhead: 0,
         phases: timer.breakdown(),
         slowestPhase: timer.worst ? `${timer.worst.name}=${timer.worst.ms}ms` : null,
         overBudget: budget.blown,
@@ -449,6 +467,9 @@ async function scanTokenInner(token: string, requestedBy?: number): Promise<Scan
     creation,
     isEarly,
     earlyThresholdSeconds: earlyThreshold,
+    waitMs: 0,
+    maxQueue: 0,
+    bulkAhead: 0,
     phases: timer.breakdown(),
     slowestPhase: timer.worst ? `${timer.worst.name}=${timer.worst.ms}ms` : null,
     overBudget: budget.blown,

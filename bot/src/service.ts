@@ -113,7 +113,14 @@ function logScanLine(
   durationMs: number,
   outcome: string,
   meta?: { ageSeconds: number; early: boolean },
-  timing?: { phases: string; slowestPhase: string | null; overBudget: boolean },
+  timing?: {
+    phases: string;
+    slowestPhase: string | null;
+    overBudget: boolean;
+    waitMs?: number;
+    maxQueue?: number;
+    bulkAhead?: number;
+  },
 ): void {
   const parts = [
     `source=${req.source}`,
@@ -129,6 +136,13 @@ function logScanLine(
   // scan that took a minute used to be one number with nothing to blame.
   if (timing?.phases) {
     parts.push(`phases[${timing.phases}]`);
+    // What the scan spent waiting for a rate-limiter token, and how much of the
+    // queue it arrived behind was background work. Reported always, not only
+    // when it looks bad: "scans feel slow" needs a number to confirm or refute,
+    // and a number that appears only on bad scans cannot establish a baseline.
+    parts.push(
+      `limiter[wait=${Math.round(timing.waitMs ?? 0)}ms queue=${timing.maxQueue ?? 0} bulkAhead=${timing.bulkAhead ?? 0}]`,
+    );
     if (timing.overBudget) parts.push(`OVER_BUDGET slowest=${timing.slowestPhase ?? 'unknown'}`);
   }
   console.log(`[scan] ${parts.join(' ')}`);
@@ -144,7 +158,14 @@ function logEvent(
   outcome: string,
   scanId?: number,
   meta?: { ageSeconds: number; early: boolean },
-  timing?: { phases: string; slowestPhase: string | null; overBudget: boolean },
+  timing?: {
+    phases: string;
+    slowestPhase: string | null;
+    overBudget: boolean;
+    waitMs?: number;
+    maxQueue?: number;
+    bulkAhead?: number;
+  },
 ): void {
   logScanLine(req, cacheHit, durationMs, outcome, meta, timing);
   try {
@@ -266,8 +287,15 @@ interface RenderedScan {
   fullCard: string;
   meta: CompactMeta;
   scanId?: number;
-  /** Per-phase milliseconds, for the operator log. Absent on a not-found. */
-  timing?: { phases: string; slowestPhase: string | null; overBudget: boolean };
+  /** Per-phase milliseconds and limiter waits, for the operator log. */
+  timing?: {
+    phases: string;
+    slowestPhase: string | null;
+    overBudget: boolean;
+    waitMs?: number;
+    maxQueue?: number;
+    bulkAhead?: number;
+  };
 }
 
 /**
@@ -307,7 +335,10 @@ function render(token: string, result: Awaited<ReturnType<typeof scanToken>>, bo
     fullCard: renderCard(result),
     meta: compactMeta(result),
     scanId: result.scanId,
-    timing: { phases: result.phases, slowestPhase: result.slowestPhase, overBudget: result.overBudget },
+    timing: {
+      phases: result.phases, slowestPhase: result.slowestPhase, overBudget: result.overBudget,
+      waitMs: result.waitMs, maxQueue: result.maxQueue, bulkAhead: result.bulkAhead,
+    },
   };
 }
 

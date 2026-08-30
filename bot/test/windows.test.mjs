@@ -336,3 +336,49 @@ test('below the ceiling a starved check 09 still pulls the sample along', () => 
   assert.equal(r.picked, 25, 'there is still room, so it keeps looking for candidates');
   assert.equal(r.ceiling, false);
 });
+
+test('exempted-wallet launches stop being read once the median has its pairs', () => {
+  // Reading all of them was right when the index held 183. Against 69,192
+  // unindexed launches it is days of work for a median that is complete at
+  // thirty pairs -- and it competes with scans for the whole of it.
+  const out = inTempDb(`
+    const { db: _ } = { db };
+    for (let i = 100; i < 200; i++) launch(i, { exempt: 2, holdersRead: false });
+    const before = W.selectTargets(10).filter((p) => p.reason === 'exempt').length;
+
+    // Give the median more pairs than it needs: one exempted wallet per token
+    // with a buy and a later sell is one observation.
+    for (let i = 300; i < 350; i++) {
+      const token = A(i);
+      db.prepare(\`INSERT INTO launches (token, curve, deployer, pair_token, launch_config_id,
+          graduation_threshold, block_number, tx_hash, launched_at, snipe_exemption_count, snipe_exemptions)
+        VALUES (?,?,?,?,0,'0',1000,?,?,1,?)\`)
+        .run(token, A(99), A(98), A(0), '0xhx' + i, NOW - 86400, JSON.stringify([A(70000 + i)]));
+      const trade = (side, block, t) => db.prepare(
+        \`INSERT INTO trades (tx_hash, log_index, token, curve, side, trader, recipient,
+            quote_amount, token_amount, fee, creator_tax, block_number, block_time)
+          VALUES (?,?,?,?,?,?,?,'0','0','0','0',?,?)\`
+      ).run('0xtr' + i + side, 0, token, A(99), side, A(70000 + i), A(70000 + i), block, t);
+      trade('buy', 1001, 1000);
+      trade('sell', 1002, 1060);
+    }
+    const after = W.selectTargets(10).filter((p) => p.reason === 'exempt').length;
+    const { exemptedHoldTime } = await import('${CWD}/dist/holdtime.js');
+    console.log(JSON.stringify({ before, after, pairs: exemptedHoldTime().pairs }));
+  `);
+  const r = JSON.parse(out);
+  assert.ok(r.before > 0, 'while the median is short, exempted launches are read');
+  assert.ok(r.pairs >= 40, `the median should be satisfied, has ${r.pairs} pairs`);
+  assert.equal(r.after, 0, 'once it has enough pairs, reading more buys nothing and stops');
+});
+
+test('the sample is bounded, so an unfillable target cannot walk the whole chain', () => {
+  const out = inTempDb(`
+    // every bucket satisfied, but check 09 permanently short and nothing left
+    // to read for it -- the condition that pulls the sample onward
+    for (let i = 1; i <= 45; i++) launch(i, { coveredMinutes: 30 });
+    for (let i = 500; i < 600; i++) launch(i);
+    console.log(JSON.stringify({ picked: W.selectTargets(10).length }));
+  `, { WINDOW_SAMPLE_CEILING: '45' });
+  assert.equal(JSON.parse(out).picked, 0, 'past the ceiling the sample stops regardless of what is still short');
+});

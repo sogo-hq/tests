@@ -23,6 +23,15 @@ const RATE_PER_SEC = Number(process.env.RPC_RATE_PER_SEC || 10);
 const BURST = Number(process.env.RPC_BURST || 10);
 const MAX_429_RETRIES = 6;
 
+/** How long after interactive work background requests stay out of the way. */
+const BULK_QUIET_MS = Number(process.env.BULK_QUIET_MS || 1_000) || 1_000;
+
+/** Share of the bucket kept for whatever arrives next, never spent on background work. */
+const BULK_RESERVE_FRACTION = Math.min(
+  0.9,
+  Math.max(0, Number(process.env.BULK_RESERVE_FRACTION ?? 0.5)),
+);
+
 /**
  * How long the 429 ladder may spend waiting before it gives up.
  *
@@ -110,22 +119,56 @@ class TokenBucket {
     }, 30_000);
   }
 
+  /**
+   * May a background request take a token right now?
+   *
+   * Serving bulk work ahead of nothing is not the same as serving it for free:
+   * every token it takes is one an interactive request has to wait to be
+   * refilled. Measured, a scan's cumulative queue wait went from 1.5s idle to
+   * 12s with the indexer running, and its queue from 4 deep to 15 -- priority
+   * ordering alone could not prevent that, because ordering decides who is
+   * served next, not who already drank the bucket dry.
+   *
+   * So background work is served only out of genuine surplus: nothing
+   * interactive waiting, nothing interactive served in the last second, and a
+   * reserve of tokens left untouched for whatever arrives next.
+   */
+  private bulkMayProceed(): boolean {
+    if (this.queue.some((q) => q.priority === 'interactive')) return false;
+    if (Date.now() - this.lastInteractiveAt < BULK_QUIET_MS) return false;
+    return this.tokens >= 1 + this.capacity * BULK_RESERVE_FRACTION;
+  }
+
   private pump(): void {
     this.refill();
     while (this.queue.length && this.tokens >= 1) {
-      this.tokens -= 1;
-      // Interactive requests are served first; bulk work fills the gaps.
+      // Interactive requests are served first; bulk work fills the gaps -- and
+      // only the gaps.
       let idx = this.queue.findIndex((q) => q.priority === 'interactive');
-      if (idx === -1) idx = 0;
+      if (idx === -1) {
+        if (!this.bulkMayProceed()) break;
+        idx = 0;
+      }
+      this.tokens -= 1;
       this.queue.splice(idx, 1)[0]!.resolve();
     }
     if (this.queue.length && !this.timer) {
-      const waitMs = Math.max(10, ((1 - this.tokens) / this.rate) * 1000);
+      // Re-armed even when nothing was servable: a queue holding only bulk work
+      // during a busy spell still has to be woken once the spell passes, or it
+      // waits for the next arrival to pump it and can sit indefinitely.
+      const waitMs = Math.max(10, Math.min(BULK_QUIET_MS, ((1 - this.tokens) / this.rate) * 1000));
       this.timer = setTimeout(() => {
         this.timer = null;
         this.pump();
       }, waitMs);
     }
+  }
+
+  /** Tokens beyond the interactive reserve, for sizing a background batch. */
+  spareTokens(): number {
+    this.refill();
+    if (!this.bulkMayProceed()) return 0;
+    return Math.max(0, Math.floor(this.tokens - this.capacity * BULK_RESERVE_FRACTION));
   }
 
   pendingInteractive(): number {
@@ -138,11 +181,65 @@ class TokenBucket {
   acquire(): Promise<void> {
     const priority = priorityStore.getStore() ?? 'interactive';
     if (priority === 'interactive') this.lastInteractiveAt = Date.now();
+
+    // Measured at the moment of enqueue, because that is the number that
+    // answers "did this scan wait behind background work" -- the depth it
+    // arrived into and the time it then spent queued. Inferring it from total
+    // scan duration cannot tell contention apart from a slow node.
+    const stats = waitStore.getStore();
+    const queuedBehind = this.queue.length;
+    const enqueuedAt = Date.now();
+
     return new Promise((resolve) => {
-      this.queue.push({ resolve, priority });
+      this.queue.push({
+        priority,
+        resolve: () => {
+          if (stats) {
+            stats.requests++;
+            stats.waitMs += Date.now() - enqueuedAt;
+            stats.maxQueue = Math.max(stats.maxQueue, queuedBehind);
+            stats.bulkAhead = Math.max(
+              stats.bulkAhead,
+              // How much of that queue was background work. This is the number
+              // that confirms or refutes "scans are waiting behind the indexer".
+              queuedBehind === 0 ? 0 : this.bulkAheadAtEnqueue,
+            );
+          }
+          resolve();
+        },
+      });
+      this.bulkAheadAtEnqueue = this.queue.reduce(
+        (n, q) => n + (q.priority === 'bulk' ? 1 : 0),
+        0,
+      );
       this.pump();
     });
   }
+
+  /** Bulk items queued when the most recent acquire arrived. */
+  private bulkAheadAtEnqueue = 0;
+}
+
+/** What one scan spent waiting for the limiter. */
+export interface WaitStats {
+  requests: number;
+  waitMs: number;
+  maxQueue: number;
+  bulkAhead: number;
+}
+
+const waitStore = new AsyncLocalStorage<WaitStats>();
+
+/**
+ * Run `fn` with its limiter waits recorded.
+ *
+ * Wraps rather than replaces `interactive`, so the priority context and the
+ * measurement context are established together and a caller cannot get one
+ * without the other.
+ */
+export function measuringWaits<T>(fn: () => Promise<T>): Promise<{ value: T; waits: WaitStats }> {
+  const waits: WaitStats = { requests: 0, waitMs: 0, maxQueue: 0, bulkAhead: 0 };
+  return waitStore.run(waits, async () => ({ value: await fn(), waits }));
 }
 
 const bucket = new TokenBucket(RATE_PER_SEC, BURST);
@@ -158,6 +255,11 @@ const bucket = new TokenBucket(RATE_PER_SEC, BURST);
  */
 export function interactivePending(): number {
   return bucket.pendingInteractive();
+}
+
+/** Requests background work may issue right now without taking from scans. */
+export function spareCapacity(): number {
+  return bucket.spareTokens();
 }
 
 /**
