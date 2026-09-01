@@ -228,3 +228,38 @@ test('a node that is simply unwell surfaces its own error, not a range verdict',
     resetProviderLimits();
   }
 });
+
+test('"exceeded" in a timeout is not a range refusal', async () => {
+  // Live, from the public node's load balancer during a backend outage:
+  //   Post "http://10.31.67.191:8547/rpc": context deadline exceeded
+  // That matches a naive range test on the word "exceeded", and would have been
+  // written down as this provider's permanent ceiling -- a cramped index caused
+  // by one bad minute, persisted, and believed for a day.
+  const { getLogsAdaptive } = await import('../dist/chain.js');
+  const { learnedMaxSpan, resetProviderLimits } = await import('../dist/providerlimits.js');
+
+  for (const message of [
+    'Post "http://10.31.67.191:8547/rpc": context deadline exceeded',
+    'log query timed out',
+  ]) {
+    resetProviderLimits();
+    const saved = globalThis.fetch;
+    globalThis.fetch = async (_url, init) => {
+      const body = JSON.parse(init.body);
+      const reply = (v) => new Response(JSON.stringify({ jsonrpc: '2.0', id: body.id, ...v }),
+        { headers: { 'content-type': 'application/json' } });
+      if (body.method !== 'eth_getLogs') return reply({ result: '0x3172240' });
+      const p = body.params[0];
+      const span = Number(BigInt(p.toBlock) - BigInt(p.fromBlock)) + 1;
+      return span > 5_000 ? reply({ error: { code: -32000, message } }) : reply({ result: [] });
+    };
+    try {
+      await getLogsAdaptive({ address: ADDR, fromBlock: 1n, toBlock: 40_000n });
+      assert.equal(learnedMaxSpan(), null,
+        `"${message}" was recorded as the ceiling (${learnedMaxSpan()})`);
+    } finally {
+      globalThis.fetch = saved;
+      resetProviderLimits();
+    }
+  }
+});

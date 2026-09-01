@@ -76,12 +76,24 @@ function classifyLogsError(err: any): { narrowable: boolean; rangeRefusal: boole
   // exceeds max block range", both of Alchemy's ("up to a 10 block range",
   // "Log response size exceeded"), Goldsky's "exceeded max allowed range", and
   // Infura's "query returned more than 10000 results".
+  //
+  // The timeout test comes FIRST and vetoes the rest, because "exceeded" is a
+  // word timeouts use too. Live example, from the public node's own load
+  // balancer mid-outage:
+  //
+  //   Post "http://10.31.67.191:8547/rpc": context deadline exceeded
+  //
+  // That matched the range test on the word "exceeded" and would have been
+  // written down as this provider's permanent ceiling -- a cramped index caused
+  // by one bad minute, persisted, and re-read for a day.
+  const timeoutish = /timed out|timeout|deadline exceeded|context deadline/i.test(msg);
   const rangeRefusal =
-    /\brange\b/i.test(msg) ||
-    /\bexceed(s|ed)?\b/i.test(msg) ||
-    /more than [\d,]+ results?/i.test(msg) ||
-    /\btoo many\b/i.test(msg);
-  const narrowable = rangeRefusal || /timed out|limit|response size/i.test(msg);
+    !timeoutish &&
+    (/\brange\b/i.test(msg) ||
+      /\bexceed(s|ed)?\b/i.test(msg) ||
+      /more than [\d,]+ results?/i.test(msg) ||
+      /\btoo many\b/i.test(msg));
+  const narrowable = rangeRefusal || timeoutish || /limit|response size/i.test(msg);
   return { narrowable, rangeRefusal };
 }
 
