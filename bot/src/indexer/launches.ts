@@ -436,7 +436,7 @@ export function startIndexLoop(intervalMs = 3_000, onNewLaunches?: NewLaunchHand
             `${before.behindSeconds === null ? '' : ` — index was ${agoWords(before.behindSeconds)} behind`}`,
         );
       }
-      recordIndexAdvance();
+      recordIndexAdvance(BigInt(res.toBlock));
       // Handed to whoever is listening, without awaiting: a slow alert pass
       // must not hold up the next index tick, which is what keeps a fresh
       // launch scannable within three seconds.

@@ -272,12 +272,17 @@ assert.match(stats, /^scans served [\d,]+$/m);
 // simply not appear -- and it must never claim to be live below its floor.
 assert.match(stats, /^buyer benchmark: (live \(n=[\d,]+ per bucket\)|not enough data yet \(n=[\d,]+\))$/m);
 assert.match(stats, /^holder concentration: (live \(n=[\d,]+\)|not enough data yet \(n=[\d,]+\))$/m);
-assert.equal(stats.split('\n').length, 6, '/stats is six counter lines and nothing else');
+// The index's own health leads, above the counts, because it decides whether
+// any of them mean anything -- the index once failed for a day while /stats
+// reported its stale numbers without qualification.
+assert.match(stats, /^index (current, last advanced .+ ago|stalled .+ ago — index-derived checks are withheld|has never advanced — nothing below is current)$/m);
+assert.equal(stats.split('\n')[0].startsWith('index '), true, 'the health line comes first');
+assert.equal(stats.split('\n').length, 7, '/stats is the health line and six counters, nothing else');
 assert.ok(!/<[a-z/]/i.test(stats), '/stats is plain text');
 // The whole point of this file is that it never reads as a pitch.
 assert.ok(!/\b(strong|healthy|good|great|best|safe|clean|opportunity)\b/i.test(stats),
   `/stats must stay counters: ${stats}`);
-ok('/stats renders six public counters, numbers only');
+ok('/stats leads with index health, then six public counters, numbers only');
 
 // --- /help renders ----------------------------------------------------------
 await bot.handleUpdate(msg('private', '/help', -401));

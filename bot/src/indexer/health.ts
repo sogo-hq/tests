@@ -89,11 +89,32 @@ export function recordIndexFailure(message: string): FailureReport {
   return { consecutive: state.consecutive, fatal: false, justCrossed: false };
 }
 
-/** A pass succeeded: the run of failures, whatever it was, is over. */
-export function recordIndexAdvance(): void {
+/**
+ * The cursor name under which a completed pass is stamped.
+ *
+ * Separate from the 'launches' cursor on purpose. That one records how far the
+ * index has READ, and it only moves when there are new blocks to read -- so on
+ * a chain producing nothing it stops moving while the index is working
+ * perfectly, and using it for stall detection would report a healthy bot as
+ * broken. This one records that a pass COMPLETED, which is the actual question.
+ */
+export const HEALTH_CURSOR = 'launches_ok';
+
+/**
+ * A pass succeeded: the run of failures, whatever it was, is over.
+ *
+ * `head` is the block the pass reached, stored alongside the time so the two
+ * facts -- when it last worked, and where it had got to -- stay together.
+ */
+export function recordIndexAdvance(head?: bigint): void {
   state.consecutive = 0;
   state.message = null;
   state.announced = false;
+  db.prepare(
+    `INSERT INTO cursors (name, block_number, updated_at) VALUES (?, ?, ?)
+     ON CONFLICT(name) DO UPDATE SET block_number = excluded.block_number,
+                                     updated_at = excluded.updated_at`,
+  ).run(HEALTH_CURSOR, Number(head ?? 0n), Math.floor(Date.now() / 1000));
 }
 
 export interface IndexHealth {
@@ -110,19 +131,21 @@ export interface IndexHealth {
 /**
  * The index's health, from the cursor rather than from memory.
  *
- * The cursor's timestamp is written only after a pass has actually read logs
- * and stored what it found, which makes it the honest record of when the index
- * last advanced -- and it survives a restart, so a bot that has been failing
- * since before it was restarted still reports the truth.
+ * Written after every successful pass, so it survives a restart -- a bot that
+ * has been failing since before it was restarted still reports the truth.
  *
- * Deliberately NOT derived from the newest launch's timestamp: on a quiet
- * chain that is old while the index is perfectly current, and during an outage
- * it is old for the wrong reason. It cannot tell those apart; the cursor can.
+ * Deliberately NOT the newest launch's timestamp: on a quiet chain that is old
+ * while the index is perfectly current, and during an outage it is old for the
+ * wrong reason, and it cannot tell those apart.
+ *
+ * Deliberately NOT the 'launches' read cursor either, for a smaller version of
+ * the same mistake: that one only moves when there are new blocks, so a chain
+ * producing none would show as a stalled index rather than an idle chain.
  */
 export function indexHealth(now = Math.floor(Date.now() / 1000)): IndexHealth {
   const row = db
-    .prepare("SELECT updated_at FROM cursors WHERE name = 'launches'")
-    .get() as { updated_at: number } | undefined;
+    .prepare('SELECT updated_at FROM cursors WHERE name = ?')
+    .get(HEALTH_CURSOR) as { updated_at: number } | undefined;
 
   const lastAdvanceAt = row?.updated_at ?? null;
   const behindSeconds = lastAdvanceAt === null ? null : Math.max(0, now - lastAdvanceAt);

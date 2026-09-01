@@ -72,6 +72,33 @@ test('a success ends the run, so recovery is visible', async () => {
   resetIndexHealth();
 });
 
+test('an idle chain is not a stalled index', async () => {
+  // The read cursor only moves when there are new blocks, so on a chain
+  // producing none it stops -- while the index is working perfectly. Health has
+  // to track that a pass COMPLETED, not that blocks moved, or a quiet chain
+  // reads as a broken bot and negatives are withheld for the wrong reason.
+  const { recordIndexAdvance, indexHealth, resetIndexHealth, HEALTH_CURSOR } =
+    await import('../dist/indexer/health.js');
+  const { db } = await import('../dist/db.js');
+  resetIndexHealth();
+
+  const now = Math.floor(Date.now() / 1000);
+  // The read cursor is an hour stale: no new blocks in that time.
+  db.prepare("INSERT INTO cursors (name, block_number, updated_at) VALUES ('launches', 500, ?) " +
+             'ON CONFLICT(name) DO UPDATE SET updated_at = excluded.updated_at').run(now - 3600);
+  // But a pass just completed.
+  recordIndexAdvance(500n);
+
+  const h = indexHealth();
+  assert.equal(h.stalled, false, 'a completed pass over an idle chain is a healthy index');
+  assert.ok(h.behindSeconds !== null && h.behindSeconds < 5, `behind by ${h.behindSeconds}s`);
+  assert.equal(
+    (db.prepare('SELECT block_number AS b FROM cursors WHERE name = ?').get(HEALTH_CURSOR)).b, 500,
+    'the head reached is stored alongside the time',
+  );
+  resetIndexHealth();
+});
+
 // ----------------------------------------------- the user-visible obligation
 /**
  * The required test: with the RPC erroring on every call, /stats reports the
@@ -100,9 +127,13 @@ for (let i = 0; i < 1500; i++) {
     1_000_000 + i, '0x' + i.toString(16).padStart(64, '0'), now - 3600, 'n' + i, 's' + i,
     'n' + i, 's' + i);
 }
-db.prepare("INSERT INTO cursors (name, block_number, updated_at) VALUES ('launches', 1, ?) " +
-           "ON CONFLICT(name) DO UPDATE SET updated_at = excluded.updated_at")
-  .run(now - 26 * 3600);
+// The health cursor: a pass last COMPLETED 26 hours ago. The read cursor is set
+// alongside it so the fixture matches a real bot that simply stopped working.
+for (const name of ['launches', 'launches_ok']) {
+  db.prepare("INSERT INTO cursors (name, block_number, updated_at) VALUES (?, 1, ?) " +
+             "ON CONFLICT(name) DO UPDATE SET updated_at = excluded.updated_at")
+    .run(name, now - 26 * 3600);
+}
 
 // Drive the real poll loop against a dead endpoint so the failures are real.
 const { startIndexLoop } = await import('${CWD}/dist/indexer/launches.js');

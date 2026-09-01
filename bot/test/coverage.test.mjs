@@ -87,10 +87,8 @@ test('a populated index does assert its negatives', function (t) {
     // behaviour is asserted on its own in index-stall.test.mjs.
     withDb(db, `
       const { db } = await import('${process.cwd()}/dist/db.js');
-      db.prepare("UPDATE cursors SET updated_at = ? WHERE name = 'launches'")
-        .run(Math.floor(Date.now() / 1000));
-      db.prepare("INSERT OR IGNORE INTO cursors (name, block_number, updated_at) VALUES ('launches', 1, ?)")
-        .run(Math.floor(Date.now() / 1000));
+      const { recordIndexAdvance } = await import('${process.cwd()}/dist/indexer/health.js');
+      recordIndexAdvance(1n);
     `);
     const flags = JSON.parse(withDb(db, FLAGS).trim().split('\n').pop());
     assert.equal(flags.find((f) => f.key === 'collision').state, 'clean',
@@ -128,9 +126,8 @@ test('recovery in progress withholds negatives even once rows exist', () => {
       const { db } = await import('${process.cwd()}/dist/db.js');
       // This test is about the recovery flag, so the index is marked current to
       // hold the other reason for withholding constant.
-      const now = Math.floor(Date.now() / 1000);
-      db.prepare("INSERT INTO cursors (name, block_number, updated_at) VALUES ('launches', 1, ?) " +
-                 "ON CONFLICT(name) DO UPDATE SET updated_at = excluded.updated_at").run(now);
+      const { recordIndexAdvance } = await import('${process.cwd()}/dist/indexer/health.js');
+      recordIndexAdvance(1n);
       const before = indexCoverage().trustNegatives;
       markRecovering(true);
       const during = indexCoverage().trustNegatives;
