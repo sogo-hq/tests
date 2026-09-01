@@ -1,11 +1,39 @@
 /**
  * Network + protocol constants for pons v2 on Robinhood Chain.
  *
- * Only these two hosts are ever contacted. Endpoints are never resolved from
- * search results or third-party registries -- lookalike RPCs and fake explorers
- * exist for this chain.
+ * Endpoints are never resolved from search results or third-party registries --
+ * lookalike RPCs and fake explorers exist for this chain. The default is the
+ * public node and is the only address compiled in.
+ *
+ * RPC_URL may be overridden by the operator through the environment, because
+ * the public node is rate limited and a paid provider is the fix for that. That
+ * is not the same as discovering an endpoint: it is a deliberate act by whoever
+ * runs the bot, on a value they typed. Anything set this way must be a URL, and
+ * must not be silently ignored if it is malformed -- a typo that quietly falls
+ * back to the public node would present rate-limited scans as the paid node's
+ * behaviour.
  */
-export const RPC_URL = 'https://rpc.mainnet.chain.robinhood.com';
+function configuredRpcUrl(): string {
+  const raw = (process.env.RPC_URL ?? '').trim();
+  if (!raw) return 'https://rpc.mainnet.chain.robinhood.com';
+  let parsed: URL;
+  try {
+    parsed = new URL(raw);
+  } catch (err) {
+    throw new Error(
+      `RPC_URL is not a valid URL: ${JSON.stringify(raw.slice(0, 60))} ` +
+        `(${String((err as Error)?.message ?? err).slice(0, 80)})`,
+    );
+  }
+  if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
+    throw new Error(`RPC_URL must be http(s), got ${parsed.protocol}`);
+  }
+  // A trailing slash makes the startsWith() guard in the rate limiter miss the
+  // very requests it exists to pace, so the shape is normalised once, here.
+  return raw.replace(/\/+$/, '');
+}
+
+export const RPC_URL = configuredRpcUrl();
 export const EXPLORER_URL = 'https://robinhoodchain.blockscout.com';
 
 export const CHAIN_ID = 4663;
