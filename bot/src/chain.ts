@@ -84,7 +84,18 @@ export async function getLogsAdaptive<T extends Record<string, unknown>>(
     // product rather than only the background one.
     if (isRateLimit(err)) throw err;
     const msg = String(err?.details ?? err?.message ?? '');
-    const retryable = /timed out|too many|limit|range|exceed/i.test(msg);
+    // Providers describe "your range is too wide" in their own words, and this
+    // decides whether the answer is to narrow it or to give up. Checked against
+    // the wordings actually in use: the public node's "query exceeds max block
+    // range" and "log query timed out" matched, and so did both of Alchemy's,
+    // but Infura's "query returned more than 10000 results" and the
+    // response-size family did not -- those threw where narrowing would have
+    // worked. A substring test is a poor way to ask this question; until
+    // providers agree on a code for it, the honest fix is to know the phrasings.
+    const retryable =
+      /timed out|too many|limit|range|exceed/i.test(msg) ||
+      /more than [\d,]+ results?/i.test(msg) ||
+      /response size/i.test(msg);
     const span = toBlock - fromBlock;
     if (!retryable || span <= minSpan) throw err;
     const mid = fromBlock + span / 2n;

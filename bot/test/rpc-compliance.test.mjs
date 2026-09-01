@@ -142,3 +142,73 @@ test('a malformed RPC_URL is refused rather than silently ignored', async () => 
   assert.match(run('ftp://example.com'), /RPC_URL must be http/);
   assert.equal(run('https://example.com/v2/key'), 'loaded', 'a valid override must be accepted');
 });
+
+/**
+ * "Your range is too wide" has no agreed wording, and this decides whether we
+ * narrow it or give up.
+ *
+ * Checked against the phrasings actually in use. The public node's "query
+ * exceeds max block range" and "log query timed out" matched, and so did both
+ * of Alchemy's -- but Infura's "query returned more than 10000 results" and the
+ * response-size family did not, and threw where narrowing would have worked.
+ * On a paid provider with a tighter range cap than the public node's, that is
+ * every historical read failing outright.
+ *
+ * The other direction matters as much: a reverted call is not a range problem,
+ * and splitting it doubles the requests to arrive at the same failure. That is
+ * the shape of the bug where one refusal became 198 requests.
+ */
+test('a too-wide range is narrowed whatever the provider calls it', async () => {
+  const { getLogsAdaptive } = await import('../dist/chain.js');
+  const saved = globalThis.fetch;
+
+  const runWith = async (message) => {
+    let calls = 0;
+    globalThis.fetch = async (_url, init) => {
+      const body = JSON.parse(init.body);
+      calls++;
+      const span = Number(BigInt(body.params[0].toBlock)) - Number(BigInt(body.params[0].fromBlock));
+      // Narrow enough, and it succeeds -- so splitting is what makes it work.
+      if (span > 5_000) {
+        return new Response(
+          JSON.stringify({ jsonrpc: '2.0', id: body.id, error: { code: -32000, message } }),
+          { headers: { 'content-type': 'application/json' } },
+        );
+      }
+      return new Response(JSON.stringify({ jsonrpc: '2.0', id: body.id, result: [] }),
+        { headers: { 'content-type': 'application/json' } });
+    };
+    try {
+      const out = await getLogsAdaptive({
+        address: `0x${'11'.repeat(20)}`, fromBlock: 1n, toBlock: 40_000n,
+      });
+      return { ok: true, calls, out };
+    } catch (err) {
+      return { ok: false, calls, message: String(err?.details ?? err?.message ?? err) };
+    }
+  };
+
+  try {
+    for (const message of [
+      'query exceeds max block range',                              // the public node
+      'log query timed out',                                        // the public node
+      'You can make eth_getLogs requests with up to a 500 block range', // Alchemy
+      'Log response size exceeded. this block range should work: [0x1, 0x2]', // Alchemy
+      'query returned more than 10000 results',                     // Infura
+      'response size should not greater than 150000000 bytes',      // generic
+    ]) {
+      const r = await runWith(message);
+      assert.ok(r.ok, `"${message}" was not narrowed — it threw: ${r.message}`);
+      assert.ok(r.calls > 8, `"${message}" did not split (only ${r.calls} requests)`);
+    }
+
+    // And the other direction: not everything is a range problem.
+    for (const message of ['execution reverted', 'nonce too low']) {
+      const r = await runWith(message);
+      assert.equal(r.ok, false, `"${message}" was narrowed; it is not a range problem`);
+      assert.ok(r.calls <= 2, `"${message}" was split into ${r.calls} requests to reach the same failure`);
+    }
+  } finally {
+    globalThis.fetch = saved;
+  }
+});
