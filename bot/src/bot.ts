@@ -4,6 +4,7 @@ import { performScan, scanImage, normaliseToken, looksLikeTxHash, looksLikeSolan
 import { scanCache, startCacheReporter } from './cache.js';
 import { userQuota, floodQuota, scanSemaphore, startQuotaSweeper } from './quota.js';
 import { benchmarkCoverageLine } from './metrics/benchmark.js';
+import { indexHealth, agoWords, type IndexHealth } from './indexer/health.js';
 import {
   addWatch, listWatches, removeWatch, countWatches, rememberDm, dmChatFor, MAX_WATCHES,
   addFilterWatch, listFilterWatches, removeFilterWatch,
@@ -837,6 +838,20 @@ export async function deliverAlerts(tokens: string[]): Promise<number> {
   return sent;
 }
 
+/**
+ * Whether the index is current, stated plainly.
+ *
+ * "index stalled 26h ago" is the whole point: a number that has not moved in a
+ * day should not sit silently among numbers that have.
+ */
+export function indexStatusLine(h: IndexHealth): string {
+  if (h.behindSeconds === null) return 'index has never advanced — nothing below is current';
+  if (h.stalled) {
+    return `index stalled ${agoWords(h.behindSeconds)} ago — index-derived checks are withheld`;
+  }
+  return `index current, last advanced ${agoWords(h.behindSeconds)} ago`;
+}
+
 export function statsText(): string {
   const q = (sql: string) => (db.prepare(sql).get() as { n: number }).n;
 
@@ -848,8 +863,13 @@ export function statsText(): string {
   const scans = q('SELECT COUNT(*) n FROM scan_events');
 
   const cov = indexCoverage();
+  const health = indexHealth();
   return [
     ...(cov.recovering ? ['index rebuilding after restart — counts below are incomplete'] : []),
+    // First line, above the counts, because it is the one that decides whether
+    // any of them mean anything. The index failed for a day without this, and
+    // every count below stayed confidently wrong the whole time.
+    indexStatusLine(health),
     `launches indexed ${launches.toLocaleString()}`,
     `launches with pre-exempted wallets ${withExempt.toLocaleString()} (${pct}% of ${decoded.toLocaleString()} decoded)`,
     holdTimeLine(hold),

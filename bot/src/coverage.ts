@@ -1,4 +1,5 @@
 import { db } from './db.js';
+import { indexHealth, agoWords } from './indexer/health.js';
 
 /**
  * How much of the index actually exists, and therefore which negatives the card
@@ -39,6 +40,10 @@ export interface IndexCoverage {
    * Whether a "nothing found" answer from each index-backed check is
    * trustworthy. Never true while recovery is running.
    */
+  /** True when the index is not advancing. Negatives are withheld while it is. */
+  stalled: boolean;
+  /** Seconds since the launch cursor last moved, null if it never has. */
+  behindSeconds: number | null;
   trustNegatives: { collision: boolean; deployerHistory: boolean; taxBaseline: boolean };
 }
 
@@ -50,16 +55,23 @@ export function indexCoverage(): IndexCoverage {
   const newest = (db.prepare('SELECT MAX(launched_at) AS t FROM launches').get() as { t: number | null }).t;
   const stalenessSeconds = newest ? Math.max(0, Math.floor(Date.now() / 1000) - newest) : null;
 
-  const enough = !recovering && indexed >= MIN_ROWS_FOR_NEGATIVE;
+  // A stalled index is as unable to support a negative as an empty one, and it
+  // is more dangerous: it holds plenty of rows, so every count comes back
+  // confidently wrong. The bot answered scans from a day-stale index for a day
+  // and sounded exactly as certain as it does when current.
+  const health = indexHealth();
+  const enough = !recovering && !health.stalled && indexed >= MIN_ROWS_FOR_NEGATIVE;
   return {
     indexed,
     decoded,
     stalenessSeconds,
     recovering,
+    stalled: health.stalled,
+    behindSeconds: health.behindSeconds,
     trustNegatives: {
       // Collision matches on name_key/symbol_key, which only decoded rows carry,
       // so this one needs decoded rows rather than merely indexed ones.
-      collision: !recovering && decoded >= MIN_ROWS_FOR_NEGATIVE,
+      collision: !recovering && !health.stalled && decoded >= MIN_ROWS_FOR_NEGATIVE,
       deployerHistory: enough,
       taxBaseline: enough,
     },
@@ -69,5 +81,10 @@ export function indexCoverage(): IndexCoverage {
 /** One line explaining why a negative is being withheld. */
 export function coverageReason(c: IndexCoverage): string {
   if (c.recovering) return 'index still rebuilding after a restart';
+  if (c.stalled) {
+    return c.behindSeconds === null
+      ? 'the index has never advanced, so this cannot be ruled out'
+      : `index stalled ${agoWords(c.behindSeconds)} ago, so this cannot be ruled out`;
+  }
   return `index holds ${c.indexed.toLocaleString()} launches, too few to rule this out`;
 }

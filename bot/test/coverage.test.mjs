@@ -54,7 +54,10 @@ test('with an empty database the collision flag is undetermined, not "no match"'
   assert.doesNotMatch(collision.detail, /no match against indexed pons tokens/,
     'the false all-clear this whole project exists to avoid');
   assert.doesNotMatch(collision.plain, /no other token uses this ticker/);
-  assert.match(collision.detail, /too few|rebuilding/);
+  // "never advanced" is the empty index's more specific reason: it has neither
+  // enough rows NOR a cursor, and the stall is the one that would still hold if
+  // the rows arrived from somewhere other than the indexer.
+  assert.match(collision.detail, /too few|rebuilding|never advanced|stalled/);
 });
 
 test('every index-derived negative is withheld on an empty database', () => {
@@ -78,6 +81,17 @@ test('a populated index does assert its negatives', function (t) {
   try {
     const db = join(dir, 'full.db');
     copyFileSync('pons.db', db);
+    // A copied index is by definition not advancing, and a stalled index now
+    // withholds its negatives -- correctly. This test is about coverage DEPTH,
+    // so the cursor is marked current to isolate that from freshness; the stall
+    // behaviour is asserted on its own in index-stall.test.mjs.
+    withDb(db, `
+      const { db } = await import('${process.cwd()}/dist/db.js');
+      db.prepare("UPDATE cursors SET updated_at = ? WHERE name = 'launches'")
+        .run(Math.floor(Date.now() / 1000));
+      db.prepare("INSERT OR IGNORE INTO cursors (name, block_number, updated_at) VALUES ('launches', 1, ?)")
+        .run(Math.floor(Date.now() / 1000));
+    `);
     const flags = JSON.parse(withDb(db, FLAGS).trim().split('\n').pop());
     assert.equal(flags.find((f) => f.key === 'collision').state, 'clean',
       'with a real index behind it, "no collision" is a statement worth making');
@@ -111,6 +125,12 @@ test('recovery in progress withholds negatives even once rows exist', () => {
     if (existsSync('pons.db')) copyFileSync('pons.db', db);
     const out = withDb(db, `
       const { markRecovering, indexCoverage } = await import('${process.cwd()}/dist/coverage.js');
+      const { db } = await import('${process.cwd()}/dist/db.js');
+      // This test is about the recovery flag, so the index is marked current to
+      // hold the other reason for withholding constant.
+      const now = Math.floor(Date.now() / 1000);
+      db.prepare("INSERT INTO cursors (name, block_number, updated_at) VALUES ('launches', 1, ?) " +
+                 "ON CONFLICT(name) DO UPDATE SET updated_at = excluded.updated_at").run(now);
       const before = indexCoverage().trustNegatives;
       markRecovering(true);
       const during = indexCoverage().trustNegatives;

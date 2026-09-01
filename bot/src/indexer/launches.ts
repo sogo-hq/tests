@@ -1,6 +1,7 @@
 import type { Hex } from 'viem';
 import { client, pooled, getLogsAdaptive } from '../chain.js';
 import { db, getCursor, setCursor, normaliseKey } from '../db.js';
+import { recordIndexAdvance, recordIndexFailure, indexHealth, agoWords } from './health.js';
 import { fetchLaunchCalldata } from './exemptions.js';
 import { BlockTimeEstimator } from '../blocktime.js';
 import { bulk } from '../ratelimit.js';
@@ -405,7 +406,6 @@ export type NewLaunchHandler = (tokens: string[]) => void | Promise<void>;
 
 export function startIndexLoop(intervalMs = 3_000, onNewLaunches?: NewLaunchHandler): NodeJS.Timeout {
   let running = false;
-  let consecutiveErrors = 0;
   let tick_n = 0;
 
   /**
@@ -426,7 +426,17 @@ export function startIndexLoop(intervalMs = 3_000, onNewLaunches?: NewLaunchHand
     try {
       const res = await bulk(() => indexNew({ lifecycle: tick_n % LIFECYCLE_EVERY === 0 }));
       tick_n++;
-      consecutiveErrors = 0;
+      // A pass that had been declared broken and then succeeded is worth a line:
+      // otherwise the fatal notice is the last thing the log ever says about the
+      // index, and a reader has no way to learn it came back.
+      const before = indexHealth();
+      if (before.fatal) {
+        console.error(
+          `[index] RECOVERED after ${before.consecutiveFailures}+ consecutive failures` +
+            `${before.behindSeconds === null ? '' : ` — index was ${agoWords(before.behindSeconds)} behind`}`,
+        );
+      }
+      recordIndexAdvance();
       // Handed to whoever is listening, without awaiting: a slow alert pass
       // must not hold up the next index tick, which is what keeps a fresh
       // launch scannable within three seconds.
@@ -439,11 +449,24 @@ export function startIndexLoop(intervalMs = 3_000, onNewLaunches?: NewLaunchHand
         console.log(`[index] +${res.launches} launch${res.launches === 1 ? '' : 'es'} (through block ${res.toBlock})`);
       }
     } catch (err) {
-      // Logged, but throttled: if the RPC is down this fires every few seconds,
-      // and a screen of identical stack traces hides everything else.
-      consecutiveErrors++;
-      if (consecutiveErrors === 1 || consecutiveErrors % 20 === 0) {
-        console.error(`[index] poll failed (${consecutiveErrors} in a row):`, String((err as Error)?.message ?? err).slice(0, 200));
+      // Throttling was not enough. This logged every twentieth attempt forever,
+      // so attempt 32,000 read like attempt 1 with a bigger number -- a broken
+      // component wearing the clothes of a retrying one. Now the same error
+      // twenty times says so once, distinctly, and then goes quiet: past that
+      // point the count is not information, and the stall is reported where it
+      // actually matters, on /stats and in what the card refuses to claim.
+      const message = String((err as Error)?.message ?? err);
+      const report = recordIndexFailure(message);
+      if (report.justCrossed) {
+        const h = indexHealth();
+        console.error(
+          `[index] FATAL: ${report.consecutive} consecutive failures with the same error; ` +
+            `the index is not advancing and negatives derived from it are now withheld` +
+            `${h.behindSeconds === null ? '' : ` (last advanced ${agoWords(h.behindSeconds)} ago)`}\n` +
+            `        ${message.slice(0, 300)}`,
+        );
+      } else if (!report.fatal) {
+        console.error(`[index] poll failed (${report.consecutive} in a row):`, message.slice(0, 200));
       }
     } finally {
       running = false;
