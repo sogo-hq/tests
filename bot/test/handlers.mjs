@@ -277,7 +277,8 @@ assert.match(stats, /^holder concentration: (live \(n=[\d,]+\)|not enough data y
 // reported its stale numbers without qualification.
 assert.match(stats, /^index (current, last advanced .+ ago|stalled .+ ago — index-derived checks are withheld|has never advanced — nothing below is current)$/m);
 assert.equal(stats.split('\n')[0].startsWith('index '), true, 'the health line comes first');
-assert.equal(stats.split('\n').length, 7, '/stats is the health line and six counters, nothing else');
+assert.match(stats, /^provider (accepts [\d,]+ block ranges|log range not yet measured)$/m);
+assert.equal(stats.split('\n').length, 8, '/stats is two health lines and six counters, nothing else');
 assert.ok(!/<[a-z/]/i.test(stats), '/stats is plain text');
 // The whole point of this file is that it never reads as a pitch.
 assert.ok(!/\b(strong|healthy|good|great|best|safe|clean|opportunity)\b/i.test(stats),

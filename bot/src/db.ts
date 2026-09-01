@@ -245,6 +245,16 @@ CREATE INDEX IF NOT EXISTS idx_events_user   ON scan_events(user_id, ts);
 CREATE INDEX IF NOT EXISTS idx_events_token  ON scan_events(token);
 
 -- Indexer cursors, so restarts resume rather than re-scan.
+-- The widest eth_getLogs range each endpoint will actually serve, discovered at
+-- runtime. Keyed by endpoint so switching providers re-discovers instead of
+-- inheriting a ceiling that was true of somewhere else. No API key is stored:
+-- only scheme and host, because this file gets copied around.
+CREATE TABLE IF NOT EXISTS provider_limits (
+  endpoint      TEXT PRIMARY KEY,
+  max_span      INTEGER NOT NULL,
+  discovered_at INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS cursors (
   name         TEXT PRIMARY KEY,
   block_number INTEGER NOT NULL,

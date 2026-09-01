@@ -97,6 +97,17 @@ export function interactive<T>(fn: () => Promise<T>): Promise<T> {
 }
 
 /** Run `fn` with its RPC requests yielding to interactive work. */
+/**
+ * The priority the caller is running under.
+ *
+ * Read by getLogsAdaptive to decide how far it may narrow: a background walk
+ * may spend thousands of requests on a cramped provider, but a scan somebody is
+ * waiting on must not.
+ */
+export function currentPriority(): Priority {
+  return priorityStore.getStore() ?? 'interactive';
+}
+
 export function bulk<T>(fn: () => Promise<T>): Promise<T> {
   return priorityStore.run('bulk', fn);
 }

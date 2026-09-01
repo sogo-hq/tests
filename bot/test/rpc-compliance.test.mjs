@@ -162,7 +162,12 @@ test('a too-wide range is narrowed whatever the provider calls it', async () => 
   const { getLogsAdaptive } = await import('../dist/chain.js');
   const saved = globalThis.fetch;
 
+  const { resetProviderLimits } = await import('../dist/providerlimits.js');
   const runWith = async (message) => {
+    // Each case starts from an unmeasured provider. Without this they leak into
+    // one another: a case that teaches the ceiling means the next never sends a
+    // too-wide request, so "execution reverted" is never even provoked.
+    resetProviderLimits();
     let calls = 0;
     globalThis.fetch = async (_url, init) => {
       const body = JSON.parse(init.body);
@@ -199,7 +204,12 @@ test('a too-wide range is narrowed whatever the provider calls it', async () => 
     ]) {
       const r = await runWith(message);
       assert.ok(r.ok, `"${message}" was not narrowed — it threw: ${r.message}`);
-      assert.ok(r.calls > 8, `"${message}" did not split (only ${r.calls} requests)`);
+      // The property is that it narrowed until the provider served it, NOT that
+      // it made a particular number of requests. This asserted `> 8` when
+      // narrowing meant halving in parallel and revisiting every leaf; the
+      // discovery-then-walk version reaches the same answer in fewer, and a
+      // test that pins the old algorithm's cost fails on the improvement.
+      assert.ok(r.calls > 1, `"${message}" never narrowed (1 request)`);
     }
 
     // And the other direction: not everything is a range problem.

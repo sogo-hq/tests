@@ -150,7 +150,10 @@ test('a range that is genuinely too wide is still split', async () => {
     const { getLogsAdaptive } = await import('../dist/chain.js');
     const out = await getLogsAdaptive({ address: '0x' + '11'.repeat(20), fromBlock: 1n, toBlock: 40_000n });
     assert.deepEqual(out, [], 'it completed by narrowing rather than throwing');
-    assert.ok(calls > 8, `only ${calls} requests — it did not split`);
+    // More than one request is the property: it narrowed until the provider
+    // served it. The exact count belonged to the old parallel-halving version,
+    // which revisited every leaf; discovery-then-walk gets there in fewer.
+    assert.ok(calls > 1, `only ${calls} request — it did not narrow at all`);
   } finally {
     globalThis.fetch = saved;
   }

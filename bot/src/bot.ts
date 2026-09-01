@@ -5,6 +5,7 @@ import { scanCache, startCacheReporter } from './cache.js';
 import { userQuota, floodQuota, scanSemaphore, startQuotaSweeper } from './quota.js';
 import { benchmarkCoverageLine } from './metrics/benchmark.js';
 import { indexHealth, agoWords, type IndexHealth } from './indexer/health.js';
+import { providerLimitLine } from './providerlimits.js';
 import {
   addWatch, listWatches, removeWatch, countWatches, rememberDm, dmChatFor, MAX_WATCHES,
   addFilterWatch, listFilterWatches, removeFilterWatch,
@@ -870,6 +871,10 @@ export function statsText(): string {
     // any of them mean anything. The index failed for a day without this, and
     // every count below stayed confidently wrong the whole time.
     indexStatusLine(health),
+    // What the provider will actually serve. An operator switching to a paid
+    // node needs to see that the bot noticed, and a cramped ceiling explains a
+    // slow index without anyone having to read the log.
+    providerLimitLine(),
     `launches indexed ${launches.toLocaleString()}`,
     `launches with pre-exempted wallets ${withExempt.toLocaleString()} (${pct}% of ${decoded.toLocaleString()} decoded)`,
     holdTimeLine(hold),
