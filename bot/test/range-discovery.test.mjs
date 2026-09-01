@@ -184,3 +184,47 @@ test('a fresh database against a capped provider makes progress instead of loopi
     assert.ok(second <= 5, `the second pass still cost ${second} requests`);
   } finally { p.restore(); resetProviderLimits(); }
 });
+
+test('a node that is simply unwell surfaces its own error, not a range verdict', async () => {
+  // Caught on the live node during a backend outage: "Post ...:8547/rpc: EOF"
+  // on a 125-block range. The descent treated it as a width problem, narrowed
+  // all the way to one block, and then threw an invented error saying the
+  // provider had refused a single block -- which is both untrue and hides what
+  // actually went wrong. A failure that is not about width must not be chased
+  // to the bottom, and must arrive at the caller as itself.
+  const { getLogsAdaptive } = await import('../dist/chain.js');
+  const { resetProviderLimits, learnedMaxSpan } = await import('../dist/providerlimits.js');
+  resetProviderLimits();
+
+  let calls = 0;
+  const saved = globalThis.fetch;
+  globalThis.fetch = async (_url, init) => {
+    const body = JSON.parse(init.body);
+    if (body.method !== 'eth_getLogs') {
+      return new Response(JSON.stringify({ jsonrpc: '2.0', id: body.id, result: '0x3172240' }),
+        { headers: { 'content-type': 'application/json' } });
+    }
+    calls++;
+    // Fails at every width, the way a dead backend does.
+    return new Response(JSON.stringify({
+      jsonrpc: '2.0', id: body.id,
+      error: { code: -32000, message: 'log query timed out' },
+    }), { headers: { 'content-type': 'application/json' } });
+  };
+
+  try {
+    await assert.rejects(
+      () => getLogsAdaptive({ address: ADDR, fromBlock: 1n, toBlock: 40_000n }),
+      (err) => {
+        assert.doesNotMatch(String(err?.message ?? ''), /refused a single-block/,
+          'it invented a verdict about the provider instead of reporting the failure');
+        return true;
+      },
+    );
+    assert.ok(calls < 12, `it made ${calls} attempts chasing a failure that was never about width`);
+    assert.equal(learnedMaxSpan(), null, 'and it learned nothing from a sick node');
+  } finally {
+    globalThis.fetch = saved;
+    resetProviderLimits();
+  }
+});

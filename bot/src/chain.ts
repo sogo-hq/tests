@@ -145,6 +145,20 @@ async function discoverMaxSpan<T extends Record<string, unknown>>(
 ): Promise<bigint> {
   const { fromBlock, toBlock } = params;
   let span = refusedAt / 2n;
+  let last: any;
+  /**
+   * How far a NON-range failure is worth chasing.
+   *
+   * A range refusal is a hard fact about width and worth following to the
+   * bottom. A timeout is not: if a range an eighth as wide still times out, the
+   * width was never the problem, and the node is simply unwell. Measured on the
+   * live node during a backend outage -- "Post ...:8547/rpc: EOF" on a
+   * 125-block range -- this descended all the way to one block and then threw
+   * an invented error saying the provider had refused a single block, which is
+   * both wrong and hides the actual failure.
+   */
+  let softNarrowings = learn ? Number.MAX_SAFE_INTEGER : 3;
+
   while (span >= 1n) {
     const end = fromBlock + span - 1n > toBlock ? toBlock : fromBlock + span - 1n;
     try {
@@ -152,15 +166,19 @@ async function discoverMaxSpan<T extends Record<string, unknown>>(
       if (learn) recordServedSpan(span);
       return span;
     } catch (err: any) {
+      last = err;
       if (isRateLimit(err)) throw err;
       const { narrowable, rangeRefusal } = classifyLogsError(err);
       if (!narrowable) throw err;
       if (rangeRefusal) recordRefusedSpan(span);
+      else if (softNarrowings-- <= 0) throw err;
       if (span === 1n) throw err;
       span = span / 2n;
     }
   }
-  throw new Error('provider refused a single-block getLogs range');
+  // The caller's own error, never a synthetic one: whatever actually went wrong
+  // is more useful than this function's opinion of it.
+  throw last;
 }
 
 /**
