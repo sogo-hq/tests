@@ -28,7 +28,7 @@ test('concerns-raised card matches the specified shape exactly', () => {
     '2 buyers',
     'both already sold · 0 of 4.2 ETH to graduation',
     '',
-    '@vitalscheck_bot · not financial advice',
+    '@vitalscheck_bot · @vitalsofficial · not financial advice',
   ]);
 });
 
@@ -48,7 +48,7 @@ test('nothing-raised card matches the specified shape exactly', () => {
     '3 of 38 sold · 0 of 4.2 ETH to graduation',
     'buyers 12 → 38 in 20 min',
     '',
-    '@vitalscheck_bot · not financial advice',
+    '@vitalscheck_bot · @vitalsofficial · not financial advice',
   ]);
 });
 
@@ -161,10 +161,10 @@ test('every shape stays within the card ceiling', () => {
 test('the footer is always the last line and names the bot', () => {
   for (const over of [{ flags: [] }, { flags: [f('a', 'x', 9)] }, { buyers: 0, roundTrippers: 0 }]) {
     const lines = renderDefaultCard(makeScan(over), 'vitalscheck_bot').split('\n');
-    assert.equal(lines[lines.length - 1], '@vitalscheck_bot · not financial advice');
+    assert.equal(lines[lines.length - 1], '@vitalscheck_bot · @vitalsofficial · not financial advice');
   }
   const nf = renderDefaultNotFound('0x147Bbaa458Ab7Cd11E1E478B87f08FE5A42A9E67', 'vitalscheck_bot').split('\n');
-  assert.equal(nf[nf.length - 1], '@vitalscheck_bot · not financial advice');
+  assert.equal(nf[nf.length - 1], '@vitalscheck_bot · @vitalsofficial · not financial advice');
 });
 
 // ------------------------------------------------- buyer line and what follows
@@ -460,7 +460,7 @@ test('the card is bounded at 14 lines with every optional line rendering', () =>
   // blank line that does the lifting. This card is forwarded into groups, so
   // the ceiling is deliberate rather than incidental.
   assert.equal(lines.length, 14, lines.join('\n'));
-  assert.equal(lines[lines.length - 1], '@vitalscheck_bot \u00b7 not financial advice');
+  assert.equal(lines[lines.length - 1], '@vitalscheck_bot \u00b7 @vitalsofficial \u00b7 not financial advice');
 });
 
 test('concentration is stated once, not twice with two roundings', () => {
@@ -521,7 +521,7 @@ test('card order: concerns, then the buyer count, then concentration, then the r
     '3 of 38 sold \u00b7 0 of 4.2 ETH to graduation',
     'buyers 12 \u2192 38 in 20 min',
     '',
-    '@vitalscheck_bot \u00b7 not financial advice',
+    '@vitalscheck_bot \u00b7 @vitalsofficial \u00b7 not financial advice',
   ]);
 });
 

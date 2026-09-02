@@ -16,7 +16,7 @@ import { buildAlerts } from './alerts.js';
 import { exemptedHoldTime, holdTimeLine, MIN_HOLD_SAMPLES, type HoldTime } from './holdtime.js';
 export { exemptedHoldTime, holdTimeLine, MIN_HOLD_SAMPLES, type HoldTime };
 import { concentrationCoverageLine } from './metrics/concentration.js';
-import { inlineDescription } from './card.js';
+import { inlineDescription, footerLine, GROUP_HANDLE } from './card.js';
 import { db } from './db.js';
 import { indexCoverage } from './coverage.js';
 import { TELEGRAM_BOT_TOKEN, DISCLAIMER } from './config.js';
@@ -124,6 +124,9 @@ const HELP = [
   '  • /watch filter <name> — when a new launch has a shape you picked',
   '  • /filters lists the filters and how often each fires',
   '  • /watching lists your subscriptions, /unwatch <address|filter> removes one',
+  '',
+  'one paid line at the bottom funds this. it never touches what a card says,',
+  'and it always points at a scan. /sponsor for the numbers.',
   '',
   'The card leads with concerns — the things fixed at creation, which are',
   'readable the second a token exists — and puts the counts underneath. There',
@@ -386,8 +389,7 @@ function messageFor(outcome: ScanOutcome, full: boolean): string {
  * same attribution and disclaimer as every other card the bot emits.
  */
 function transientCard(ctx: Context, line: string): string {
-  const via = ctx.me?.username ? `@${ctx.me.username} · ` : '';
-  return `VITALS\n${line}\n${via}not financial advice`;
+  return `VITALS\n${line}\n${footerLine(usernameOf(ctx))}`;
 }
 
 function article(id: string, title: string, description: string, text: string): InlineQueryResult {
@@ -435,7 +437,7 @@ async function handleInline(ctx: Context): Promise<void> {
         [
           'VITALS — pons v2 launch scanner',
           `Paste a token address after @${usernameOf(ctx) ?? 'the bot'} to scan it.`,
-          `@${usernameOf(ctx) ?? 'the bot'} · not financial advice`,
+          footerLine(usernameOf(ctx)),
         ].join('\n'),
       ),
     ]);
@@ -462,7 +464,7 @@ async function handleInline(ctx: Context): Promise<void> {
           'VITALS — pons v2 launch scanner',
           `${lead} Expected 0x followed by 40 hex characters, e.g.`,
           EXAMPLE,
-          `@${usernameOf(ctx) ?? 'the bot'} · not financial advice`,
+          footerLine(usernameOf(ctx)),
         ].join('\n'),
       ),
     ]);
@@ -760,6 +762,12 @@ export function createBot(token = TELEGRAM_BOT_TOKEN): Bot {
     );
   });
 
+  bot.command('sponsor', async (ctx) => {
+    // Counting queries against SQLite on the event loop, like /stats, so it
+    // goes through the same flood cap rather than being a free way to spin it.
+    await ctx.reply(sponsorText());
+  });
+
   bot.command('stats', async (ctx) => {
     // /stats runs several COUNT(*) queries against SQLite on the event loop, so
     // it goes through the same flood cap as everything else rather than being a
@@ -851,6 +859,81 @@ export function indexStatusLine(h: IndexHealth): string {
     return `index stalled ${agoWords(h.behindSeconds)} ago — index-derived checks are withheld`;
   }
   return `index current, last advanced ${agoWords(h.behindSeconds)} ago`;
+}
+
+/**
+ * What a sponsor is actually buying, in numbers anyone can ask for.
+ *
+ * Public and computed at call time from scan_events, because a media kit that
+ * only the seller can see is a claim, not a number. The same floor rule as
+ * every other statistic here: where the history is shorter than the window, the
+ * window is stated rather than the number being presented as thirty days of it.
+ * Never rounded up, never padded.
+ */
+export function sponsorText(now = Math.floor(Date.now() / 1000)): string {
+  const n = (sql: string, ...args: unknown[]) =>
+    (db.prepare(sql).get(...(args as any[])) as { n: number }).n;
+
+  const oldest = (db.prepare('SELECT MIN(ts) AS t FROM scan_events').get() as { t: number | null }).t;
+  const historyDays = oldest === null ? 0 : (now - oldest) / 86_400;
+
+  const since30 = now - 30 * 86_400;
+  const since7 = now - 7 * 86_400;
+
+  const scans30 = n('SELECT COUNT(*) n FROM scan_events WHERE ts >= ?', since30);
+  const scans7 = n('SELECT COUNT(*) n FROM scan_events WHERE ts >= ?', since7);
+  const users30 = n('SELECT COUNT(DISTINCT user_id) n FROM scan_events WHERE ts >= ? AND user_id IS NOT NULL', since30);
+  const groups30 = n(
+    "SELECT COUNT(DISTINCT chat_id) n FROM scan_events WHERE ts >= ? AND source = 'group' AND chat_id IS NOT NULL",
+    since30,
+  );
+  const launches = n('SELECT COUNT(*) n FROM launches');
+
+  // One row per day for the last seven, zeros included: a missing day is a real
+  // zero and leaving it out would make a quiet week look like a busy short one.
+  const daily = db
+    .prepare(
+      `SELECT CAST(ts / 86400 AS INTEGER) AS day, COUNT(*) AS n
+         FROM scan_events WHERE ts >= ? GROUP BY day ORDER BY day ASC`,
+    )
+    .all(since7) as { day: number; n: number }[];
+  const byDay = new Map(daily.map((d) => [d.day, d.n]));
+  const today = Math.floor(now / 86_400);
+  const series: string[] = [];
+  for (let i = 6; i >= 0; i--) {
+    const day = today - i;
+    const date = new Date(day * 86_400_000).toISOString().slice(5, 10);
+    series.push(`  ${date}  ${byDay.get(day) ?? 0}`);
+  }
+
+  const short =
+    historyDays < 30
+      ? [
+          `this bot has ${historyDays < 1 ? 'under a day' : `${Math.floor(historyDays)} days`} of history,`,
+          'so the 30-day figures below cover only that. not extrapolated.',
+          '',
+        ]
+      : [];
+
+  return [
+    'VITALS — sponsorship',
+    '',
+    ...short,
+    `scans, last 30d   ${scans30.toLocaleString()}`,
+    `scans, last 7d    ${scans7.toLocaleString()}`,
+    `distinct users    ${users30.toLocaleString()} (30d)`,
+    `distinct groups   ${groups30.toLocaleString()} (30d)`,
+    `launches indexed  ${launches.toLocaleString()}`,
+    '',
+    'scans per day, last 7:',
+    ...series,
+    '',
+    'one line, second from the bottom of every card. it points at a scan,',
+    'never at a buy, and it is identical on every card — a sponsor cannot',
+    'buy a different card, or a different reading of one.',
+    '',
+    'contact @siriusthemaster',
+  ].join('\n');
 }
 
 export function statsText(): string {

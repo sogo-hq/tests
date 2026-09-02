@@ -77,7 +77,14 @@ test('the image draws no body line the card did not produce', () => {
   // The other direction: the picture must not invent or keep a stale line.
   const r = FULL();
   const fromCard = new Set(expectedInImage(r));
-  const chrome = /^(VITALS|checkvitals\.xyz|not financial advice|0x[0-9a-fA-F]{40}|\d{4}-\d{2}-\d{2}.*UTC|\$NPC.*)$/;
+  // The footer is a declared per-surface variant (CardLine.imageText), not a
+  // line the picture invented: a PNG cannot be clicked, so it carries
+  // t.me/handle where the text card carries the bare @handle.
+  const footerVariant = cardLines(r).find((l) => l.role === 'footer')?.imageText;
+  const chrome = new RegExp(
+    `^(VITALS|checkvitals\\.xyz|not financial advice|0x[0-9a-fA-F]{40}|` +
+      `\\d{4}-\\d{2}-\\d{2}.*UTC|\\$NPC.*|${footerVariant?.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})$`,
+  );
   for (const t of svgText(r)) {
     if (!t.trim() || chrome.test(t)) continue;
     assert.ok(fromCard.has(t), `the image drew "${t}", which is not a card line`);

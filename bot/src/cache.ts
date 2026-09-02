@@ -19,6 +19,14 @@ import type { CompactMeta } from './card.js';
 import type { ScanResult } from './scan.js';
 
 export interface CachedScan {
+  /**
+   * The sponsor line this card's text was rendered with.
+   *
+   * Set on write; an entry whose version no longer matches is a miss, because
+   * the paid line lives inside defaultCard and a card carrying the previous one
+   * is simply the wrong card.
+   */
+  sponsorVersion?: number;
   /** Plain-text card shown by default on every surface. */
   defaultCard: string;
   /** Today's HTML card, served only by /full. */
@@ -65,6 +73,8 @@ function positiveInt(name: string, raw: string | undefined, fallback: number): n
 const TTL_MS = positiveInt('SCAN_CACHE_TTL_MS', process.env.SCAN_CACHE_TTL_MS, 60_000);
 const MAX_ENTRIES = positiveInt('SCAN_CACHE_MAX', process.env.SCAN_CACHE_MAX, 500);
 
+import { sponsorVersion } from './sponsor.js';
+
 export class ScanCache {
   private map = new Map<string, CachedScan>();
   private hits = 0;
@@ -103,6 +113,16 @@ export class ScanCache {
       this.misses++;
       return null;
     }
+    if (hit.sponsorVersion !== sponsorVersion()) {
+      // The paid line is part of the card's text, so a card rendered under a
+      // different one is the wrong card now. Dropped rather than served: the
+      // whole point of reading it at send time is that it changes without a
+      // deploy, and a minute of the old line is a minute nobody paid for.
+      this.map.delete(k);
+      this.expired++;
+      this.misses++;
+      return null;
+    }
     if (Date.now() - hit.ts > this.lifetime(hit)) {
       // Expired entries are dropped on read; a stale card is worse than a slow
       // one when the underlying metrics move minute to minute.
@@ -134,7 +154,9 @@ export class ScanCache {
     // Re-inserting refreshes insertion order, so a hot token is not evicted
     // ahead of a cold one that happened to be written later.
     this.map.delete(k);
-    this.map.set(k, { ...value, ts: Date.now() });
+    // Stamped on write, so a later read can tell whether the paid line inside
+    // this card is still the one being sold.
+    this.map.set(k, { ...value, ts: Date.now(), sponsorVersion: sponsorVersion() });
 
     while (this.map.size > this.maxEntries) {
       const oldest = this.map.keys().next();

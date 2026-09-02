@@ -152,8 +152,14 @@ export function cardSvg(r: ScanResult, renderedAt = new Date()): string {
   const lines = cardLines(r);
   const header = lines.find((l: CardLine) => l.role === 'header');
   const body = lines.filter(
-    (l: CardLine) => l.role !== 'header' && l.role !== 'footer' && l.role !== 'spacer',
+    (l: CardLine) =>
+      l.role !== 'header' && l.role !== 'footer' && l.role !== 'spacer' && l.role !== 'sponsor',
   );
+  // Drawn in the footer band rather than the body: the body is what gets
+  // dropped when a card runs out of room, and the one line somebody paid for is
+  // not the line to drop silently. Above the disclaimer, as everywhere else.
+  const sponsor = lines.find((l: CardLine) => l.role === 'sponsor');
+  const footer = lines.find((l: CardLine) => l.role === 'footer');
 
   // --- identity -------------------------------------------------------------
   // The card's own header line, minus the wordmark the picture draws already.
@@ -217,8 +223,25 @@ export function cardSvg(r: ScanResult, renderedAt = new Date()): string {
 
   // --- footer ---------------------------------------------------------------
   parts.push(`<rect x="${PAD}" y="552" width="${CONTENT_W}" height="1" fill="${DIM}" opacity="0.35"/>`);
+  if (sponsor) {
+    parts.push(
+      text(PAD, 578, sponsor.text, {
+        size: fitSize(sponsor.text, CONTENT_W, 20, 13),
+        fill: DIM,
+      }),
+    );
+  }
   parts.push(text(PAD, HEIGHT - PAD + 12, 'checkvitals.xyz', { size: 22, fill: ACCENT }));
-  parts.push(text(WIDTH - PAD, HEIGHT - PAD + 12, 'not financial advice', { size: 22, fill: DIM, anchor: 'end' }));
+  // imageText, not text: a picture cannot be clicked, so this carries
+  // t.me/handle where the text card carries the bare @handle Telegram links.
+  const foot = footer?.imageText ?? footer?.text ?? 'not financial advice';
+  parts.push(
+    text(WIDTH - PAD, HEIGHT - PAD + 12, foot, {
+      size: fitSize(foot, CONTENT_W - 200, 22, 13),
+      fill: DIM,
+      anchor: 'end',
+    }),
+  );
 
   return (
     `<svg xmlns="http://www.w3.org/2000/svg" width="${WIDTH}" height="${HEIGHT}" ` +

@@ -77,7 +77,7 @@ assert.ok(c[0].payload.text.split('\n').length <= 12, 'default card is <=12 line
 assert.equal(c[0].payload.parse_mode, undefined, 'the default card is sent as plain text');
 assert.ok(c[0].payload.reply_parameters?.message_id, 'sent as a reply to the triggering message');
 assert.equal(c[0].payload.link_preview_options?.is_disabled, true);
-assert.ok(c[0].payload.text.trim().endsWith('@vitalscheck_bot · not financial advice'), 'footer names the bot and is last');
+assert.ok(c[0].payload.text.trim().endsWith('@vitalscheck_bot · @vitalsofficial · not financial advice'), 'footer names the bot and is last');
 ok('group /scan -> single default card, plain text, sent as a reply, attributed footer');
 
 // supergroup, and the @botname suffix form
@@ -809,6 +809,51 @@ await bot.handleUpdate(inline(SOL, 9500));
     assert.match(removed[removed.length - 1].payload.text, /stopped watching/i);
     assert.equal(countWatches(dmUser), 0);
     ok('/watching lists them and /unwatch removes one');
+  }
+
+  // --- the paid line and its disclosure ------------------------------------
+  {
+    const { resetSponsor } = await import('../dist/sponsor.js');
+
+    // /help discloses it, in the user's own words.
+    await bot.handleUpdate(msg('private', '/help', -9001));
+    const helpText = drain().pop().payload.text;
+    assert.match(helpText, /one paid line at the bottom funds this/);
+    assert.match(helpText, /never touches what a card says/);
+    assert.match(helpText, /points at a scan/);
+    ok('/help discloses the paid line');
+
+    // /sponsor answers with numbers and no pitch.
+    await bot.handleUpdate(msg('private', '/sponsor', -9002));
+    const sp = drain().pop().payload.text;
+    assert.match(sp, /scans, last 30d\s+[\d,]+/);
+    assert.match(sp, /scans, last 7d\s+[\d,]+/);
+    assert.match(sp, /distinct users\s+[\d,]+/);
+    assert.match(sp, /distinct groups\s+[\d,]+/);
+    assert.match(sp, /launches indexed\s+[\d,]+/);
+    assert.match(sp, /scans per day, last 7:/);
+    assert.match(sp, /contact @siriusthemaster/);
+    // Same rule as every other statistic here: a short history says so.
+    assert.match(sp, /history|30d/);
+    for (const banned of [/\bbest\b/i, /\bhuge\b/i, /\bgrowing fast\b/i, /opportunit/i]) {
+      assert.doesNotMatch(sp, banned, `/sponsor reads as a pitch: ${sp}`);
+    }
+    ok('/sponsor reports real numbers with no pitch');
+
+    // The group is on every surface a user can see.
+    const saved = process.env.SPONSOR_LINE;
+    process.env.SPONSOR_LINE = 'ad · $MOON is live on pons — scan it';
+    resetSponsor();
+    await bot.handleUpdate(msg('private', `/scan ${TOKEN}`, -9003));
+    const card = drain().pop().payload.text;
+    assert.ok(card.trim().endsWith('@vitalscheck_bot · @vitalsofficial · not financial advice'),
+      `footer missing the group:\n${card.split('\n').slice(-3).join('\n')}`);
+    const cl = card.trim().split('\n');
+    assert.equal(cl[cl.length - 2], 'ad · $MOON is live on pons — scan it',
+      'the paid line must sit directly above the disclaimer');
+    if (saved === undefined) delete process.env.SPONSOR_LINE; else process.env.SPONSOR_LINE = saved;
+    resetSponsor();
+    ok('a live card carries the group and the paid line in the specified order');
   }
 
   // --- filters through the real command surface ----------------------------

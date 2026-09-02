@@ -2,6 +2,7 @@ import type { ScanResult } from './scan.js';
 import type { TractionMetrics, WindowMetrics } from './metrics/traction.js';
 import type { FlagResult } from './metrics/flags.js';
 import { DISCLAIMER, EXPLORER_URL } from './config.js';
+import { sponsorLine } from './sponsor.js';
 import { clamp, clampMessage, MAX_NAME, MAX_TICKER, TELEGRAM_MAX_MESSAGE } from './text.js';
 import { EARLY_WINDOW_SECONDS } from './config.js';
 import { MIN_HOLDERS_FOR_SHARE } from './metrics/concentration.js';
@@ -417,6 +418,33 @@ export const NOT_A_PONS_LAUNCH =
  */
 const PLAIN_FOOTER = 'not financial advice';
 
+/** The project's group. Telegram autolinks a bare @handle, so no parse_mode. */
+export const GROUP_HANDLE = 'vitalsofficial';
+
+/**
+ * The footer, built once for every surface that has one.
+ *
+ * Plain text on purpose: Telegram turns a bare @handle into a link by itself,
+ * so the card needs no parse_mode and survives copy-paste exactly as rendered.
+ * That also keeps the injection surface at zero, which is why the ticker is
+ * escaped rather than the card being marked up.
+ */
+export function footerLine(botUsername?: string): string {
+  const bot = botUsername ? `@${plainField(botUsername, 40)} \u00b7 ` : '';
+  return `${bot}@${GROUP_HANDLE} \u00b7 ${PLAIN_FOOTER}`;
+}
+
+/**
+ * The same footer for the image.
+ *
+ * A picture cannot be clicked, so a bare @handle in it is a dead end -- it
+ * renders the address someone can actually type instead.
+ */
+export function imageFooterLine(botUsername?: string): string {
+  const bot = botUsername ? `@${plainField(botUsername, 40)} \u00b7 ` : '';
+  return `${bot}t.me/${GROUP_HANDLE} \u00b7 ${PLAIN_FOOTER}`;
+}
+
 /**
  * Strip anything that could break the layout out of attacker-controlled text.
  * A newline inside a token symbol would add lines to a card specified to stay
@@ -738,11 +766,21 @@ export type CardRole =
   | 'measure'
   | 'measure-dim'
   | 'spacer'
+  | 'sponsor'
   | 'footer';
 
 export interface CardLine {
   text: string;
   role: CardRole;
+  /**
+   * What the image draws instead, when the two genuinely differ.
+   *
+   * The footer is the only case: a PNG cannot be clicked, so it carries
+   * t.me/handle where the text card carries @handle. Stated here rather than
+   * rebuilt in image.ts, because a second implementation of the footer is how
+   * the image silently missed three features before.
+   */
+  imageText?: string;
 }
 
 export function cardLines(r: ScanResult, botUsername?: string): CardLine[] {
@@ -802,8 +840,20 @@ export function cardLines(r: ScanResult, botUsername?: string): CardLine[] {
     if (line) push('measure-dim', line);
   }
 
+  // Second to last, directly above the footer. The disclaimer is always the
+  // last thing on the card: whatever was paid for, it does not get to be the
+  // final word.
+  const ad = sponsorLine();
   push('spacer', '');
-  push('footer', botUsername ? `@${plainField(botUsername, 40)} \u00b7 ${PLAIN_FOOTER}` : PLAIN_FOOTER);
+  // Directly above the footer, with the blank ABOVE it rather than between:
+  // the paid line and the disclaimer read as one block at the bottom, and the
+  // disclaimer is always the last thing on the card.
+  if (ad) push('sponsor', ad);
+  L.push({
+    role: 'footer',
+    text: footerLine(botUsername),
+    imageText: imageFooterLine(botUsername),
+  });
   return L;
 }
 
@@ -818,6 +868,6 @@ export function renderDefaultNotFound(token: string, botUsername?: string): stri
     '',
     NOT_A_PONS_LAUNCH,
     '',
-    botUsername ? `@${plainField(botUsername, 40)} \u00b7 ${PLAIN_FOOTER}` : PLAIN_FOOTER,
+    footerLine(botUsername),
   ].join('\n');
 }
