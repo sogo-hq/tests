@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+const { resetSponsor: resetSponsorForTest } = await import('../dist/sponsor.js');
 import { cardSvg, renderCardPng, renderableText, utcStamp, WIDTH, HEIGHT } from '../dist/image.js';
 import { makeScan } from './fixtures.mjs';
 
@@ -94,7 +95,12 @@ for (const [name, scan] of Object.entries(CASES)) {
 test('no score, no grade, no verdict language', () => {
   const banned = /\b(score|grade|rating|safe|clean|risk score|verdict|pass|fail|good|bad)\b/i;
   for (const [name, scan] of Object.entries(CASES)) {
-    const s = svg(scan).replace(/<[^>]+>/g, ' ');
+    // The fixed doctrine line is the one place "clean" may appear, and it
+    // appears there to deny it: "no finding does not mean clean". Dropped
+    // before the scan, rather than weakening the pattern for every other line.
+    const s = svg(scan)
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/no finding does not mean clean[^<]*/g, ' ');
     assert.ok(!banned.test(s), `${name} carries a verdict word: ${s.match(banned)?.[0]}`);
   }
 });
@@ -215,4 +221,40 @@ test('when the body cannot fit, growth yields before the receipt does', async ()
   // The receipt is the one line here worth forwarding on its own; growth
   // restates the buyer count directly above it.
   assert.match(svg, /first scanned here/, 'the receipt must outrank growth for the last slot');
+});
+
+test('no two lines are drawn on top of each other, sponsor or not', () => {
+  // The paid line and checkvitals.xyz were both given y=578 at x=64, so they
+  // rendered on top of one another. Every image case ran without a sponsor
+  // configured, so nothing caught it. This runs both ways.
+  const saved = process.env.SPONSOR_LINE;
+  try {
+    for (const line of [undefined, 'ad · $MOON is live on pons — scan it']) {
+      if (line === undefined) delete process.env.SPONSOR_LINE;
+      else process.env.SPONSOR_LINE = line;
+      resetSponsorForTest();
+
+      for (const [name, scan] of Object.entries(CASES)) {
+        // Attributes are matched out of the whole tag rather than in a fixed
+        // order: the first version of this assumed x, then y, then anchor, and
+        // silently read every right-aligned line as left-aligned.
+        const drawn = [...svg(scan).matchAll(/<text([^>]*)>/g)].map((m) => ({
+          y: Number(/\by="(\d+)"/.exec(m[1])?.[1] ?? -1),
+          anchor: /text-anchor="(\w+)"/.exec(m[1])?.[1] ?? 'start',
+        }));
+        const seen = new Map();
+        for (const d of drawn) {
+          // Two lines collide when they share a baseline AND start from the
+          // same edge. Left- and right-anchored text on one row is deliberate.
+          const key = `${d.y}:${d.anchor === 'end' ? 'r' : 'l'}`;
+          assert.ok(!seen.has(key),
+            `${name}${line ? ' (with a sponsor)' : ''}: two lines at y=${d.y} from the same edge`);
+          seen.set(key, d);
+        }
+      }
+    }
+  } finally {
+    if (saved === undefined) delete process.env.SPONSOR_LINE; else process.env.SPONSOR_LINE = saved;
+    resetSponsorForTest();
+  }
 });

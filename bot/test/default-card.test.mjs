@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { renderDefaultCard, renderDefaultNotFound } from '../dist/card.js';
+import { renderDefaultCard, renderDefaultNotFound, cardLines } from '../dist/card.js';
 import { makeScan } from './fixtures.mjs';
 
 const f = (key, plain, severity, state = 'raised') =>
@@ -20,14 +20,15 @@ test('concerns-raised card matches the specified shape exactly', () => {
   assert.deepEqual(renderDefaultCard(r, 'vitalscheck_bot').split('\n'), [
     'VITALS  $GHATS · 47s',
     '',
-    '⚠️ 8 wallets got in tax-free before you could',
+    '🚩 8 wallets got in tax-free before you could',
     '',
-    '· same ticker as the asset it trades against',
-    '· deployer launched 91 tokens this week',
+    '🚩 same ticker as the asset it trades against',
+    '🚩 deployer launched 91 tokens this week',
     '',
-    '2 buyers',
-    'both already sold · 0 of 4.2 ETH to graduation',
+    '2 buyers in first 47s · no index median (n=0)',
+    'all 2 sold within first 47s · 0 of 4.2 ETH to graduation',
     '',
+    'no finding ≠ clean · /full for every metric',
     '@vitalscheck_bot · @vitalsofficial · not financial advice',
   ]);
 });
@@ -42,12 +43,14 @@ test('nothing-raised card matches the specified shape exactly', () => {
   assert.deepEqual(renderDefaultCard(r, 'vitalscheck_bot').split('\n'), [
     'VITALS  $TOKEN · 20m',
     '',
-    'no concerns raised · 6 of 8 checked · 2 undetermined',
+    'no findings · 6 of 8 checks ran',
+    '◌ undetermined: a, b',
     '',
-    '38 buyers',
-    '3 of 38 sold · 0 of 4.2 ETH to graduation',
-    'buyers 12 → 38 in 20 min',
+    '38 buyers in first 20 min · no index median (n=0)',
+    '3 of 38 sold in first 20 min · 0 of 4.2 ETH to graduation',
+    'buyers 12 at +10 min → 38 at +20 min',
     '',
+    'no finding ≠ clean · /full for every metric',
     '@vitalscheck_bot · @vitalsofficial · not financial advice',
   ]);
 });
@@ -57,46 +60,53 @@ test('at most three flags, highest severity first', () => {
   const r = makeScan({ flags: [
     f('low', 'lowest', 10), f('top', 'highest', 100), f('mid', 'middle', 50), f('x', 'fourth', 20),
   ]});
-  const lines = renderDefaultCard(r, 'b').split('\n').filter((l) => /^(⚠️|·) /.test(l));
-  assert.deepEqual(lines, ['⚠️ highest', '· middle', '· fourth'],
+  const lines = renderDefaultCard(r, 'b').split('\n').filter((l) => /^🚩 /.test(l));
+  assert.deepEqual(lines, ['🚩 highest', '🚩 middle', '🚩 fourth'],
     'the worst one is lifted; the rest stay, at a lower weight');
 });
 
-test('more than three raised flags adds "+N more · /full"', () => {
+test('more than three raised flags adds "+N more"', () => {
   const r = makeScan({ flags: Array.from({ length: 6 }, (_, i) => f(`f${i}`, `finding ${i}`, 100 - i)) });
   const text = renderDefaultCard(r, 'b');
-  assert.match(text, /^\+3 more · \/full$/m);
-  const shown = text.split('\n').filter((l) => /^(⚠️|·) /.test(l));
+  assert.match(text, /^\+3 more$/m);
+  const shown = text.split('\n').filter((l) => /^🚩 /.test(l));
   assert.equal(shown.length, 3, 'three shown however they are marked');
-  assert.equal(shown.filter((l) => l.startsWith('⚠️')).length, 1, 'exactly one is lifted');
+  // Lifting is position now, not a second symbol: one marker per state means a
+  // finding is a finding whether it is the worst or the third.
+  const roles = cardLines(makeScan({ flags: Array.from({ length: 6 }, (_, i) => f(`f${i}`, `finding ${i}`, 100 - i)) }), 'b')
+    .filter((l) => l.mark === 'finding').map((l) => l.role);
+  assert.equal(roles.filter((x) => x === 'concern-top').length, 1, 'exactly one is lifted');
 });
 
 test('undetermined is never hidden — with flags raised or without', () => {
   const withRaised = makeScan({ flags: [
     f('a', 'raised one', 90), f('u1', 'x', 5, 'unknown'), f('u2', 'y', 5, 'unknown'),
   ]});
-  assert.match(renderDefaultCard(withRaised, 'b'), /2 undetermined/);
+  assert.match(renderDefaultCard(withRaised, 'b'), /◌ undetermined: u1, u2/);
 
   const noneRaised = makeScan({ flagsTotal: 8, flags: [f('u1', 'x', 5, 'unknown'), f('u2', 'y', 5, 'unknown')] });
-  assert.match(renderDefaultCard(noneRaised, 'b'), /no concerns raised · 6 of 8 checked · 2 undetermined/);
+  assert.match(renderDefaultCard(noneRaised, 'b'), /no findings · 6 of 8 checks ran/);
 
   // and when the three flag slots are already full
   const full = makeScan({ flags: [
     ...Array.from({ length: 5 }, (_, i) => f(`r${i}`, `r${i}`, 100 - i)),
     f('u', 'x', 5, 'unknown'),
   ]});
-  assert.match(renderDefaultCard(full, 'b'), /\+2 more · 1 undetermined · \/full/);
+  assert.match(renderDefaultCard(full, 'b'), /◌ \+2 more · undetermined: u/);
 });
 
 test('never says clean, safe or looks good', () => {
   const banned = /\bclean\b|\bsafe\b|looks good|all good|no risk|verified|legit/i;
+  // The fixed doctrine line says "no finding ≠ clean". It is the one place the
+  // word may appear, and it appears there to deny it.
+  const strip = (t) => t.split('\n').filter((l) => !/≠ clean/.test(l)).join('\n');
   for (const over of [
     { flags: [] },
     { flags: [f('u', 'x', 5, 'unknown')] },
     { flags: [f('a', 'something', 90)] },
     { buyers: 0, roundTrippers: 0, flags: [] },
   ]) {
-    const text = renderDefaultCard(makeScan(over), 'b');
+    const text = strip(renderDefaultCard(makeScan(over), 'b'));
     assert.ok(!banned.test(text), `all-clear language in:\n${text}`);
   }
 });
@@ -115,7 +125,7 @@ test('no predictions or trade language, on any shape', () => {
 test('age lives in the header and nowhere else', () => {
   const lines = renderDefaultCard(makeScan({ ageSeconds: 47, symbol: 'X' }), 'b').split('\n');
   assert.match(lines[0], /· 47s$/);
-  assert.equal(lines.filter((l) => /\b\d+[smhd]\b/.test(l) && !l.startsWith('VITALS') && !/in \d+ min/.test(l)).length, 0);
+  assert.equal(lines.filter((l) => /\b\d+[smhd]\b/.test(l) && !l.startsWith('VITALS') && !/in first |at \+|first \d/.test(l)).length, 0);
 });
 
 test('metadata the default card must not carry', () => {
@@ -177,19 +187,19 @@ test('the buyer count stands alone, with what happened to them on the next line'
   // exactly 30 minutes old, so its window has closed and "yet" would read as
   // "still early" on a launch whose opening is over -- the same wrong tense
   // that put "no buyers yet" on a 23-day-old graduated token.
-  assert.equal(buyer({ buyers: 0, roundTrippers: 0, progressPct: 0 }), 'no buyers in the first 30 min');
+  assert.equal(buyer({ buyers: 0, roundTrippers: 0, progressPct: 0 }), 'no buyers in the first 30 min · no index median (n=0)');
   assert.equal(
     buyer({ ageSeconds: 300, windowMinutes: 5, buyers: 0, roundTrippers: 0, progressPct: 0 }),
-    'no buyers yet',
+    'no buyers yet · no index median (n=0)',
     'a token still inside its window has genuinely not had its buyers yet',
   );
   assert.equal(rest({ buyers: 0, roundTrippers: 0, progressPct: 0 }), '0 of 4.2 ETH to graduation');
-  assert.equal(buyer({ buyers: 1, roundTrippers: 0, progressPct: 1 }), '1 buyer');
+  assert.equal(buyer({ buyers: 1, roundTrippers: 0, progressPct: 1 }), '1 buyer in first 30 min · no index median (n=0)');
   assert.equal(rest({ buyers: 1, roundTrippers: 0, progressPct: 1, realQuoteReserve: 42000000000000000n }),
-    'none sold yet \u00b7 0.042 of 4.2 ETH to graduation');
-  assert.equal(rest({ buyers: 2, roundTrippers: 2, progressPct: 0 }), 'both already sold \u00b7 0 of 4.2 ETH to graduation');
-  assert.equal(rest({ buyers: 9, roundTrippers: 9, progressPct: 5.5 }), 'all already sold \u00b7 0 of 4.2 ETH to graduation');
-  assert.equal(rest({ buyers: 9, roundTrippers: 3, progressPct: 5.5 }), '3 of 9 sold \u00b7 0 of 4.2 ETH to graduation');
+    'none of 1 sold in first 30 min \u00b7 0.042 of 4.2 ETH to graduation');
+  assert.equal(rest({ buyers: 2, roundTrippers: 2, progressPct: 0 }), 'all 2 sold within first 30 min \u00b7 0 of 4.2 ETH to graduation');
+  assert.equal(rest({ buyers: 9, roundTrippers: 9, progressPct: 5.5 }), 'all 9 sold within first 30 min \u00b7 0 of 4.2 ETH to graduation');
+  assert.equal(rest({ buyers: 9, roundTrippers: 3, progressPct: 5.5 }), '3 of 9 sold in first 30 min \u00b7 0 of 4.2 ETH to graduation');
 });
 
 test('the buyer count carries its reference point, and only above the floor', () => {
@@ -198,12 +208,12 @@ test('the buyer count carries its reference point, and only above the floor', ()
 
   // below the floor the count stands alone -- a median of twelve launches would
   // be an anecdote presented as a reference
-  assert.equal(buyer({ buyers: 5, benchmarkMedian: null, benchmarkN: 12 }), '5 buyers');
-  assert.equal(buyer({ buyers: 5, benchmarkMedian: 3, benchmarkN: 412 }), '5 buyers \u2014 median at this age is 3');
-  assert.equal(buyer({ buyers: 38, benchmarkMedian: 12, benchmarkN: 412 }), '38 buyers \u2014 median at this age is 12');
+  assert.equal(buyer({ buyers: 5, benchmarkMedian: null, benchmarkN: 12 }), '5 buyers in first 30 min · no index median (n=12)');
+  assert.equal(buyer({ buyers: 5, benchmarkMedian: 3, benchmarkN: 412 }), '5 buyers in first 30 min · index median 3 at this age (n=412)');
+  assert.equal(buyer({ buyers: 38, benchmarkMedian: 12, benchmarkN: 412 }), '38 buyers in first 30 min · index median 12 at this age (n=412)');
   assert.equal(
     buyer({ buyers: 0, benchmarkMedian: 3, benchmarkN: 412 }),
-    'no buyers in the first 30 min \u2014 median at this age is 3',
+    'no buyers in the first 30 min · index median 3 at this age (n=412)',
   );
 });
 
@@ -214,13 +224,13 @@ test('"at this age" is claimed only when the measurement really was at that age'
   // a young token: the window IS its life, so "at this age" is literally true
   assert.equal(
     buyer({ ageSeconds: 120, windowMinutes: 2, buyers: 5, benchmarkMedian: 3, benchmarkN: 412 }),
-    '5 buyers \u2014 median at this age is 3',
+    '5 buyers in first 2 min · index median 3 at this age (n=412)',
   );
   // past the 30-minute cap the count is of the first 30 minutes, not of "now",
   // and the line must say so rather than describe a comparison never made
   assert.equal(
     buyer({ ageSeconds: 86400, windowMinutes: 30, buyers: 87, benchmarkMedian: 4, benchmarkN: 412 }),
-    '87 buyers \u2014 median in the first 30 min is 4',
+    '87 buyers in first 30 min · index median 4 (n=412)',
   );
 });
 
@@ -256,15 +266,16 @@ test('the worst concern gets its own line, its own marker, and room under it', (
     f('top', '38 other tokens use this exact ticker', 100),
     f('mid', 'creator takes 3% of every trade', 60),
   ]}), 'b').split('\n');
-  const i = lines.indexOf('\u26a0\ufe0f 38 other tokens use this exact ticker');
+  const i = lines.indexOf('\u{1F6A9} 38 other tokens use this exact ticker');
   assert.ok(i > 0, `the worst concern is not lifted:\n${lines.join('\n')}`);
   assert.equal(lines[i + 1], '', 'a blank line under it is what does the lifting');
-  assert.equal(lines[i + 2], '\u00b7 creator takes 3% of every trade', 'the rest drop to a plain bullet');
+  assert.equal(lines[i + 2], '\u{1F6A9} creator takes 3% of every trade',
+    'the rest carry the same marker — one state, one symbol; the lifting is the blank above');
 });
 
 test('one concern is the top one, with nothing below it', () => {
   const lines = renderDefaultCard(makeScan({ flags: [f('a', 'the only concern', 90)] }), 'b').split('\n');
-  assert.equal(lines[2], '\u26a0\ufe0f the only concern');
+  assert.equal(lines[2], '\u{1F6A9} the only concern');
   // One blank before the measurements, not two: the blank belongs to the top
   // concern and is only spent when something follows.
   assert.equal(lines[3], '');
@@ -275,21 +286,23 @@ test('exactly one concern is ever lifted, at any count', () => {
   for (const n of [1, 2, 3, 4, 9]) {
     const flags = Array.from({ length: n }, (_, i) => f(`f${i}`, `finding ${i}`, 100 - i));
     const lines = renderDefaultCard(makeScan({ flags }), 'b').split('\n');
-    const lifted = lines.filter((l) => l.startsWith('\u26a0\ufe0f'));
-    assert.equal(lifted.length, 1, `${n} concerns lifted ${lifted.length}`);
-    assert.equal(lifted[0], '\u26a0\ufe0f finding 0', 'and it is the highest severity');
-    assert.equal(lines.filter((l) => l.startsWith('\ud83d\udea9')).length, 0, 'the old marker is gone');
+    // By role, because every finding now carries the same marker.
+    const top = cardLines(makeScan({ flags }), 'b').filter((l) => l.role === 'concern-top');
+    assert.equal(top.length, 1, `${n} concerns lifted ${top.length}`);
+    assert.equal(top[0].text, '\u{1F6A9} finding 0', 'and it is the highest severity');
+    assert.equal(lines.filter((l) => l.startsWith('\u26a0\ufe0f')).length, 0,
+      'the old warning glyph is gone — three states, three symbols, no fourth');
   }
 });
 
 test('nothing raised prints no concern block at all', () => {
   const card = renderDefaultCard(makeScan({ flags: [f('u', 'x', 1, 'unknown')] }), 'b');
-  assert.ok(!card.includes('\u26a0\ufe0f'), 'no marker with nothing to mark');
+  assert.ok(!card.includes('\u{1F6A9}'), 'no marker with nothing to mark');
   assert.ok(!/^\u00b7 /m.test(card), 'and no orphaned bullets');
   // The summary line stays: it carries the undetermined count and the "of N
   // checked" framing, without which an absence of findings reads as an
   // all-clear -- which this card must never imply.
-  assert.match(card, /^no concerns raised · \d+ of \d+ checked · 1 undetermined$/m);
+  assert.match(card, /^no findings · \d+ of \d+ checks ran$/m);
 });
 
 test('lifting is emphasis, not a verdict', () => {
@@ -298,7 +311,11 @@ test('lifting is emphasis, not a verdict', () => {
   const VERDICT = /\b(safe|unsafe|danger|dangerous|risky|warning|avoid|scam|rug|clean|good|bad)\b/i;
   for (const n of [1, 3, 5]) {
     const flags = Array.from({ length: n }, (_, i) => f(`f${i}`, `finding ${i}`, 100 - i));
-    const card = renderDefaultCard(makeScan({ flags }), 'b');
+    // The fixed doctrine line is the one place "clean" may appear on a card,
+    // and it appears there to deny it: "no finding ≠ clean". Dropped before the
+    // scan rather than weakening the pattern for every other line.
+    const card = renderDefaultCard(makeScan({ flags }), 'b')
+      .split('\n').filter((l) => !/≠ clean/.test(l)).join('\n');
     assert.ok(!VERDICT.test(card), `a verdict word reached the card at ${n} concerns:\n${card}`);
   }
 });
@@ -379,7 +396,7 @@ test('an unreadable threshold states no distance rather than zero', () => {
   const card = renderDefaultCard(makeScan({ graduationThreshold: 0n, buyers: 5, roundTrippers: 1 }), 'b');
   assert.ok(!/graduation/.test(card), `a distance was claimed without a threshold:\n${card}`);
   assert.ok(!/0%/.test(card), 'and certainly not as a zero');
-  assert.match(card, /^1 of 5 sold$/m, 'what IS known still renders');
+  assert.match(card, /^1 of 5 sold in first 30 min$/m, 'what IS known still renders');
 });
 
 test('no percentage survives on the default card', () => {
@@ -443,7 +460,7 @@ test('a reading taken before the largest was recorded omits it rather than sayin
   assert.ok(!/largest/.test(line), 'a legacy row must not claim a largest holder of 0%');
 });
 
-test('the card is bounded at 14 lines with every optional line rendering', () => {
+test('the card is bounded at 15 lines with every optional line rendering', () => {
   const r = makeScan({
     ageSeconds: 1200, symbol: 'TOKEN', buyers: 38, roundTrippers: 3, progressPct: 12.4,
     windowMinutes: 20, flagsTotal: 9, benchmarkMedian: 12, benchmarkN: 412,
@@ -455,11 +472,14 @@ test('the card is bounded at 14 lines with every optional line rendering', () =>
   });
   r.traction.window.uniqueBuyers10m = 12;
   const lines = renderDefaultCard(r, 'vitalscheck_bot').split('\n');
-  // header, blank, the lifted concern, blank, two more, "+N more", blank,
-  // buyers, concentration, sold, growth, blank, footer. Fourteen: it gained the
-  // blank line that does the lifting. This card is forwarded into groups, so
-  // the ceiling is deliberate rather than incidental.
-  assert.equal(lines.length, 14, lines.join('\n'));
+  // header, blank, the lifted concern, blank, two more, the extras line, blank,
+  // buyers, concentration, sold, growth, blank, the doctrine line, footer.
+  // Fifteen: it gained the fixed "no finding ≠ clean" line, which is the one
+  // thing a card cannot convey by showing markers and so cannot be dropped.
+  // The overflow count and the undetermined names share one extras line rather
+  // than taking two. This card is forwarded into groups, so the ceiling is
+  // deliberate rather than incidental.
+  assert.equal(lines.length, 15, lines.join('\n'));
   assert.equal(lines[lines.length - 1], '@vitalscheck_bot \u00b7 @vitalsofficial \u00b7 not financial advice');
 });
 
@@ -475,7 +495,7 @@ test('concentration is stated once, not twice with two roundings', () => {
   }), 'b');
   const mentions = card.split('\n').filter((l) => /top 5 hold/.test(l));
   assert.equal(mentions.length, 1, `stated ${mentions.length} times:\n${card}`);
-  assert.match(mentions[0], /^(\u26a0\ufe0f|\u00b7) /, 'when it is a concern it belongs in the concerns block');
+  assert.match(mentions[0], /^\u{1F6A9} /u, 'when it is a concern it belongs in the concerns block');
   assert.ok(mentions[0].includes('23 holders'), 'and it must not lose the holder count in the move');
 
   // unraised, it keeps its own slot below the buyer count
@@ -495,11 +515,11 @@ test('a window under a minute is never rendered as "0 min"', () => {
   // reads as a minute old while only twenty seconds of blocks were observed
   assert.equal(
     buyer({ ageSeconds: 60, buyers: 1, windowMinutes: 20 / 60, benchmarkMedian: 1, benchmarkN: 412, measuredAtAge: false }),
-    '1 buyer \u2014 median in the first 20s is 1',
+    '1 buyer in first 20s · index median 1 (n=412)',
   );
   assert.equal(
     buyer({ ageSeconds: 86400, buyers: 87, windowMinutes: 30, benchmarkMedian: 4, benchmarkN: 412 }),
-    '87 buyers \u2014 median in the first 30 min is 4',
+    '87 buyers in first 30 min · index median 4 (n=412)',
   );
 });
 
@@ -514,20 +534,21 @@ test('card order: concerns, then the buyer count, then concentration, then the r
   assert.deepEqual(renderDefaultCard(r, 'vitalscheck_bot').split('\n'), [
     'VITALS  $TOKEN \u00b7 20m',
     '',
-    '\u26a0\ufe0f 8 wallets got in tax-free before you could',
+    '\u{1F6A9} 8 wallets got in tax-free before you could',
     '',
-    '38 buyers \u2014 median at this age is 12',
+    '38 buyers in first 20 min · index median 12 at this age (n=412)',
     'top 5 hold 44% \u00b7 23 holders',
-    '3 of 38 sold \u00b7 0 of 4.2 ETH to graduation',
-    'buyers 12 \u2192 38 in 20 min',
+    '3 of 38 sold in first 20 min \u00b7 0 of 4.2 ETH to graduation',
+    'buyers 12 at +10 min \u2192 38 at +20 min',
     '',
+    'no finding \u2260 clean \u00b7 /full for every metric',
     '@vitalscheck_bot \u00b7 @vitalsofficial \u00b7 not financial advice',
   ]);
 });
 
 test('buyer growth appears only once there are two points in time', () => {
   // the arrow, not the word: "no buyers yet" also contains "buyers "
-  const has = (over) => /buyers \d+ → \d+ in \d+ min/.test(renderDefaultCard(makeScan(over), 'b'));
+  const has = (over) => /buyers \d+ at \+10 min → \d+ at \+\d+ min/.test(renderDefaultCard(makeScan(over), 'b'));
   assert.equal(has({ ageSeconds: 47, buyers: 2 }), false, 'no +10min reading exists at 47s');
   assert.equal(has({ ageSeconds: 1200, buyers: 38, windowMinutes: 20 }), true);
   assert.equal(has({ ageSeconds: 1200, buyers: 0, windowMinutes: 20 }), false, 'nothing to grow from');

@@ -36,11 +36,11 @@ for (const t of tokens) {
   // concern; anything past that is a regression in a card whose whole point is
   // being readable when forwarded into a group.
   if (cl.length > 14) problems.push(`default card ${cl.length} lines`);
-  const concernLines = cl.filter((l) => /^(\u26a0\ufe0f|\u00b7) /.test(l));
+  const concernLines = cl.filter((l) => /^\u{1F6A9} /u.test(l));
   if (concernLines.length > 3) problems.push('more than 3 concern lines');
   // Emphasis is exactly one line, or none. Two lifted concerns compete again,
   // which is the whole complaint this answered.
-  const lifted = cl.filter((l) => l.startsWith('\u26a0\ufe0f')).length;
+  const lifted = cl.filter((l) => l.startsWith('\u{1F6A9}')).length;
   if (lifted > 1) problems.push(`${lifted} concerns lifted, expected at most one`);
   if (lifted === 0 && concernLines.length > 0) problems.push('concerns shown with none lifted');
   if (!/^VITALS /.test(cl[0])) problems.push('default card header malformed');
@@ -57,7 +57,7 @@ for (const t of tokens) {
 
   // undetermined must never be rendered as a finding
   for (const fl of r.flags.flags) {
-    if (fl.state === 'unknown' && (compText.includes(`\u26a0\ufe0f ${fl.plain}`) || compText.includes(`\u00b7 ${fl.plain}`))) {
+    if (fl.state === 'unknown' && (compText.includes(`\u{1F6A9} ${fl.plain}`))) {
       problems.push(`undetermined flag "${fl.key}" rendered as a finding`);
     }
   }

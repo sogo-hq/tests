@@ -3,7 +3,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 import type { ScanResult } from './scan.js';
-import { cardLines, type CardLine } from './card.js';
+import { cardLines, MARK_GLYPH, type CardLine } from './card.js';
 
 /**
  * Optional PNG render of the default card.
@@ -30,6 +30,16 @@ const INK = '#E8F0DE';
 const DIM = '#6E7A66';
 
 const PAD = 64;
+
+/**
+ * The three rows below the footer rule, top to bottom.
+ *
+ * Named because they used to be literals scattered through the footer block,
+ * and two of them were the same number.
+ */
+const FOOTER_ROW_1 = 574;
+const FOOTER_ROW_2 = 597;
+const FOOTER_ROW_3 = 618;
 const CONTENT_W = WIDTH - PAD * 2;
 
 /** IBM Plex Mono advance width, as a fraction of the em. */
@@ -153,12 +163,14 @@ export function cardSvg(r: ScanResult, renderedAt = new Date()): string {
   const header = lines.find((l: CardLine) => l.role === 'header');
   const body = lines.filter(
     (l: CardLine) =>
-      l.role !== 'header' && l.role !== 'footer' && l.role !== 'spacer' && l.role !== 'sponsor',
+      l.role !== 'header' && l.role !== 'footer' && l.role !== 'spacer' &&
+      l.role !== 'sponsor' && l.role !== 'doctrine',
   );
   // Drawn in the footer band rather than the body: the body is what gets
   // dropped when a card runs out of room, and the one line somebody paid for is
   // not the line to drop silently. Above the disclaimer, as everywhere else.
   const sponsor = lines.find((l: CardLine) => l.role === 'sponsor');
+  const doctrine = lines.find((l: CardLine) => l.role === 'doctrine');
   const footer = lines.find((l: CardLine) => l.role === 'footer');
 
   // --- identity -------------------------------------------------------------
@@ -200,15 +212,33 @@ export function cardSvg(r: ScanResult, renderedAt = new Date()): string {
     // A gap before the measurements, matching the card's blank line.
     if (line.role === 'measure' && y > TOP) y += 10;
 
-    if (line.role === 'concern-top') {
-      parts.push(`<path d="M ${PAD + 11} ${y - 20} L ${PAD + 22} ${y - 2} L ${PAD} ${y - 2} Z" fill="${INK}"/>`);
-    } else if (line.role === 'concern') {
-      parts.push(`<rect x="${PAD + 3}" y="${y - 11}" width="8" height="8" fill="${DIM}"/>`);
+    // Three states, two representations. The text card uses glyphs; the bundled
+    // font subset here has none of them, so the picture draws shapes -- and it
+    // reads the STATE off the line rather than pattern-matching the glyph out
+    // of the text, which was a second copy of the marker vocabulary living in
+    // the one file whose whole job is not drifting from the card.
+    if (line.mark === 'finding') {
+      const strong = line.role === 'concern-top';
+      parts.push(
+        `<path d="M ${PAD + (strong ? 11 : 7)} ${y - (strong ? 20 : 14)} ` +
+          `L ${PAD + (strong ? 22 : 14)} ${y - 2} L ${PAD} ${y - 2} Z" ` +
+          `fill="${strong ? INK : DIM}"/>`,
+      );
+    } else if (line.mark === 'undetermined') {
+      // A hollow ring: present, but deliberately not filled in -- the check ran
+      // and could not answer.
+      parts.push(
+        `<circle cx="${PAD + 7}" cy="${y - 7}" r="5" fill="none" ` +
+          `stroke="${DIM}" stroke-width="1.5" stroke-dasharray="2.5 2"/>`,
+      );
     }
 
-    // The text-card markers are stripped: the picture draws its own, and a
-    // glyph the bundled font lacks would render as tofu beside them.
-    const shown = line.text.replace(/^(\u26a0\ufe0f|\u00b7)\s+/, '');
+    // The glyph is removed for the same reason: the picture has already drawn
+    // this state, and a character the font lacks renders as tofu beside it.
+    const shown = line.text.replace(
+      new RegExp(`^(${MARK_GLYPH.finding}|${MARK_GLYPH.undetermined}|\\u00b7)\\s+`, 'u'),
+      '',
+    );
     parts.push(text(PAD + st.indent, y, shown, {
       size: fitSize(shown, CONTENT_W - st.indent, st.size, st.min),
       fill: st.fill,
@@ -223,21 +253,34 @@ export function cardSvg(r: ScanResult, renderedAt = new Date()): string {
 
   // --- footer ---------------------------------------------------------------
   parts.push(`<rect x="${PAD}" y="552" width="${CONTENT_W}" height="1" fill="${DIM}" opacity="0.35"/>`);
+  // The footer band, below the rule, one line per row. These used to be two
+  // hardcoded baselines; the paid line was given 578 and so was checkvitals.xyz,
+  // at the same x, so they drew on top of each other. No test caught it because
+  // no image case set a sponsor. Stacked from one constant now, so adding a row
+  // moves the rest instead of landing on one.
+  const BAND = [FOOTER_ROW_1, FOOTER_ROW_2, FOOTER_ROW_3];
+  let row = 0;
+  if (doctrine) {
+    // imageText, not text: U+2260 is outside the bundled subset and would draw
+    // as tofu.
+    const d = doctrine.imageText ?? doctrine.text;
+    parts.push(text(PAD, BAND[row++]!, d, { size: fitSize(d, CONTENT_W, 18, 12), fill: DIM }));
+  }
   if (sponsor) {
     parts.push(
-      text(PAD, 578, sponsor.text, {
-        size: fitSize(sponsor.text, CONTENT_W, 20, 13),
+      text(PAD, BAND[row++]!, sponsor.text, {
+        size: fitSize(sponsor.text, CONTENT_W, 18, 12),
         fill: DIM,
       }),
     );
   }
-  parts.push(text(PAD, HEIGHT - PAD + 12, 'checkvitals.xyz', { size: 22, fill: ACCENT }));
+  parts.push(text(PAD, BAND[2]!, 'checkvitals.xyz', { size: 20, fill: ACCENT }));
   // imageText, not text: a picture cannot be clicked, so this carries
   // t.me/handle where the text card carries the bare @handle Telegram links.
   const foot = footer?.imageText ?? footer?.text ?? 'not financial advice';
   parts.push(
-    text(WIDTH - PAD, HEIGHT - PAD + 12, foot, {
-      size: fitSize(foot, CONTENT_W - 200, 22, 13),
+    text(WIDTH - PAD, BAND[2]!, foot, {
+      size: fitSize(foot, CONTENT_W - 200, 20, 12),
       fill: DIM,
       anchor: 'end',
     }),

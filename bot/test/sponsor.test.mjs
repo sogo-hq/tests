@@ -161,6 +161,8 @@ test('the sponsor sits second from last, and the disclaimer is always last', asy
     assert.equal(lines[lines.length - 1], '@vitalscheck_bot · @vitalsofficial · not financial advice',
       'whatever was paid for, it does not get the last word');
     assert.equal(lines[lines.length - 2], 'ad · $MOON is live on pons — scan it');
+    assert.match(lines[lines.length - 3], /no finding ≠ clean/,
+      'the doctrine line sits above the paid one');
 
     const roles = cardLines(makeScan({}), 'b').map((l) => l.role);
     assert.equal(roles[roles.length - 1], 'footer');
@@ -181,10 +183,11 @@ test('with no sponsor there is no line and no gap', async () => {
     const card = renderDefaultCard(makeScan({}), 'b');
     const lines = card.split('\n');
     assert.doesNotMatch(card, /\bad ·/, 'an empty sponsor rendered something');
-    // Exactly one blank before the footer -- the card's own, not a second one
-    // held open for a line that is not there.
-    assert.equal(lines[lines.length - 2], '');
-    assert.notEqual(lines[lines.length - 3], '', 'an empty sponsor left a gap where it would have been');
+    // The doctrine line sits directly above the footer, and the single blank
+    // sits above that -- no second blank held open for a line that is not there.
+    assert.match(lines[lines.length - 2], /no finding ≠ clean/);
+    assert.equal(lines[lines.length - 3], '');
+    assert.notEqual(lines[lines.length - 4], '', 'an empty sponsor left a gap where it would have been');
   } finally {
     if (saved === undefined) delete process.env.SPONSOR_LINE; else process.env.SPONSOR_LINE = saved;
     resetSponsor();

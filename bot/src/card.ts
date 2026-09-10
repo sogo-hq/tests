@@ -602,20 +602,31 @@ export function buyerLine(r: ScanResult): string {
   // The one line that says why every other window figure is missing. Without a
   // count there is nothing for the benchmark to compare against either, so the
   // reference point goes with it rather than sitting beside a blank.
-  if (!w) return 'buyers undetermined \u2014 the first 30 min are not indexed';
+  const win = windowLabel(r.traction.windowMinutes);
+  if (!w) return `buyers undetermined \u2014 first ${win} not indexed`;
   const buyers = w.uniqueBuyers30m;
+  // The count carries its own window. "13 buyers" is not a fact anyone can use
+  // without knowing 13 buyers IN WHAT.
   const head =
-    buyers === 0 ? noBuyersPhrase(r.traction) : `${buyers} buyer${buyers === 1 ? '' : 's'}`;
+    buyers === 0 ? noBuyersPhrase(r.traction) : `${buyers} buyer${buyers === 1 ? '' : 's'} in first ${win}`;
   const b = r.benchmark;
-  if (b.median === null) return head;
+  // Below the floor there is no median, and saying so beats printing the count
+  // alone -- a reader cannot tell a missing reference point from an absent one.
+  if (b.median === null) return `${head} \u00b7 no index median (n=${b.n})`;
   // "at this age" is only true while the window IS the token's life. Past the
   // 30-minute cap the count -- and so the median beside it -- is a measurement
   // of the first 30 minutes, and saying "at this age" would describe a
-  // comparison that was never made.
+  // comparison that was never made. When the two windows already match, the
+  // head has named it and repeating it is noise.
+  const sameWindow = Math.round(b.windowMinutes) === Math.round(r.traction.windowMinutes);
   const ref = b.measuredAtAge
-    ? 'median at this age'
-    : `median in the first ${windowLabel(b.windowMinutes)}`;
-  return `${head} \u2014 ${ref} is ${b.median}`;
+    ? ' at this age'
+    : sameWindow
+      ? ''
+      : ` over first ${windowLabel(b.windowMinutes)}`;
+  // The sample size travels with the median. Without n it is a number the
+  // reader has no way to weigh.
+  return `${head} \u00b7 index median ${b.median}${ref} (n=${b.n.toLocaleString()})`;
 }
 
 /**
@@ -671,14 +682,17 @@ export function sellingLine(r: ScanResult): string {
   if (!w) return progress ?? '';
   const buyers = w.uniqueBuyers30m;
   if (buyers === 0) return progress ?? '';
+  // "1 of 13 sold" never said what the 13 was, and the 13 is the opening
+  // window's buyers -- the same population the exemption flag cares about.
+  // Named here; earlySellLine says "has since sold" for the whole-life count,
+  // so the two lines cannot be mistaken for each other.
+  const win = windowLabel(r.traction.windowMinutes);
   const sold =
     w.roundTrippers === 0
-      ? 'none sold yet'
+      ? `none of ${buyers} sold in first ${win}`
       : w.roundTrippers >= buyers
-        ? buyers === 2
-          ? 'both already sold'
-          : 'all already sold'
-        : `${w.roundTrippers} of ${buyers} sold`;
+        ? `all ${buyers} sold within first ${win}`
+        : `${w.roundTrippers} of ${buyers} sold in first ${win}`;
   return progress ? `${sold} \u00b7 ${progress}` : sold;
 }
 
@@ -699,7 +713,11 @@ export function earlySellLine(r: ScanResult): string | null {
   // the same thing about the same unread window is noise rather than honesty.
   const e = r.earlySells;
   if (!e || !e.cohort) return null;
-  return `${e.sold} of ${e.cohort} early buyers sold`;
+  // "early buyers" named no window. This is the opening window's buyers, and
+  // "has since sold" is whole-life -- the distinction from sellingLine, which
+  // counts only selling inside the window.
+  const win = windowLabel(r.traction.windowMinutes);
+  return `${e.sold} of ${e.cohort} buyers from first ${win} has since sold`;
 }
 
 export function concentrationLine(r: ScanResult): string | null {
@@ -727,7 +745,10 @@ export function growthLine(r: ScanResult): string | null {
   const t = r.traction;
   const w = t.window;
   if (!w || t.windowMinutes < 10 || w.uniqueBuyers30m === 0) return null;
-  return `buyers ${w.uniqueBuyers10m} \u2192 ${w.uniqueBuyers30m} in ${Math.round(t.windowMinutes)} min`;
+  // Both ends carry the moment they were taken at. "2 -> 13 in 30 min" reads as
+  // a change over 30 minutes; it is two readings, at +10 and at the window's
+  // end, and the first one had its own 10 minutes behind it.
+  return `buyers ${w.uniqueBuyers10m} at +10 min \u2192 ${w.uniqueBuyers30m} at +${Math.round(t.windowMinutes)} min`;
 }
 
 /**
@@ -766,12 +787,32 @@ export type CardRole =
   | 'measure'
   | 'measure-dim'
   | 'spacer'
+  | 'doctrine'
   | 'sponsor'
   | 'footer';
+
+/**
+ * Three states, and only three. A finding, an undetermined check, or nothing.
+ *
+ * Carried on the line rather than baked into its text because the two renderers
+ * cannot use the same representation: the bundled font subset in the PNG has no
+ * glyph for U+1F6A9 or U+25CC, so the picture draws shapes. It used to strip
+ * today's markers back off with a regex -- a second copy of the vocabulary, in
+ * the one file whose whole purpose is not drifting from the card.
+ */
+export type CardMark = 'finding' | 'undetermined';
+
+/** The glyphs the TEXT card uses. The PNG draws its own shapes for these. */
+export const MARK_GLYPH: Record<CardMark, string> = {
+  finding: '\u{1F6A9}',
+  undetermined: '\u25cc',
+};
 
 export interface CardLine {
   text: string;
   role: CardRole;
+  /** Which of the three states this line is in, if any. */
+  mark?: CardMark;
   /**
    * What the image draws instead, when the two genuinely differ.
    *
@@ -781,6 +822,39 @@ export interface CardLine {
    * the image silently missed three features before.
    */
   imageText?: string;
+}
+
+/**
+ * What each check is called when it has to be named in one or two words.
+ *
+ * "3 undetermined" tells a reader nothing they can act on -- not which checks,
+ * not whether the ones that matter to them ran. The label is the check's own,
+ * shortened only where the full one would not fit beside two others.
+ */
+const SHORT_CHECK: Record<string, string> = {
+  collision: 'ticker index',
+  deployer_rate: 'deployer history',
+  deployer_peaks: 'deployer outcomes',
+  deployer_survival: 'deployer survival',
+  creator_tax: 'creator tax',
+  snipe_exemptions: 'exempt wallets',
+  holder_concentration: 'holder spread',
+  buyback: 'buyback',
+  pair_ticker: 'pair ticker',
+  custom_pair: 'pair asset',
+};
+
+function shortCheck(key: string, label: string): string {
+  return SHORT_CHECK[key] ?? label.toLowerCase();
+}
+
+/** "undetermined: a, b, c" with the same +n bound the findings use. */
+export function undeterminedNames(flags: { key: string; label: string; state: string }[]): string | null {
+  const names = flags.filter((f) => f.state === 'unknown').map((f) => shortCheck(f.key, f.label));
+  if (!names.length) return null;
+  const shown = names.slice(0, 3).join(', ');
+  const rest = names.length - 3;
+  return `undetermined: ${shown}${rest > 0 ? ` +${rest}` : ''}`;
 }
 
 export function cardLines(r: ScanResult, botUsername?: string): CardLine[] {
@@ -800,18 +874,43 @@ export function cardLines(r: ScanResult, botUsername?: string): CardLine[] {
     // The worst one, alone, with room around it. The ordering that picks it has
     // always been here; this only makes it visible. Emphasis and nothing more:
     // no new judgement, and the ones below are still there to be read.
-    push('concern-top', `\u26a0\ufe0f ${plainField(raised[0]!.plain, 70)}`);
+    // One state, one marker, everywhere: a finding is a finding whether it is
+    // the worst one or the third. The emphasis on the top one is its own line
+    // and the room around it -- position, not a different symbol.
+    L.push({
+      role: 'concern-top',
+      text: `${MARK_GLYPH.finding} ${plainField(raised[0]!.plain, 70)}`,
+      mark: 'finding',
+    });
 
     const rest: CardLine[] = raised
       .slice(1, MAX_DEFAULT_FLAGS)
-      .map((fl) => ({ role: 'concern' as CardRole, text: `\u00b7 ${plainField(fl.plain, 70)}` }));
+      .map((fl) => ({
+        role: 'concern' as CardRole,
+        text: `${MARK_GLYPH.finding} ${plainField(fl.plain, 70)}`,
+        mark: 'finding' as CardMark,
+      }));
 
+    // One extras line, not two: the overflow count and the undetermined checks
+    // are both "what is not shown above", and the card has a ceiling.
+    // Undetermined is never dropped, even when the flag slots are full -- and
+    // it names the checks, because "1 undetermined" tells a reader nothing
+    // about whether the check they care about ran.
     const hidden = raised.length - MAX_DEFAULT_FLAGS;
+    const undet = undeterminedNames(f.flags);
     const extras: string[] = [];
     if (hidden > 0) extras.push(`+${hidden} more`);
-    // Undetermined is never dropped, even when the flag slots are full.
-    if (f.unknown > 0) extras.push(`${f.unknown} undetermined`);
-    if (extras.length) rest.push({ role: 'extras', text: `${extras.join(' \u00b7 ')} \u00b7 /full` });
+    if (undet) extras.push(undet);
+    if (extras.length) {
+      rest.push({
+        role: 'extras',
+        // No "· /full" here: the fixed line at the bottom points at /full on
+        // every card, and saying it twice costs characters on the line that is
+        // already the most crowded.
+        text: `${undet ? `${MARK_GLYPH.undetermined} ` : ''}${extras.join(' \u00b7 ')}`,
+        ...(undet ? { mark: 'undetermined' as CardMark } : {}),
+      });
+    }
 
     // The blank belongs to the top concern, so it is only spent when something
     // follows. One concern and nothing else leaves a single break.
@@ -820,9 +919,11 @@ export function cardLines(r: ScanResult, botUsername?: string): CardLine[] {
       L.push(...rest);
     }
   } else {
-    const parts = [`no concerns raised \u00b7 ${f.total - f.unknown} of ${f.total} checked`];
-    if (f.unknown > 0) parts.push(`${f.unknown} undetermined`);
-    push('summary', parts.join(' \u00b7 '));
+    push('summary', `no findings \u00b7 ${f.total - f.unknown} of ${f.total} checks ran`);
+    const undet = undeterminedNames(f.flags);
+    if (undet) {
+      L.push({ role: 'extras', text: `${MARK_GLYPH.undetermined} ${undet}`, mark: 'undetermined' });
+    }
   }
 
   // Concerns, then the one number a reader can act on, then who holds it, then
@@ -843,11 +944,22 @@ export function cardLines(r: ScanResult, botUsername?: string): CardLine[] {
   // Second to last, directly above the footer. The disclaimer is always the
   // last thing on the card: whatever was paid for, it does not get to be the
   // final word.
-  const ad = sponsorLine();
+  // Fixed, on every card. It is the one thing a card cannot convey by showing
+  // markers: that the checks which found nothing found nothing, and that this
+  // is not the same as being told everything is fine.
   push('spacer', '');
-  // Directly above the footer, with the blank ABOVE it rather than between:
-  // the paid line and the disclaimer read as one block at the bottom, and the
-  // disclaimer is always the last thing on the card.
+  L.push({
+    role: 'doctrine',
+    text: 'no finding \u2260 clean \u00b7 /full for every metric',
+    // The PNG's font subset has no U+2260, and an unrenderable glyph draws as
+    // tofu -- the picture says it in words instead.
+    imageText: 'no finding does not mean clean \u00b7 /full for every metric',
+  });
+
+  // No blank here: the doctrine line, the paid line and the disclaimer are one
+  // block at the bottom of the card, with the single break above all three.
+  // Every extra blank is a line, and the card has a ceiling.
+  const ad = sponsorLine();
   if (ad) push('sponsor', ad);
   L.push({
     role: 'footer',

@@ -40,11 +40,12 @@ test('the early full card and the default card cannot contradict each other', ()
   });
   const full = renderCardText(r);
   assert.ok(full.includes(EARLY_TRACTION_LINE), 'the traction LABEL is still withheld');
-  assert.match(full, /2 buyers — median at this age is 1/, 'but the count it does have is stated');
+  assert.match(full, /2 buyers in first 47s · index median 1 at this age \(n=412\)/,
+    'but the count it does have is stated');
   assert.match(full, /top 5 hold 44% · 23 holders/);
 
   const dflt = renderDefaultCard(r, 'b');
-  for (const line of ['2 buyers — median at this age is 1', 'top 5 hold 44% · 23 holders']) {
+  for (const line of ['2 buyers in first 47s · index median 1 at this age (n=412)', 'top 5 hold 44% · 23 holders']) {
     assert.ok(dflt.includes(line), `default card lost "${line}"`);
     assert.ok(full.includes(line), `early full card lost "${line}"`);
   }

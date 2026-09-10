@@ -33,11 +33,20 @@ function svgText(r) {
   return [...cardSvg(r).matchAll(/<text[^>]*>([^<]*)<\/text>/g)].map((m) => normalise(m[1]));
 }
 
-/** Every card line, in the form the image would draw it. */
+/**
+ * Every card line, in the form the image would draw it.
+ *
+ * imageText where a line declares one: a PNG cannot be clicked and its bundled
+ * font subset has no U+2260, so two lines carry a per-surface variant. That is
+ * a declared divergence on the CardLine, not the picture inventing text, and
+ * the parity check has to read it the same way the renderer does.
+ *
+ * The markers come off because the picture draws the state as a shape.
+ */
 function expectedInImage(r) {
   return cardLines(r)
     .filter((l) => !['spacer', 'footer', 'header'].includes(l.role))
-    .map((l) => normalise(l.text.replace(/^(⚠️|·)\s+/, '')));
+    .map((l) => normalise((l.imageText ?? l.text).replace(/^(🚩|◌|·)\s+/u, '')));
 }
 
 const FULL = () => {
@@ -62,15 +71,21 @@ const FULL = () => {
   return r;
 };
 
-test('every body line the card produces is drawn in the image', () => {
+test('every body line is drawn, or the shortfall is counted', () => {
+  // The card can now say more than a fixed-height picture holds. That is not a
+  // reason to weaken this: what it exists to catch is a SILENT drop, so every
+  // line must be either drawn or accounted for by the overflow notice, and the
+  // count in that notice must match the number actually missing.
   const r = FULL();
   const drawn = svgText(r);
-  for (const line of expectedInImage(r)) {
-    assert.ok(
-      drawn.some((t) => t === line),
-      `the image dropped "${line}" — it is on the card and not in the picture:\n${drawn.join('\n')}`,
-    );
-  }
+  const missing = expectedInImage(r).filter((line) => !drawn.some((t) => t === line));
+  if (!missing.length) return;
+
+  const notice = drawn.find((t) => /more on the card$/.test(t));
+  assert.ok(notice, `the image dropped ${missing.length} line(s) with nothing saying so: ${missing.join(' | ')}`);
+  const claimed = Number(/^\+(\d+)/.exec(notice)?.[1] ?? -1);
+  assert.equal(claimed, missing.length,
+    `the notice says +${claimed} but ${missing.length} are missing: ${missing.join(' | ')}`);
 });
 
 test('the image draws no body line the card did not produce', () => {
@@ -83,7 +98,8 @@ test('the image draws no body line the card did not produce', () => {
   const footerVariant = cardLines(r).find((l) => l.role === 'footer')?.imageText;
   const chrome = new RegExp(
     `^(VITALS|checkvitals\\.xyz|not financial advice|0x[0-9a-fA-F]{40}|` +
-      `\\d{4}-\\d{2}-\\d{2}.*UTC|\\$NPC.*|${footerVariant?.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})$`,
+      `\\d{4}-\\d{2}-\\d{2}.*UTC|\\$NPC.*|\\+\\d+ more on the card|checkvitals\\.xyz|` +
+      `${footerVariant?.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})$`,
   );
   for (const t of svgText(r)) {
     if (!t.trim() || chrome.test(t)) continue;
@@ -94,8 +110,13 @@ test('the image draws no body line the card did not produce', () => {
 test('a line added to the card reaches the image without touching the image', () => {
   // The property that matters. Two scans differing only by a measurement the
   // card decides to include: the image must differ by exactly that line.
+  // Trimmed to a card that fits the picture: with the body overflowing, adding
+  // one line pushes another out and the difference is no longer just the line
+  // under test. Overflow accounting is asserted separately above.
   const withReceipt = FULL();
+  withReceipt.flags.flags = withReceipt.flags.flags.slice(0, 1);
   const without = FULL();
+  without.flags.flags = without.flags.flags.slice(0, 1);
   without.firstScan = null;
 
   const a = new Set(svgText(withReceipt));
