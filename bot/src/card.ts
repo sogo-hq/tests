@@ -3,6 +3,7 @@ import type { TractionMetrics, WindowMetrics } from './metrics/traction.js';
 import type { FlagResult } from './metrics/flags.js';
 import { DISCLAIMER, EXPLORER_URL } from './config.js';
 import { sponsorLine } from './sponsor.js';
+import { deployerSummary } from './deployerlookup.js';
 import { clamp, clampMessage, MAX_NAME, MAX_TICKER, TELEGRAM_MAX_MESSAGE } from './text.js';
 import { EARLY_WINDOW_SECONDS } from './config.js';
 import { MIN_HOLDERS_FOR_SHARE } from './metrics/concentration.js';
@@ -978,8 +979,33 @@ export function renderDefaultNotFound(token: string, botUsername?: string): stri
   return [
     `VITALS  ${token.slice(0, 6)}\u2026${token.slice(-4)}`,
     '',
-    NOT_A_PONS_LAUNCH,
+    ...notALaunchLines(token),
     '',
     footerLine(botUsername),
   ].join('\n');
+}
+
+/**
+ * What to say about an address that is not a launch.
+ *
+ * "Not a pons v2 launch" was true of the address a tester reported and told
+ * them nothing they could act on. That address is a DEPLOYER: not a token
+ * (name, symbol and totalSupply all revert), not a curve (every getter
+ * reverts), and denied by the factory -- but squarely inside pons, answering
+ * factory() with our factory and appearing in a TokenLaunched log.
+ *
+ * So when the index recognises the address as a deployer, the reply names it
+ * and points at its most recent launch. It still does not claim the pasted
+ * address is a launch, because it is not one.
+ */
+export function notALaunchLines(token: string): string[] {
+  const d = deployerSummary(token);
+  if (!d) return [NOT_A_PONS_LAUNCH];
+  const ticker = d.latestSymbol ? `$${plainField(d.latestSymbol, MAX_TICKER).toUpperCase()}` : 'its latest launch';
+  return [
+    `that is a deployer, not a token \u2014 ${d.launches.toLocaleString()} launch${d.launches === 1 ? '' : 'es'} in the index`,
+    '',
+    `most recent: ${ticker}`,
+    d.latestToken,
+  ];
 }

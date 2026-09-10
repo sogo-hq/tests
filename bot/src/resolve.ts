@@ -1,5 +1,6 @@
 import type { Address } from 'viem';
 import { db } from './db.js';
+import { deployerSummary } from './deployerlookup.js';
 import { client } from './chain.js';
 import { curveAbi, factoryAbi } from './abi.js';
 import { FACTORY } from './config.js';
@@ -28,7 +29,7 @@ import { FACTORY } from './config.js';
  * launch the authoritative registry says does not exist.
  */
 
-export type ResolvedVia = 'token' | 'curve-index' | 'curve-call';
+export type ResolvedVia = 'token' | 'curve-index' | 'curve-call' | 'deployer';
 
 export interface Resolution {
   /** The launched token, or null when this address is not one and points at none. */
@@ -36,7 +37,15 @@ export interface Resolution {
   /** Which path answered, for the log and for /why. */
   via: ResolvedVia | 'none';
   /** What was pasted, when it turned out not to be the token. */
-  pastedWas?: 'curve';
+  pastedWas?: 'curve' | 'deployer';
+  /**
+   * Set when the address is a DEPLOYER the index knows.
+   *
+   * `token` stays null: a deployer is not a launch and must not be scanned as
+   * one. This only says what the address is, so the reply can be "that is a
+   * deployer" instead of "not a pons v2 launch" -- which was true, and useless.
+   */
+  deployerOf?: { launches: number; latestToken: string; latestSymbol: string | null };
 }
 
 async function isLaunch(addr: string): Promise<boolean> {
@@ -90,7 +99,10 @@ export async function resolveLaunch(address: string): Promise<Resolution> {
       `[resolve] ${addr.slice(0, 10)} is not a readable curve:`,
       String((err as any)?.shortMessage ?? (err as Error)?.message ?? err).slice(0, 80),
     );
-    return { token: null, via: 'none' };
+    // Falls through rather than returning: a deployer is not a curve either, so
+    // token() reverting is exactly the case the next path exists for. Returning
+    // here skipped it -- on the very address this was written to handle.
+    return resolveAsDeployer(addr);
   }
 
   /**
@@ -110,5 +122,30 @@ export async function resolveLaunch(address: string): Promise<Resolution> {
     return { token: curveToken.toLowerCase(), via: 'curve-call', pastedWas: 'curve' };
   }
 
-  return { token: null, via: 'none' };
+  return resolveAsDeployer(addr);
 }
+
+/**
+ * Last: is this address a DEPLOYER the index has seen?
+ *
+ * Measured on the address a tester reported as a broken scan. It is not a
+ * token: name(), symbol() and totalSupply() all revert, every curve getter
+ * reverts, and the factory answers exists=false. "Not a pons v2 launch" was
+ * therefore correct -- and useless, because the address is squarely inside the
+ * pons system: it answers factory() with our factory, and it appears in a
+ * TokenLaunched log as the deployer field.
+ *
+ * A deployer is not a launch and is never scanned as one -- `token` stays null.
+ * This only names what was pasted, so the reply can point somewhere.
+ *
+ * Index-only, deliberately. Finding a deployer from the chain means walking
+ * TokenLaunched logs, which took 82.7 seconds over nine days on the live node
+ * and is not something a scan can spend. An address the index has not seen
+ * falls through to the same honest "not a launch" as before.
+ */
+function resolveAsDeployer(addr: string): Resolution {
+  const d = deployerSummary(addr);
+  if (!d) return { token: null, via: 'none' };
+  return { token: null, via: 'deployer', pastedWas: 'deployer', deployerOf: d };
+}
+
