@@ -3,6 +3,7 @@ import { client, getLogsAdaptive } from './chain.js';
 import { interactive, measuringWaits } from './ratelimit.js';
 import { db, normaliseKey } from './db.js';
 import { readToken, type TokenReads } from './reads.js';
+import { resolveLaunch } from './resolve.js';
 import { indexOneCurve, markWindowIndexed, coveredThrough } from './indexer/trades.js';
 import { fetchLaunchCalldata } from './indexer/exemptions.js';
 import { computeTraction, type TractionMetrics } from './metrics/traction.js';
@@ -290,8 +291,24 @@ async function scanTokenInner(token: string, requestedBy?: number): Promise<Scan
   const timer = new PhaseTimer();
   const budget = new Budget(SCAN_BUDGET_MS);
 
-  const reads = await timer.time('reads', () => readToken(token));
-  if (!reads) return null;
+  let reads = await timer.time('reads', () => readToken(token));
+  if (!reads) {
+    // The factory has no record of THIS address. Before telling anyone it is
+    // not a pons launch, check whether it points at one: a curve address is
+    // what an explorer shows in the trace of every buy and sell, so it is the
+    // obvious thing to paste, and the factory correctly denies it.
+    const resolved = await timer.time('resolve', () => resolveLaunch(token));
+    if (!resolved.token) return null;
+    console.log(
+      `[scan] ${token.slice(0, 10)} is a ${resolved.pastedWas ?? 'related'} address; ` +
+        `resolved to ${resolved.token.slice(0, 10)} via ${resolved.via}`,
+    );
+    reads = await timer.time('reads', () => readToken(resolved.token!));
+    // The factory confirmed the token during resolution, so a null here means
+    // it stopped answering between the two calls -- which is a failed read, not
+    // a fact about the chain, and readToken throws for that.
+    if (!reads) return null;
+  }
 
   const head = await timer.time('head', () => client.getBlockNumber());
   const launch = await timer.time('findLaunch', () => findLaunch(reads.token, head, reads));
