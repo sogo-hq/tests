@@ -45,7 +45,10 @@ for (const t of tokens) {
   if (lifted === 0 && concernLines.length > 0) problems.push('concerns shown with none lifted');
   if (!/^VITALS /.test(cl[0])) problems.push('default card header malformed');
   if (/<[a-z/]/i.test(comp)) problems.push('markup in the default card');
-  if (/\b(clean|safe)\b|looks good/i.test(comp)) problems.push('all-clear language in the default card');
+  // The fixed doctrine line is the one place "clean" may appear on a card, and
+  // it appears there to deny it: "no finding ≠ clean".
+  const compNoDoctrine = comp.split('\n').filter((l) => !/≠ clean/.test(l)).join('\n');
+  if (/\b(clean|safe)\b|looks good/i.test(compNoDoctrine)) problems.push('all-clear language in the default card');
 
   // the compact card must never claim fewer raised flags than the full card
   const fullRaised = r.flags.raised;
@@ -53,7 +56,7 @@ for (const t of tokens) {
   const more = compText.match(/\+(\d+) more/);
   const accounted = shown + (more ? Number(more[1]) : 0);
   if (fullRaised > 0 && accounted !== fullRaised) problems.push(`default card accounts for ${accounted} raised flags, full card has ${fullRaised}`);
-  if (fullRaised === 0 && !/no concerns raised/.test(compText)) problems.push('no-flags card missing its summary line');
+  if (fullRaised === 0 && !/no findings · \d+ of \d+ checks ran/.test(compText)) problems.push('no-flags card missing its summary line');
 
   // undetermined must never be rendered as a finding
   for (const fl of r.flags.flags) {

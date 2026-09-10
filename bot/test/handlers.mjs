@@ -61,7 +61,21 @@ const inline = (query, userId = 9001) => ({
   inline_query: { id: `q${uid}`, from: { id: userId, is_bot: false, first_name: 'U' }, query, offset: '' },
 });
 
-const drain = () => { const c = [...calls]; calls.length = 0; return c; };
+/**
+ * Everything the bot sent, minus the one-time legend.
+ *
+ * Every update in this file carries a fresh from.id, so each DM scan looks like
+ * a brand-new user and is followed by the legend. That is correct behaviour and
+ * is asserted in legend.test.mjs; here it would just displace the message under
+ * test from the end of the list, so it is filtered out once rather than worked
+ * around at twenty call sites.
+ */
+const isLegend = (x) => /^\u{1F6A9} a finding \u2014/u.test(x.payload?.text ?? '');
+const drain = () => {
+  const c = [...calls].filter((x) => !isLegend(x));
+  calls.length = 0;
+  return c;
+};
 
 // warm the cache so timings stay tight and the token is known
 await bot.handleUpdate(msg('private', `/scan ${TOKEN}`, -100));
@@ -102,19 +116,28 @@ ok('bare address in a supergroup -> ignored');
 await bot.handleUpdate(msg('private', TOKEN, -300));
 c = drain();
 assert.ok(c.length >= 1, 'bare address in a DM is scanned');
-const dmText = c[c.length - 1].payload.text;
-assert.ok(dmText.startsWith('VITALS  '), 'a DM gets the same default card as every other surface');
-assert.ok(dmText.split('\n').length <= 12, 'default card is <=12 lines in a DM too');
+// The card, not merely the last message: a first DM card is followed by the
+// one-time legend, so "last" is the legend rather than the card.
+const dmText = c.map((x) => x.payload.text).find((t) => t.startsWith('VITALS  '));
+assert.ok(dmText, `a DM gets the same default card as every other surface: ${JSON.stringify(c.map((x) => x.payload.text?.slice(0, 40)))}`);
+// 15 at its fullest: the card gained the named-undetermined line and the
+// fixed "no finding \u2260 clean" line. Bounded, because it is forwarded into groups.
+assert.ok(dmText.split('\n').length <= 15, `default card is <=15 lines in a DM too, got ${dmText.split('\n').length}`);
 assert.ok(!/TRACTION/.test(dmText), 'the traction block belongs to /full now');
 ok('bare address in a DM -> the same default card');
 
 // --- /full is the only way to the long card ---------------------------------
 await bot.handleUpdate(msg('private', `/full ${TOKEN}`, -301));
 c = drain();
-const fullText = c[c.length - 1].payload.text;
-assert.ok(fullText.includes('TRACTION') || fullText.includes('too early for traction'), '/full renders the long card');
+// By content, not position: a one-time legend can follow a card in a DM.
+// The /full message itself, not merely the last one: every update in this file
+// carries a fresh from.id, so the one-time legend follows each DM card.
+const fullMsg = c.find((x) => x.payload.text?.includes('TRACTION')
+  || x.payload.text?.includes('too early for traction'));
+assert.ok(fullMsg, `/full renders the long card: ${JSON.stringify(c.map((x) => x.payload.text?.slice(0, 40)))}`);
+const fullText = fullMsg.payload.text;
 assert.ok(fullText.split('\n').length > 12, '/full is longer than the default card');
-assert.equal(c[c.length - 1].payload.parse_mode, 'HTML', '/full keeps HTML');
+assert.equal(fullMsg.payload.parse_mode, 'HTML', '/full keeps HTML');
 ok('/full -> the long card, unchanged');
 
 // --- inline ---------------------------------------------------------------
@@ -577,14 +600,19 @@ await bot.handleUpdate(inline(SOL, 9500));
   // --- the shapes the feedback asked for, exactly ---------------------------
   assert.equal(
     buyerLine(makeScan({ buyers: 5, benchmarkMedian: 3, benchmarkN: 412 })),
-    '5 buyers \u2014 median at this age is 3',
+    '5 buyers in first 30 min \u00b7 index median 3 at this age (n=412)',
   );
   assert.equal(
     buyerLine(makeScan({ buyers: 38, benchmarkMedian: 12, benchmarkN: 412 })),
-    '38 buyers \u2014 median at this age is 12',
+    '38 buyers in first 30 min \u00b7 index median 12 at this age (n=412)',
   );
-  assert.equal(buyerLine(makeScan({ buyers: 5, benchmarkMedian: null, benchmarkN: 12 })), '5 buyers');
-  ok('buyer benchmark renders as "N buyers — median at this age is M", and as "N buyers" below the floor');
+  // Below the floor it says there is no median rather than going quiet: silence
+  // where a reference point belongs reads as an implied all-clear.
+  assert.equal(
+    buyerLine(makeScan({ buyers: 5, benchmarkMedian: null, benchmarkN: 12 })),
+    '5 buyers in first 30 min \u00b7 no index median (n=12)',
+  );
+  ok('the buyer count carries its window and its reference point, or says there is none');
 
   // --- it reaches every surface --------------------------------------------
   const withBoth = makeScan({
@@ -595,7 +623,8 @@ await bot.handleUpdate(inline(SOL, 9500));
   });
 
   const dmCard = renderDefaultCard(withBoth, 'vitalscheck_bot');
-  assert.match(dmCard, /38 buyers \u2014 median at this age is 12/, 'DM card carries the comparison');
+  assert.match(dmCard, /38 buyers in first 20 min \u00b7 index median 12 at this age \(n=412\)/,
+    'DM card carries the comparison');
   assert.match(dmCard, /top 5 hold 44% \u00b7 23 holders/, 'DM card carries concentration');
 
   // The group surface renders the same card through the same path.
@@ -608,7 +637,7 @@ await bot.handleUpdate(inline(SOL, 9500));
   await bot.handleUpdate(msg('group', `/scan ${TOKEN}`, -800));
   const gc = drain();
   const groupText = gc[gc.length - 1].payload.text;
-  const groupBuyerLine = groupText.split('\n').find((l) => /^(\d[\d,]* buyers?|no buyers yet)\b/.test(l));
+  const groupBuyerLine = groupText.split('\n').find((l) => /^(\d[\d,]* buyers? in first|no buyers|buyers undetermined)\b/.test(l));
   assert.ok(groupBuyerLine, `group card lost the buyer line:\n${groupText}`);
 
   // /full carries the reference point and the audit trail
@@ -642,7 +671,7 @@ await bot.handleUpdate(inline(SOL, 9500));
   const ic = drain();
   const article = ic[0].payload.results[0];
   const inlineText = article.input_message_content.message_text;
-  const inlineBuyerLine = inlineText.split('\n').find((l) => /^(\d[\d,]* buyers?|no buyers yet)\b/.test(l));
+  const inlineBuyerLine = inlineText.split('\n').find((l) => /^(\d[\d,]* buyers? in first|no buyers|buyers undetermined)\b/.test(l));
   assert.ok(inlineBuyerLine, `inline result lost the buyer line:\n${inlineText}`);
   ok(`inline carries the same card, buyer line included: "${inlineBuyerLine}"`);
 
@@ -659,7 +688,8 @@ await bot.handleUpdate(inline(SOL, 9500));
   assert.ok(iConc >= 0, `the PNG lost the concentration line: ${JSON.stringify(texts)}`);
   const iSold = idx(/to graduation$/);
   assert.ok(iBuyers >= 0, `the PNG lost the buyer line: ${JSON.stringify(texts)}`);
-  assert.ok(/median at this age is 12/.test(texts[iBuyers]), `the PNG lost the comparison: ${texts[iBuyers]}`);
+  assert.ok(/index median 12 at this age \(n=412\)/.test(texts[iBuyers]),
+    `the PNG lost the comparison: ${texts[iBuyers]}`);
   assert.ok(iConc > iBuyers, 'concentration must follow the buyer count in the image too');
   assert.ok(iSold > iConc, 'and the rest must follow concentration');
 
@@ -694,7 +724,8 @@ await bot.handleUpdate(inline(SOL, 9500));
   assert.equal(lines[2], '\u{1F6A9} 38 other tokens use this exact ticker');
   assert.equal(lines[3], '');
   assert.equal(lines[4], '\u{1F6A9} creator takes 3% of every trade');
-  assert.equal(lines[5], '2 undetermined \u00b7 /full');
+  // Named, and sharing the extras line with any overflow count.
+  assert.equal(lines[5], '\u25cc undetermined: u1, u2');
   ok(`the worst concern is lifted: "${lines[2]}" with "${lines[4]}" beneath it`);
 
   // --- group and inline carry the same card --------------------------------
@@ -739,7 +770,11 @@ await bot.handleUpdate(inline(SOL, 9500));
   for (const d of [top, second]) {
     assert.match(d.fill, /^#(E8F0DE|6E7A66|080B09|C6F73A)$/i, `off-palette colour ${d.fill} implies a verdict`);
   }
-  assert.equal((svg.match(/<path d="M /g) ?? []).length, 1, 'exactly one lifted marker is drawn');
+  // Every finding gets a marker now -- one state, one symbol -- so the lifting
+  // shows in its size and tone, not in the top one being the only marker drawn.
+  const markers = [...svg.matchAll(/<path d="M [^"]*" fill="([^"]+)"/g)].map((m) => m[1]);
+  assert.equal(markers.length, 2, `two findings, two markers: ${JSON.stringify(markers)}`);
+  assert.equal(new Set(markers).size, 2, 'the lifted marker must not look like the others');
   ok(`the PNG lifts by size (${top.size}px vs ${second.size}px) and tone, with no colour spent on it`);
 }
 
@@ -913,8 +948,33 @@ await bot.handleUpdate(inline(SOL, 9500));
     const { buildAlerts } = await import('../dist/alerts.js');
     const { addWatch } = await import('../dist/watch.js');
     const { db } = await import('../dist/db.js');
-    const row = db.prepare('SELECT deployer FROM launches WHERE token = ?').get(TOKEN.toLowerCase());
-    assert.ok(row, 'the subject token should be indexed by now');
+    // The subject is now past the factory-log lookback, so findLaunch places it
+    // from the curve and ensureLaunchRow is skipped -- there is no creation
+    // transaction to record and tx_hash is NOT NULL. That is deliberate; it
+    // just means a scan alone no longer indexes this token, and the alert path
+    // reads the launches table. Seeded from the factory's own answer, which is
+    // where the indexer would have got it.
+    let row = db.prepare('SELECT deployer FROM launches WHERE token = ?').get(TOKEN.toLowerCase());
+    if (!row) {
+      const { client } = await import('../dist/chain.js');
+      const { factoryAbi } = await import('../dist/abi.js');
+      const { FACTORY } = await import('../dist/config.js');
+      const info = await client.readContract({
+        address: FACTORY, abi: factoryAbi, functionName: 'getLaunchedToken', args: [TOKEN],
+      });
+      assert.ok(info?.exists, 'the subject must still be a launch the factory knows');
+      db.prepare(
+        `INSERT INTO launches (token, curve, deployer, pair_token, launch_config_id,
+           graduation_threshold, block_number, tx_hash, launched_at, snipe_exemption_count)
+         VALUES (?,?,?,?,1,?,1,?,?,0)`,
+      ).run(
+        TOKEN.toLowerCase(), info.curve.toLowerCase(), info.deployer.toLowerCase(),
+        info.pairToken.toLowerCase(), String(info.graduationThreshold),
+        '0x' + '0'.repeat(64), Math.floor(Date.now() / 1000) - 1_371_606,
+      );
+      row = db.prepare('SELECT deployer FROM launches WHERE token = ?').get(TOKEN.toLowerCase());
+    }
+    assert.ok(row, 'the subject token should be in the index for the alert path to see it');
 
     const watcher = 6602;
     addWatch(watcher, 'deployer', row.deployer, 7777);
