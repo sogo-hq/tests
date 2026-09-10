@@ -121,7 +121,9 @@ export function computeFlags(opts: {
       compactDetail:
         `${exCount} wallet${exCount === 1 ? '' : 's'} pre-exempted from the opening tax` +
         (viaBuy ? ' + creator buy same tx' : ''),
-      plain: `${exCount} wallet${exCount === 1 ? '' : 's'} got in tax-free before you could`,
+      // 32 is the protocol's cap on pre-exempted wallets, so it is the
+      // denominator a reader needs to size the count against.
+      plain: `${exCount} of 32 exempt slots used \u2014 tax-free at launch`,
       severity: 100 + exCount,
     });
   } else {
@@ -151,27 +153,37 @@ export function computeFlags(opts: {
       plain: "no baseline yet for the creator's cut",
       severity: 10,
     });
-  } else if (opts.creatorTaxBps > taxMedian) {
-    flags.push({
-      key: 'creator_tax',
-      label: 'Creator tax',
-      state: 'raised',
-      detail: `${opts.creatorTaxBps} bps vs ${taxMedian} bps median across ${taxRows.length} indexed launches`,
-      compactDetail: `creator tax ${opts.creatorTaxBps} bps vs ${taxMedian} bps median`,
-      plain: `creator takes ${pctOfBps(opts.creatorTaxBps)}% of every trade`,
-      severity: 40 + Math.min(40, opts.creatorTaxBps - taxMedian),
-    });
   } else {
+    /**
+     * The rate and the baseline it is measured against, in one line, in BOTH
+     * states.
+     *
+     * These were two different strings that rendered identically: "creator
+     * takes 3% of every trade" was the plain text whether the check had raised
+     * or passed, so the card said the same words about a tax above the median
+     * and a tax below it. The median that decided which was computed two lines
+     * above and thrown away.
+     *
+     * A rate with no baseline is also unreadable on its own -- 3% is unusual
+     * on one chain and ordinary on another -- so the reference point travels
+     * with it, and the sample size travels with the reference point.
+     */
+    const rate = opts.creatorTaxBps === 0 ? 'creator takes nothing' : `creator takes ${pctOfBps(opts.creatorTaxBps)}%`;
+    const withBaseline =
+      `${rate} per trade \u00b7 index median ${pctOfBps(taxMedian)}% (n=${taxRows.length.toLocaleString()})`;
+    const raised = opts.creatorTaxBps > taxMedian;
     flags.push({
       key: 'creator_tax',
       label: 'Creator tax',
-      state: 'clean',
-      detail: `${opts.creatorTaxBps} bps, at or below the ${taxMedian} bps median`,
-      compactDetail: `creator tax ${opts.creatorTaxBps} bps, at or below median`,
-      plain: opts.creatorTaxBps === 0
-        ? 'creator takes nothing per trade'
-        : `creator takes ${pctOfBps(opts.creatorTaxBps)}% of every trade`,
-      severity: 0,
+      state: raised ? 'raised' : 'clean',
+      detail: raised
+        ? `${opts.creatorTaxBps} bps vs ${taxMedian} bps median across ${taxRows.length} indexed launches`
+        : `${opts.creatorTaxBps} bps, at or below the ${taxMedian} bps median across ${taxRows.length} indexed launches`,
+      compactDetail: raised
+        ? `creator tax ${opts.creatorTaxBps} bps vs ${taxMedian} bps median`
+        : `creator tax ${opts.creatorTaxBps} bps, at or below median`,
+      plain: withBaseline,
+      severity: raised ? 40 + Math.min(40, opts.creatorTaxBps - taxMedian) : 0,
     });
   }
 
@@ -199,7 +211,9 @@ export function computeFlags(opts: {
       state: 'raised',
       detail: `${launches7d} other launches by this deployer in the last 7 days`,
       compactDetail: `deployer launched ${launches7d} other tokens in 7d`,
-      plain: `deployer launched ${launches7d} tokens this week`,
+      // The threshold that made this a finding. "7 tokens this week" is a
+      // count; whether 7 is many is the question, and the rule answers it.
+      plain: `deployer launched ${launches7d} tokens in 7d \u00b7 flag above 2`,
       severity: 50 + Math.min(40, launches7d),
     });
   } else {
@@ -350,9 +364,10 @@ export function computeFlags(opts: {
       state: 'raised',
       detail: `matches ${collisionCount} existing pons token${collisionCount === 1 ? '' : 's'}${ex ? ` (${ex})` : ''} after homoglyph normalisation`,
       compactDetail: `name collides with ${collisionCount} token${collisionCount === 1 ? '' : 's'} after homoglyph normalisation`,
-      plain: collisionCount === 1
-        ? '1 other token uses this exact ticker'
-        : `${collisionCount} other tokens use this exact ticker`,
+      // Out of how many. 59 collisions means one thing in an index of 400 and
+      // another in an index of 400,000, and the card had no way to tell them
+      // apart.
+      plain: `${collisionCount} of ${cov.indexed.toLocaleString()} indexed launches use this ticker`,
       severity: 70,
     });
   } else {
