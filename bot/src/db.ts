@@ -326,6 +326,10 @@ for (const [table, column, decl] of [
   ['holder_snapshots', 'top1_share', 'REAL'],
   ['holder_snapshots', 'deployer_activity', 'TEXT'],
   ['holder_snapshots', 'early_sells', 'TEXT'],
+  // When this user was last shown the legend. Persisted rather than held in
+  // memory: this container has no volume, so an in-memory "seen" set would
+  // re-send the legend to everyone after every deploy.
+  ['dm_chats', 'legend_at', 'INTEGER'],
 ] as const) {
   if (!columnsOf(table).includes(column)) {
     db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${decl}`);

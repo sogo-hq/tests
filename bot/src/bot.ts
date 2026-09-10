@@ -11,6 +11,7 @@ import {
   addFilterWatch, listFilterWatches, removeFilterWatch,
 } from './watch.js';
 import { isFilterKey, filterDef, filterRates, rateLine } from './filters.js';
+import { LEGEND, claimLegend } from './legend.js';
 import { ALERTS_PER_HOUR } from './alerts.js';
 import { buildAlerts } from './alerts.js';
 import { exemptedHoldTime, holdTimeLine, MIN_HOLD_SAMPLES, type HoldTime } from './holdtime.js';
@@ -254,6 +255,15 @@ async function handleScan(ctx: Context, raw: string, full = false): Promise<void
       ? { reply_markup: { inline_keyboard: [[{ text: 'Image', callback_data: `img:${token}` }]] } }
       : {};
   await deliver(ctx, notice, messageFor(outcome, full), { ...replyOpts, ...withImage }, full);
+
+  // A first card is where the markers first appear, so it is where they first
+  // need explaining -- somebody who was handed the bot by a friend never typed
+  // /start. DM only: a group has many readers and only one of them is new, and
+  // the legend is not worth a message to the rest of them.
+  const uid = ctx.from?.id;
+  if (uid !== undefined && ctx.chat?.type === 'private' && outcome.kind === 'ok' && claimLegend(uid)) {
+    await ctx.reply(LEGEND, { link_preview_options: { is_disabled: true } });
+  }
 }
 
 /**
@@ -573,12 +583,23 @@ export function createBot(token = TELEGRAM_BOT_TOKEN): Bot {
     await next();
   });
 
-  bot.command(['start', 'help'], (ctx) =>
-    ctx.reply(HELP.replace(/BOTNAME/g, usernameOf(ctx) ?? 'bot'), {
+  bot.command(['start', 'help'], async (ctx) => {
+    await ctx.reply(HELP.replace(/BOTNAME/g, usernameOf(ctx) ?? 'bot'), {
       // No preview: the footer carries a domain, and a link card would push the
       // text off the first screen.
       link_preview_options: { is_disabled: true },
-    }),
+    });
+    // The markers mean nothing to somebody seeing them for the first time, and
+    // the one thing a card cannot convey by itself is that a missing marker is
+    // not an all-clear. Said once, on the way in.
+    const userId = ctx.from?.id;
+    if (userId !== undefined && claimLegend(userId)) {
+      await ctx.reply(LEGEND, { link_preview_options: { is_disabled: true } });
+    }
+  });
+
+  bot.command('legend', (ctx) =>
+    ctx.reply(LEGEND, { link_preview_options: { is_disabled: true } }),
   );
 
   // Works in private, group and supergroup. grammY strips the @botname suffix,
@@ -976,6 +997,7 @@ export async function startBot(): Promise<void> {
 
   await bot.api.setMyCommands([
     { command: 'scan', description: 'Score a pons v2 token launch' },
+    { command: 'legend', description: 'What the markers on a card mean' },
     { command: 'stats', description: 'Index, cache and usage statistics' },
     { command: 'help', description: 'What this bot reports' },
   ]);
