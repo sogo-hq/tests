@@ -1,4 +1,4 @@
-import { Bot, InputFile, type Context } from 'grammy';
+import { Bot, InputFile, type Api, type Context } from 'grammy';
 import type { InlineQueryResult } from 'grammy/types';
 import { performScan, scanImage, normaliseToken, looksLikeTxHash, looksLikeSolanaAddress, inlineCacheSeconds, rateLimitFrom, rateLimitedMessage, SCAN_FAILED, type ScanSource, type ScanOutcome } from './service.js';
 import { scanCache, startCacheReporter } from './cache.js';
@@ -12,6 +12,16 @@ import {
 } from './watch.js';
 import { isFilterKey, filterDef, filterRates, rateLine } from './filters.js';
 import { LEGEND, claimLegend } from './legend.js';
+import { age } from './card.js';
+import {
+  registerMember, addExternal, removeExternal, statusOf, allRows, refreshBalances,
+  totals, snapshot, selfRegistrationOpen, setSetting, getSetting, normaliseWallet,
+  rememberJoin, inviteOf, joinedTooRecently,
+  READY_MIN_ETH, REGISTER_COOLDOWN_MS,
+} from './ready.js';
+import {
+  totalsBlock, isAdmin, gateHit, countdownLine, dueAutoPost, markAutoPost,
+} from './tge.js';
 import { ALERTS_PER_HOUR } from './alerts.js';
 import { buildAlerts } from './alerts.js';
 import { exemptedHoldTime, holdTimeLine, MIN_HOLD_SAMPLES, type HoldTime } from './holdtime.js';
@@ -118,6 +128,12 @@ const HELP = [
   '',
   '/full <address> adds the technical detail behind every line.',
   '/stats shows what has been indexed.',
+  '',
+  'Launch readiness:',
+  '  • /ready in the group — the totals, and only the totals',
+  '  • /tge — the same, with the countdown once a time is set',
+  '  • register in DM only. a wallet posted in the group is deleted unread,',
+  '    and no wallet, label or user id is ever shown in a group message.',
   '',
   'Alerts, delivered here and only here — never into a group:',
   '  • /watch deployer <address> — when that address launches again',
@@ -559,6 +575,150 @@ async function handleInline(ctx: Context): Promise<void> {
   }
 }
 
+// ---------------------------------------------------------------- ready / tge
+
+/**
+ * The posted totals, cached.
+ *
+ * Balances are re-read from chain before every post, which is the expensive
+ * part, so the whole block is cached for ten minutes and a /ready inside that
+ * window EDITS the last one rather than posting another. Net effect: at most
+ * one new block per ten minutes however many people ask, which is what keeps a
+ * 300-member group from turning one command into a wall.
+ */
+const BLOCK_TTL_MS = Number(process.env.READY_BLOCK_TTL_MS || 600_000) || 600_000;
+let posted: { chatId: number; messageId: number; at: number } | null = null;
+let blockAt = 0;
+
+/** For tests, and for a restart to behave like a cold one. */
+export function resetReadyBlockCache(): void {
+  posted = null;
+  blockAt = 0;
+}
+
+async function memberCount(api: Api, chatId: number): Promise<number | null> {
+  try {
+    return await api.getChatMemberCount(chatId);
+  } catch (err) {
+    // A count we could not read is omitted, never guessed: the block is the one
+    // number this group is asked to trust.
+    console.warn('[ready] member count unreadable:', String((err as Error)?.message ?? err).slice(0, 120));
+    return null;
+  }
+}
+
+export interface PostTotalsOpts {
+  withCountdown?: boolean;
+  botUsername?: string;
+  isGroup?: boolean;
+  now?: number;
+  /**
+   * Post a new block from figures the caller has already refreshed.
+   *
+   * The scheduled poster needs this for two reasons: it has read the balances
+   * itself in order to decide whether a post is due at all, and editing a block
+   * from hours ago would make the daily post invisible to everyone who has
+   * scrolled past it.
+   */
+  force?: boolean;
+}
+
+/**
+ * Post -- or edit -- the totals block in one chat.
+ *
+ * Returns the reason it did nothing, or 'posted'/'edited'. The caller uses that
+ * only for logging; the group sees the block either way.
+ */
+export async function postTotals(
+  api: Api,
+  chatId: number,
+  opts: PostTotalsOpts = {},
+): Promise<'posted' | 'edited'> {
+  const now = opts.now ?? Date.now();
+  const fresh = opts.force || now - blockAt >= BLOCK_TTL_MS;
+  if (fresh && !opts.force) {
+    await refreshBalances(now);
+    snapshot(now);
+  }
+  const readAt = fresh ? now : blockAt;
+  if (fresh) blockAt = now;
+  const members = await memberCount(api, chatId);
+  const t = totals();
+  const body = totalsBlock({
+    members,
+    now,
+    botUsername: opts.botUsername,
+    updatedMinutesAgo: fresh ? undefined : Math.round((now - readAt) / 60_000),
+  }, t);
+  const countdown = opts.withCountdown ? countdownLine(now) : null;
+  const text = countdown ? `${body}\n${countdown}` : body;
+
+  // Inside the window, edit the last block in this chat instead of adding one.
+  if (!fresh && posted && posted.chatId === chatId) {
+    try {
+      await api.editMessageText(posted.chatId, posted.messageId, text);
+      return 'edited';
+    } catch (err) {
+      // Edited too late, deleted, or unchanged. Falling through to a new post is
+      // better than saying nothing to somebody who asked.
+      console.warn('[ready] block edit failed, posting a new one:', String((err as Error)?.message ?? err).slice(0, 120));
+    }
+  }
+  const sent = await api.sendMessage(chatId, text, { link_preview_options: { is_disabled: true } });
+  posted = { chatId, messageId: sent.message_id, at: now };
+  // Remember where the block lives so the daily and threshold posts have a
+  // group to go to without an admin configuring a chat id by hand.
+  if (opts.isGroup) setSetting('ready_chat', String(chatId));
+  if (gateHit(t, members) && !getSetting('gate_announced')) {
+    setSetting('gate_announced', String(Math.floor(now / 1000)));
+    await api.sendMessage(chatId, 'GATE HIT');
+  }
+  return 'posted';
+}
+
+/**
+ * One tick of the scheduled poster.
+ *
+ * Idempotent: dueAutoPost() decides from stored marks, and the mark is written
+ * only after the send succeeds, so a crash between the two leaves the post due
+ * rather than lost. Does nothing at all until a block has been posted in a
+ * group once, which is what names the chat.
+ */
+export async function readyAutoPostTick(api: Api, opts: { now?: number; botUsername?: string } = {}): Promise<boolean> {
+  const chat = getSetting('ready_chat');
+  if (!chat) return false;
+  const now = opts.now ?? Date.now();
+  // Read before deciding: the threshold trigger is a question about the current
+  // number of ready wallets, and deciding it from ten-minute-old figures would
+  // announce a count the bot no longer believes.
+  await refreshBalances(now);
+  snapshot(now);
+  blockAt = now;
+  const t = totals();
+  const reason = dueAutoPost(now, t.wallets);
+  if (!reason) return false;
+  const chatId = Number(chat);
+  try {
+    posted = null;
+    await postTotals(api, chatId, { botUsername: opts.botUsername, isGroup: true, now, force: true });
+  } catch (err) {
+    console.warn('[ready] auto-post failed:', String((err as Error)?.message ?? err).slice(0, 160));
+    return false;
+  }
+  markAutoPost(reason, now, t.wallets);
+  console.log(`[ready] auto-posted (${reason}) · ${t.wallets} wallets`);
+  return true;
+}
+
+export function startReadyAutoPost(api: Api, botUsername?: string, intervalMs = 60_000): NodeJS.Timeout {
+  const t = setInterval(() => {
+    void readyAutoPostTick(api, { botUsername }).catch(() => {});
+  }, intervalMs);
+  t.unref?.();
+  return t;
+}
+
+
 // ---------------------------------------------------------------------------
 // Bot
 // ---------------------------------------------------------------------------
@@ -766,6 +926,187 @@ export function createBot(token = TELEGRAM_BOT_TOKEN): Bot {
     }
     const gone = removeWatch(userId, address);
     await ctx.reply(gone ? `stopped watching ${address.slice(0, 6)}…${address.slice(-4)}` : 'not watching that address');
+  });
+
+  // ------------------------------------------------------------ ready / tge
+  bot.command('ready', async (ctx) => {
+    const userId = ctx.from?.id;
+    // Bots and minutes-old accounts are ignored in silence. Answering either
+    // one turns the group into a place where saying /ready gets a reaction,
+    // which is the whole payoff for spamming it.
+    if (userId === undefined || ctx.from?.is_bot || joinedTooRecently(userId)) return;
+    const raw = (ctx.match ?? '').toString().trim();
+    const inGroup = ctx.chat?.type !== 'private';
+
+    // A wallet pasted in a group is deleted before anyone reads it, and nothing
+    // is posted in its place: an address in the channel is exactly what
+    // registering privately exists to avoid. Every word is checked, not just
+    // the first -- `/ready add 0x… label` typed in the group leaks the same
+    // address as `/ready 0x…` does.
+    if (inGroup && raw.split(/\s+/).some((w) => normaliseWallet(w))) {
+      try {
+        await ctx.api.deleteMessage(ctx.chat!.id, ctx.message!.message_id);
+      } catch (err) {
+        // No delete permission, or older than 48h. Still never echo it -- and
+        // this is worth a log line, because it means addresses are sitting in
+        // the group until an admin grants the bot delete rights.
+        console.warn('[ready] could not delete a pasted wallet:', String((err as Error)?.message ?? err).slice(0, 120));
+      }
+      const dm = dmChatFor(userId);
+      if (dm !== null) {
+        await ctx.api.sendMessage(dm, 'register in DM, never in the group — send /ready 0x… here');
+      }
+      return;
+    }
+
+    if (inGroup) {
+      await postTotals(ctx.api, ctx.chat!.id, { botUsername: usernameOf(ctx), isGroup: true });
+      return;
+    }
+
+    // ---- DM ----
+    const parts = raw.split(/\s+/).filter(Boolean);
+    const sub = parts[0]?.toLowerCase();
+
+    if (sub === 'add' || sub === 'remove' || sub === 'list' || sub === 'open') {
+      if (!isAdmin(userId)) return;
+      if (sub === 'list') {
+        const rows = allRows();
+        const csv = [
+          'wallet,balance_eth,source,label,invite_link,first_seen,last_checked',
+          ...rows.map((r) => [
+            r.wallet, (Number(r.balanceWei) / 1e18).toFixed(4), r.source,
+            JSON.stringify(r.label ?? ''), JSON.stringify(r.inviteLink ?? ''),
+            r.firstSeen, r.lastChecked,
+          ].join(',')),
+        ].join('\n');
+        await ctx.reply(rows.length ? csv : 'no wallets registered');
+        return;
+      }
+      if (sub === 'open') {
+        const on = parts[1]?.toLowerCase() === 'on';
+        setSetting('ready_open', on ? 'on' : 'off');
+        await ctx.reply(`self-registration ${on ? 'open' : 'closed'}`);
+        return;
+      }
+      if (sub === 'remove') {
+        await ctx.reply(removeExternal(parts[1] ?? '') ? 'removed' : 'no external wallet with that address');
+        return;
+      }
+      const res = await addExternal(parts[1] ?? '', parts.slice(2).join(' ') || 'external');
+      if (!res.ok) {
+        await ctx.reply(
+          res.reason === 'claimed' ? 'a member already registered that wallet'
+          : res.reason === 'contract' ? 'that is a contract, not a wallet'
+          : res.reason === 'low' ? `below the ${READY_MIN_ETH} ETH minimum`
+          : 'that is not an address',
+        );
+        return;
+      }
+      await ctx.reply(`added · ${(Number(res.balanceWei) / 1e18).toFixed(3)} ETH · ${totals().wallets} wallets ready`);
+      return;
+    }
+
+    if (!parts.length) {
+      const me = statusOf(userId);
+      await ctx.reply(
+        me
+          ? `you: READY · ${(Number(me.balanceWei) / 1e18).toFixed(2)} ETH · registered ${age(Math.floor(Date.now() / 1000) - me.firstSeen)} ago`
+          : 'not registered',
+      );
+      return;
+    }
+
+    if (!selfRegistrationOpen()) {
+      await ctx.reply('registration is handled by the team right now — ask an admin to add you');
+      return;
+    }
+
+    const res = await registerMember(userId, parts[0]!, { inviteLink: inviteOf(userId) });
+    if (!res.ok) {
+      await ctx.reply(
+        res.reason === 'malformed' ? 'that is not an address'
+        : res.reason === 'contract' ? 'that is a contract, not a wallet'
+        : res.reason === 'cooldown' ? `one registration per ${Math.round(REGISTER_COOLDOWN_MS / 60_000)} min — try again shortly`
+        : res.reason === 'closed' ? 'registration is closed'
+        : `not yet — ${(Number(res.balanceWei) / 1e18).toFixed(3)} ETH on Robinhood Chain, minimum ${READY_MIN_ETH}. ` +
+          'fastest: Maestro → /relay → Robinhood Chain, then /ready again.',
+      );
+      return;
+    }
+    await ctx.reply(
+      `READY · ${(Number(res.balanceWei) / 1e18).toFixed(2)} ETH on Robinhood Chain · ` +
+        `you are wallet #${totals().wallets}${res.replaced ? ' (replaced your previous one)' : ''}`,
+    );
+  });
+
+  bot.on('chat_member', (ctx) => {
+    const u = ctx.chatMember;
+    const joined = u.new_chat_member.status === 'member' || u.new_chat_member.status === 'restricted';
+    const wasOut = u.old_chat_member.status === 'left' || u.old_chat_member.status === 'kicked';
+    if (!joined || !wasOut || u.new_chat_member.user.is_bot) return;
+    // The link name is on the join event and nowhere else afterwards.
+    rememberJoin(u.new_chat_member.user.id, u.invite_link?.name ?? null);
+  });
+
+  bot.command('tge', async (ctx) => {
+    if (ctx.from?.is_bot) return;
+    await postTotals(ctx.api, ctx.chat!.id, {
+      withCountdown: true,
+      botUsername: usernameOf(ctx),
+      isGroup: ctx.chat?.type !== 'private',
+    });
+  });
+
+  bot.command('launch', async (ctx) => {
+    if (!isAdmin(ctx.from?.id)) return;
+    const parts = (ctx.match ?? '').toString().trim().split(/\s+/).filter(Boolean);
+    if (parts[0]?.toLowerCase() === 'clear') {
+      setSetting('launch_at', '');
+      await ctx.reply('launch time cleared');
+      return;
+    }
+    if (parts[0]?.toLowerCase() !== 'set' || !parts[1]) {
+      await ctx.reply('/launch set 2026-10-01T15:00Z   ·   /launch clear');
+      return;
+    }
+    const arg = parts.slice(1).join(' ');
+    // Accept a unix timestamp or anything Date can parse. Anything else is
+    // refused rather than stored as NaN and rendered as a countdown to nowhere.
+    const ts = /^\d+$/.test(arg) ? Number(arg) : Math.floor(Date.parse(arg) / 1000);
+    if (!Number.isFinite(ts) || ts <= 0) { await ctx.reply('could not read that time'); return; }
+    setSetting('launch_at', String(ts));
+    await ctx.reply(`launch set · ${new Date(ts * 1000).toISOString()} · ${countdownLine() ?? ''}`.trim());
+  });
+
+  bot.command('kols', async (ctx) => {
+    if (!isAdmin(ctx.from?.id)) return;
+    const n = Number((ctx.match ?? '').toString().trim());
+    if (!Number.isFinite(n) || n < 0) { await ctx.reply('/kols <n>'); return; }
+    setSetting('kols', String(Math.floor(n)));
+    await ctx.reply(`kols ${Math.floor(n)}`);
+  });
+
+  bot.command('gate', async (ctx) => {
+    if (!isAdmin(ctx.from?.id)) return;
+    const raw = (ctx.match ?? '').toString().trim();
+    const parts = raw.split(/\s+/).filter(Boolean);
+    if (parts[0]?.toLowerCase() === 'reset') {
+      setSetting('gate_announced', '');
+      await ctx.reply('gate reset');
+      return;
+    }
+    if (parts[0]?.toLowerCase() !== 'set') { await ctx.reply('/gate set members=300 kols=30 wallets=150 eth=100'); return; }
+    const applied: string[] = [];
+    for (const kv of parts.slice(1)) {
+      const [k, v] = kv.split('=');
+      const n = Number(v);
+      if (!k || !Number.isFinite(n)) continue;
+      if (!['members', 'kols', 'wallets', 'eth'].includes(k)) continue;
+      setSetting(`gate_${k}`, String(n));
+      applied.push(`${k}=${n}`);
+    }
+    await ctx.reply(applied.length ? `gate set · ${applied.join(' · ')}` : 'nothing set');
   });
 
   bot.command('filters', async (ctx) => {
@@ -996,8 +1337,10 @@ export async function startBot(): Promise<void> {
   const me = await bot.api.getMe();
 
   await bot.api.setMyCommands([
-    { command: 'scan', description: 'Score a pons v2 token launch' },
+    { command: 'scan', description: 'What the chain shows about a pons v2 launch' },
     { command: 'legend', description: 'What the markers on a card mean' },
+    { command: 'ready', description: 'How many wallets are ready for launch' },
+    { command: 'tge', description: 'Readiness totals and the countdown' },
     { command: 'stats', description: 'Index, cache and usage statistics' },
     { command: 'help', description: 'What this bot reports' },
   ]);
@@ -1025,5 +1368,12 @@ export async function startBot(): Promise<void> {
   startCacheReporter();
   startQuotaSweeper();
 
-  await bot.start({ allowed_updates: ['message', 'inline_query', 'callback_query'] });
+  startReadyAutoPost(bot.api, me.username);
+
+  // chat_member has to be asked for explicitly -- it is excluded from the
+  // default update set, and without it the invite-link attribution records
+  // nothing while looking like it works.
+  await bot.start({
+    allowed_updates: ['message', 'inline_query', 'callback_query', 'chat_member'],
+  });
 }

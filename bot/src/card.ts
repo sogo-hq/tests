@@ -45,7 +45,7 @@ function ratioStr(r: number | null, dp = 2): string {
   return r.toFixed(dp);
 }
 
-function age(seconds: number): string {
+export function age(seconds: number): string {
   if (seconds < 90) return `${seconds}s`;
   const m = seconds / 60;
   if (m < 90) return `${m.toFixed(0)}m`;

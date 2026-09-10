@@ -255,6 +255,43 @@ CREATE TABLE IF NOT EXISTS provider_limits (
   discovered_at INTEGER NOT NULL
 );
 
+-- Wallets registered as ready for launch.
+--
+-- Two sources. A member registers their own in a DM; an admin adds an external
+-- one for somebody ready but not in the group. A wallet exists once across
+-- both, and the member record wins -- see claimWallet().
+--
+-- No wallet, label or user id ever appears in a group message. This table is
+-- read for totals and for the admin CSV, and for nothing else.
+CREATE TABLE IF NOT EXISTS ready_wallets (
+  wallet       TEXT PRIMARY KEY,
+  user_id      INTEGER,
+  label        TEXT,
+  source       TEXT NOT NULL CHECK (source IN ('member','external')),
+  balance_wei  TEXT NOT NULL DEFAULT '0',
+  invite_link  TEXT,
+  first_seen   INTEGER NOT NULL,
+  last_checked INTEGER NOT NULL
+);
+-- One wallet per Telegram user; re-registering replaces rather than adds.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_ready_user
+  ON ready_wallets(user_id) WHERE user_id IS NOT NULL;
+
+-- Small key/value for the launch settings an admin sets: gate targets, the kol
+-- count, whether self-registration is open, the launch time.
+CREATE TABLE IF NOT EXISTS ready_settings (
+  key   TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
+
+-- One row per day, so "since yesterday" is a comparison against a recorded
+-- fact rather than a number held in memory across a deploy.
+CREATE TABLE IF NOT EXISTS ready_snapshots (
+  day     INTEGER PRIMARY KEY,
+  wallets INTEGER NOT NULL,
+  wei     TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS cursors (
   name         TEXT PRIMARY KEY,
   block_number INTEGER NOT NULL,
