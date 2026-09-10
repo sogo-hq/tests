@@ -97,6 +97,14 @@ export interface ScanResult {
    */
   earlySells: import('./metrics/earlysells.js').EarlySells | null;
   deployerActivity: DeployerActivity | null;
+  /**
+   * Whether the whole-life Transfer walk has ever completed for this token.
+   *
+   * Distinguishes "the walk ran and found nothing" from "nobody has walked it",
+   * which read identically as "could not be read" and reported a failure that
+   * had not happened.
+   */
+  holderWalkComplete: boolean;
 }
 
 /**
@@ -422,6 +430,9 @@ async function scanTokenInner(token: string, requestedBy?: number): Promise<Scan
   // Transfer log the holder reading walks, so the background refresh computes
   // both and this costs nothing.
   const deployerActivity = readStoredDeployerActivity<DeployerActivity>(reads.token);
+  // Stored balances exist only after a completed whole-life walk, so their
+  // presence is the record of whether anyone has looked.
+  const holderWalkComplete = hasStoredBalances(reads.token);
   // Both served from the store the background walk fills; neither costs the scan a read.
   const earlySells = readStoredEarlySells<EarlySells>(reads.token);
 
@@ -550,6 +561,7 @@ async function scanTokenInner(token: string, requestedBy?: number): Promise<Scan
         // itself as the first scan.
         firstScan: firstScan(reads.token, existing.id),
         deployerActivity: null,
+        holderWalkComplete: false,
         launchBlock: launch.block,
         launchedAt: launchedAtExact,
         ageSeconds,
@@ -641,6 +653,7 @@ async function scanTokenInner(token: string, requestedBy?: number): Promise<Scan
     // very first scan must find nothing and print nothing.
     firstScan: firstScan(reads.token, scanId),
     deployerActivity,
+    holderWalkComplete,
     earlySells,
     launchBlock: launch.block,
     launchedAt: launchedAtExact,

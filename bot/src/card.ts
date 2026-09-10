@@ -173,7 +173,7 @@ function renderEarlyCard(r: ScanResult): string {
   L.push(`<b>${sym}</b> — ${name}`);
   L.push(`<code>${k.token}</code>`);
   L.push(`<b>launched ${earlySeconds(r)} ago — too early for traction</b>`);
-  L.push(`phase ${esc(k.phaseName)} · pair ${esc(quote)}`);
+  L.push(`${esc(phaseLabel(k.phaseName))} · pair ${esc(quote)}`);
   L.push('');
   L.push(EARLY_TRACTION_LINE);
   // What IS measurable this early, stated so the two renderings of one scan
@@ -189,7 +189,7 @@ function renderEarlyCard(r: ScanResult): string {
   const n = r.creation.snipeExemptionCount;
   L.push(
     n === null
-      ? '  ❔ snipe-tax exemptions: creation transaction not decoded — not confirmed clean'
+      ? `  ${MARK_GLYPH.undetermined} snipe-tax exemptions: creation transaction not decoded — not confirmed clean`
       : n > 0
         ? `  🚩 snipe-tax exemptions: ${n} wallet${n === 1 ? '' : 's'} pre-exempted from the opening tax`
         : '  · snipe-tax exemptions: none — no wallets pre-exempted at creation',
@@ -202,7 +202,7 @@ function renderEarlyCard(r: ScanResult): string {
     hasCreatorLaunchBuy(r)
       ? `  🚩 creator opening buy: ${fmtUnits(r.creation.launchBuyAmount!, k.pairDecimals)} ${esc(quote)} bought in the launch transaction`
       : creationUndecoded(r)
-        ? '  ❔ creator opening buy: unknown — the creation transaction could not be decoded'
+        ? `  ${MARK_GLYPH.undetermined} creator opening buy: unknown — the creation transaction could not be decoded`
         : '  · creator opening buy: none in the launch transaction',
   );
   L.push('');
@@ -210,10 +210,22 @@ function renderEarlyCard(r: ScanResult): string {
   L.push(`<b>FLAGS  ${f.raised} of ${f.total}</b>${f.unknown ? ` · ${f.unknown} undetermined` : ''}`);
   for (const fl of f.flags) {
     if (fl.key === 'snipe_exemptions') continue; // already stated above
-    const mark = fl.state === 'raised' ? '🚩' : fl.state === 'unknown' ? '❔' : '·';
+    // The same three states the quick card uses: a finding, an undetermined
+    // check, or no marker at all. /full had its own vocabulary -- a question
+    // mark for undetermined and a bullet for "nothing found" -- and a bullet on
+    // a passing check reads as a mark of approval, which is the one thing this
+    // may not do.
+    const mark = fl.state === 'raised'
+      ? MARK_GLYPH.finding
+      : fl.state === 'unknown'
+        ? MARK_GLYPH.undetermined
+        : ' ';
     L.push(`  ${mark} ${esc(fl.label)}: ${esc(fl.detail)}`);
   }
-  L.push(`  ${f.buyback.enabled ? '✅' : '·'} ${esc(f.buyback.detail)}`);
+  // No marker either way. A green tick on "buyback enabled" renders a fact as
+  // an endorsement -- it is a property of the launch, not a finding in its
+  // favour, and the card does not hand out approval.
+  L.push(`    ${esc(f.buyback.detail)}`);
   L.push('');
 
   // Worst flag only. The spec replaces the traction block with a single line and
@@ -224,6 +236,26 @@ function renderEarlyCard(r: ScanResult): string {
   L.push(`<a href="${EXPLORER_URL}/address/${k.token}">token</a> · <a href="${EXPLORER_URL}/address/${k.curve}">curve</a> · <a href="${EXPLORER_URL}/address/${k.deployer}">deployer</a>`);
   L.push(`<i>${DISCLAIMER}</i>`);
   return clampMessage(L.join('\n'));
+}
+
+/**
+ * The phase, in words a reader knows.
+ *
+ * "phase PoolCreated" is the enum member: it names an internal state machine,
+ * not the thing that happened. Everything past NotGraduated means the curve was
+ * swept into the v4 pool, which is what "graduated" means to anyone reading.
+ */
+export function phaseLabel(phaseName: string): string {
+  return phaseName === 'NotGraduated' ? 'on the curve' : 'graduated';
+}
+
+/** How long after launch it graduated, when both times are known. */
+export function graduatedAtLine(r: ScanResult): string | null {
+  const { sweptAt, phaseName } = r.reads;
+  if (phaseName === 'NotGraduated' || !sweptAt) return null;
+  const after = sweptAt - Math.floor(r.launchedAt ?? 0);
+  if (!Number.isFinite(after) || after <= 0) return '  graduated';
+  return `  graduated at +${age(after)}`;
 }
 
 export function renderCard(r: ScanResult): string {
@@ -237,7 +269,7 @@ export function renderCard(r: ScanResult): string {
   const L: string[] = [];
   L.push(`<b>${sym}</b> — ${name}`);
   L.push(`<code>${k.token}</code>`);
-  L.push(`launched ${age(r.ageSeconds)} ago · phase ${esc(k.phaseName)} · pair ${esc(quote)}`);
+  L.push(`launched ${age(r.ageSeconds)} ago · ${esc(phaseLabel(k.phaseName))} · pair ${esc(quote)}`);
   L.push('');
 
   const windowNote = t.windowTruncated
@@ -270,10 +302,26 @@ export function renderCard(r: ScanResult): string {
   L.push(`  buyer growth: ${w.uniqueBuyers10m} at +10 min → ${w.uniqueBuyers30m} at +${num(t.windowMinutes, 0)} min${w.buyerGrowthRatio !== null ? ` (${ratioStr(w.buyerGrowthRatio)}x)` : ''}`);
   L.push(`  buy/sell tx: ${w.buyTxCount}/${w.sellTxCount}${w.buySellRatio !== null ? ` (${ratioStr(w.buySellRatio)}:1)` : w.buyTxCount ? ' (no sells)' : ''}`);
   L.push(`  median buy: ${fmtUnits(w.medianBuySize, k.pairDecimals)} ${esc(quote)}`);
-  L.push(`  graduation progress: ${num(k.progressPct, 3)}%`);
-  L.push(`  progress velocity: ${num(w.progressVelocityPer10m, 3)}% per 10 min`);
-  if (w.peakProgressPct > k.progressPct + 0.01)
-    L.push(`  peak progress in window: ${num(w.peakProgressPct, 3)}% (since retraced)`);
+  /**
+   * Progress toward a threshold that has already been crossed is not a
+   * measurement of anything.
+   *
+   * A graduated token read "graduation progress 0.000%" directly under "curve
+   * at 100% of graduation": the reserve is zero because the curve was swept
+   * into the pool, so the ratio collapses. Both numbers were arithmetically
+   * correct and together they said nothing true. After graduation the fact that
+   * matters is when it happened.
+   */
+  const graduated = k.phaseName !== 'NotGraduated';
+  if (graduated) {
+    const when = graduatedAtLine(r);
+    if (when) L.push(when);
+  } else {
+    L.push(`  graduation progress: ${num(k.progressPct, 3)}%`);
+    L.push(`  progress velocity: ${num(w.progressVelocityPer10m, 3)}% per 10 min`);
+    if (w.peakProgressPct > k.progressPct + 0.01)
+      L.push(`  peak progress in window: ${num(w.peakProgressPct, 3)}% (since retraced)`);
+  }
   if (w.roundTrippers > 0)
     L.push(`  round-trippers: ${w.roundTrippers} of ${w.uniqueBuyers30m} buyers also sold`);
   if (w.forwarderBuys > 0)
@@ -286,15 +334,27 @@ export function renderCard(r: ScanResult): string {
   // seconds of a launch. Unreadable transfers render as undetermined here,
   // never as "unchanged" -- not having looked is not the same as nothing
   // having moved.
-  L.push(`  ${esc(deployerActivityLine(r.deployerActivity))}`);
+  L.push(`  ${esc(deployerActivityLine(r.deployerActivity, r.holderWalkComplete))}`);
   L.push('');
 
   L.push(`<b>FLAGS  ${f.raised} of ${f.total}</b>${f.unknown ? ` · ${f.unknown} undetermined` : ''}`);
   for (const fl of f.flags) {
-    const mark = fl.state === 'raised' ? '🚩' : fl.state === 'unknown' ? '❔' : '·';
+    // The same three states the quick card uses: a finding, an undetermined
+    // check, or no marker at all. /full had its own vocabulary -- a question
+    // mark for undetermined and a bullet for "nothing found" -- and a bullet on
+    // a passing check reads as a mark of approval, which is the one thing this
+    // may not do.
+    const mark = fl.state === 'raised'
+      ? MARK_GLYPH.finding
+      : fl.state === 'unknown'
+        ? MARK_GLYPH.undetermined
+        : ' ';
     L.push(`  ${mark} ${esc(fl.label)}: ${esc(fl.detail)}`);
   }
-  L.push(`  ${f.buyback.enabled ? '✅' : '·'} ${esc(f.buyback.detail)}`);
+  // No marker either way. A green tick on "buyback enabled" renders a fact as
+  // an endorsement -- it is a property of the launch, not a finding in its
+  // favour, and the card does not hand out approval.
+  L.push(`    ${esc(f.buyback.detail)}`);
   L.push('');
 
   const worst = f.worst

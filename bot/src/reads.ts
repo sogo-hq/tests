@@ -17,6 +17,8 @@ export interface TokenReads {
   buybackEnabled: boolean;
   phase: number;
   phaseName: string;
+  /** Unix seconds the launch graduated, or 0 while still on the curve. */
+  sweptAt: number;
   exists: boolean;
 
   quoteReserve: bigint;
@@ -196,6 +198,8 @@ export async function readToken(tokenAddr: string): Promise<TokenReads | null> {
     buybackEnabled: Boolean(info.buybackEnabled),
     phase: Number(info.phase),
     phaseName: PHASE[Number(info.phase)] ?? `Unknown(${info.phase})`,
+    // When the curve was swept into the v4 pool. 0 while still on the curve.
+    sweptAt: Number(info.sweptAt ?? 0n),
     exists: true,
 
     quoteReserve,

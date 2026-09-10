@@ -35,6 +35,7 @@ export function makeScan(over = {}) {
       progressPct: over.progressPct ?? 0,
       mcapInQuote: 'mcapInQuote' in over ? over.mcapInQuote : 0,
       phaseName: over.phaseName ?? 'NotGraduated',
+      sweptAt: over.sweptAt ?? 0,
       graduationThreshold: over.graduationThreshold ?? 4_200000000000000000n,
       realQuoteReserve: over.realQuoteReserve ?? 0n,
       ...(over.reads ?? {}),
@@ -73,6 +74,9 @@ export function makeScan(over = {}) {
             },
     },
     earlySells: over.earlySells ?? null,
+    // A fixture has walked nothing, which is the honest default: the deployer
+    // line then says "not read yet" rather than claiming a read that failed.
+    holderWalkComplete: over.holderWalkComplete ?? false,
     flags: {
       flags,
       raised,

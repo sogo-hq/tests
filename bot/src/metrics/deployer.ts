@@ -86,8 +86,23 @@ export function deployerActivityFrom(
 }
 
 /** The /full line. Null when it could not be read. */
-export function deployerActivityLine(a: DeployerActivity | null): string {
-  if (!a) return 'deployer: transfers could not be read — undetermined';
+export function deployerActivityLine(a: DeployerActivity | null, everRead = true): string {
+  /**
+   * "Could not be read" claims an attempt that may never have happened.
+   *
+   * The deployer's movements come out of the whole-life Transfer walk, and that
+   * walk is background work: a token nobody has walked yet has no activity
+   * stored, which is not the same as a walk that ran and found nothing. Saying
+   * "could not be read" for the first case reports a failure that did not
+   * occur, and it reads as final when the answer is simply pending.
+   *
+   * `everRead` is whether the walk has completed for this token at all.
+   */
+  if (!a) {
+    return everRead
+      ? 'deployer: transfers could not be read — undetermined'
+      : 'deployer: not read yet — the holder walk has not run for this token';
+  }
   if (a.unchanged) {
     return `deployer: holds ${a.heldPct.toFixed(1)}% of supply, unchanged since launch`;
   }

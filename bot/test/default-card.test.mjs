@@ -587,11 +587,26 @@ test('deployer activity is stated as facts, never as a judgement', async () => {
 
 test('unreadable deployer transfers are undetermined, never "unchanged"', async () => {
   const { renderCardText } = await import('../dist/card.js');
-  const l = renderCardText(makeScan({ ageSeconds: 3600, deployerActivity: null }))
+  const line = (over) => renderCardText(makeScan({ ageSeconds: 3600, deployerActivity: null, ...over }))
     .split('\n').find((x) => /deployer:/.test(x)).trim();
-  assert.match(l, /undetermined$/);
-  // Not having looked is not the same as nothing having moved.
-  assert.ok(!/unchanged|holds/.test(l), `an unread deployer claimed a holding: ${l}`);
+
+  // Two ways to have no activity, and they are not the same claim. A walk that
+  // RAN and found nothing is undetermined; a walk that never ran has not failed
+  // at all, and saying "could not be read" reports an attempt that never
+  // happened.
+  const walked = line({ holderWalkComplete: true });
+  assert.match(walked, /undetermined$/);
+  assert.match(walked, /could not be read/);
+
+  const neverWalked = line({ holderWalkComplete: false });
+  assert.match(neverWalked, /not read yet/);
+  assert.doesNotMatch(neverWalked, /could not be read/,
+    'it claimed a read that never happened');
+
+  // Neither may claim a holding: not having looked is not nothing having moved.
+  for (const l of [walked, neverWalked]) {
+    assert.ok(!/unchanged|holds/.test(l), `an unread deployer claimed a holding: ${l}`);
+  }
 });
 
 test('deployer activity stays out of the default card', async () => {
