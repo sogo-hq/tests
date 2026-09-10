@@ -73,17 +73,13 @@ export async function resolveLaunch(address: string): Promise<Resolution> {
 
   // 3. Ask the contract what token it serves. One call, on the miss path only.
   //    A non-curve address simply reverts, which is the answer.
+  let curveToken: Address | null = null;
   try {
-    const token = (await client.readContract({
+    curveToken = (await client.readContract({
       address: addr as Address,
       abi: curveAbi,
       functionName: 'token',
     })) as Address;
-    // The factory still decides. Without this, any contract with a token()
-    // getter would be accepted as a pons launch.
-    if (token && (await isLaunch(token))) {
-      return { token: token.toLowerCase(), via: 'curve-call', pastedWas: 'curve' };
-    }
   } catch (err) {
     // Not a curve, or not readable. Neither is a launch, and neither is an
     // error worth surfacing to the user: the caller already has a real answer
@@ -94,6 +90,24 @@ export async function resolveLaunch(address: string): Promise<Resolution> {
       `[resolve] ${addr.slice(0, 10)} is not a readable curve:`,
       String((err as any)?.shortMessage ?? (err as Error)?.message ?? err).slice(0, 80),
     );
+    return { token: null, via: 'none' };
+  }
+
+  /**
+   * Deliberately OUTSIDE that catch.
+   *
+   * The first version had this inside it, so a factory read that FAILED was
+   * swallowed and returned as "no launch" -- which the card renders as "not a
+   * pons v2 launch", a confident statement about a chain we had just failed to
+   * reach. That is the exact mistake reads.ts:118 exists to prevent, and it had
+   * been made twice before in this codebase. A failure here must reach the
+   * caller as a failure, so the scan says "couldn't read" instead.
+   *
+   * The factory still decides: without this call, any contract with a token()
+   * getter would be accepted as a pons launch.
+   */
+  if (curveToken && (await isLaunch(curveToken))) {
+    return { token: curveToken.toLowerCase(), via: 'curve-call', pastedWas: 'curve' };
   }
 
   return { token: null, via: 'none' };

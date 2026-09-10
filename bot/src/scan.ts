@@ -304,10 +304,16 @@ async function scanTokenInner(token: string, requestedBy?: number): Promise<Scan
         `resolved to ${resolved.token.slice(0, 10)} via ${resolved.via}`,
     );
     reads = await timer.time('reads', () => readToken(resolved.token!));
-    // The factory confirmed the token during resolution, so a null here means
-    // it stopped answering between the two calls -- which is a failed read, not
-    // a fact about the chain, and readToken throws for that.
-    if (!reads) return null;
+    if (!reads) {
+      // Resolution already had the factory confirm this token exists, so a
+      // null here is a contradiction, not a finding. Returning null would
+      // render "not a pons v2 launch" for a token the factory affirmed one
+      // call earlier; thrown, it surfaces as "couldn't read", which is what
+      // actually happened.
+      throw new Error(
+        `factory affirmed ${resolved.token} during resolution and denied it on the next read`,
+      );
+    }
   }
 
   const head = await timer.time('head', () => client.getBlockNumber());

@@ -147,3 +147,35 @@ test('an address that is not a curve at all is simply not a launch', async () =>
     assert.equal(r.via, 'none');
   } finally { globalThis.fetch = saved; }
 });
+
+test('a factory read that FAILS is never rendered as "no launch"', async () => {
+  // The first version of resolveLaunch had the factory confirmation inside the
+  // same try/catch as the curve call, so an RPC failure there was swallowed and
+  // returned as "no launch" -- which the card renders as "not a pons v2 launch",
+  // a confident statement about a chain we had just failed to reach.
+  //
+  // 307 passing tests did not catch it. This is the one that does.
+  const saved = globalThis.fetch;
+  let factoryCalls = 0;
+  globalThis.fetch = async (_url, init) => {
+    const body = JSON.parse(init.body);
+    const reply = (v) => new Response(JSON.stringify({ jsonrpc: '2.0', id: body.id, ...v }),
+      { headers: { 'content-type': 'application/json' } });
+    if (body.method !== 'eth_call') return reply({ result: '0x' });
+    const to = body.params[0].to.toLowerCase();
+    if (to === '0x7ed598bcef8bd9edd8c97a195c6d13f40801ec7e') {
+      // The factory is unreachable. Not an answer — an absence of one.
+      factoryCalls++;
+      return new Response('upstream connect error', { status: 502 });
+    }
+    return reply({ result: encodeAbiParameters([{ type: 'address' }], [TOKEN]) });
+  };
+  try {
+    await assert.rejects(
+      () => resolveLaunch(CURVE),
+      'a failed factory read must reach the caller as a failure, so the scan can say ' +
+        '"couldn\'t read" instead of asserting the token is not a pons launch',
+    );
+    assert.ok(factoryCalls > 0, 'the factory was never asked, so this proves nothing');
+  } finally { globalThis.fetch = saved; }
+});
