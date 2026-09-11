@@ -139,6 +139,13 @@ export function carriesNonce(input: string, nonce: string): boolean {
   return hex.includes(asUtf8);
 }
 
+/** The write half of a link, shared with the inbound transfer poller. */
+export function linkCommitted(
+  userId: number, wallet: string, method: 'signature' | 'transfer', now: number,
+): boolean {
+  return commit(userId, wallet, method, now).ok;
+}
+
 function commit(userId: number, wallet: string, method: 'signature' | 'transfer', now: number): LinkResult {
   if (!isAddress(wallet, { strict: false })) return { ok: false, reason: 'malformed' };
   // One wallet, one holder. Without this, one whale's balance grants a tier to
@@ -159,58 +166,4 @@ function commit(userId: number, wallet: string, method: 'signature' | 'transfer'
 
 export function unlink(userId: number): boolean {
   return db.prepare('DELETE FROM holder_links WHERE user_id = ?').run(userId).changes > 0;
-}
-
-// ------------------------------------------------------------- the poller
-
-/**
- * Watch for verify transfers, but only while somebody is waiting for one.
- *
- * There is no eth_getLogs for a plain ETH transfer, so this reads whole blocks
- * and filters by recipient. At a 0.1 s block time that is expensive, which is
- * why it does nothing at all unless a challenge is outstanding, and why the
- * command tells the user that pasting the transaction hash is instant. The
- * cursor means a restart does not re-read blocks it has already seen.
- */
-export const POLL_MAX_BLOCKS = Number(process.env.HOLDER_POLL_BLOCKS || 300) || 300;
-
-export async function pollVerifyTransfers(now = Date.now()): Promise<number> {
-  const pending = outstandingNonces(now);
-  if (!pending.length) return 0;
-  const to = verifyAddress();
-  if (!to) return 0;
-
-  let head: bigint;
-  try {
-    head = await client.getBlockNumber({ cacheTime: 0 });
-  } catch (err) {
-    console.warn('[holder] head unreadable:', String((err as Error)?.message ?? err).slice(0, 100));
-    return 0;
-  }
-  const stored = BigInt(getSetting('holder_poll_block') || '0');
-  // A cold cursor starts at the head rather than at genesis: a challenge issued
-  // now cannot have been paid before it existed.
-  const from = stored > 0n ? stored + 1n : head;
-  if (from > head) return 0;
-  const to_ = head - from >= BigInt(POLL_MAX_BLOCKS) ? from + BigInt(POLL_MAX_BLOCKS) - 1n : head;
-
-  let linked = 0;
-  try {
-    for (let b = from; b <= to_; b++) {
-      const block = await client.getBlock({ blockNumber: b, includeTransactions: true });
-      for (const tx of block.transactions as any[]) {
-        if (String(tx.to ?? '').toLowerCase() !== to.toLowerCase()) continue;
-        if (BigInt(tx.value ?? 0n) < VERIFY_MIN_WEI) continue;
-        const match = pending.find((p) => carriesNonce(String(tx.input ?? '0x'), p.nonce));
-        if (!match) continue;
-        const res = commit(match.userId, String(tx.from).toLowerCase(), 'transfer', now);
-        if (res.ok) linked++;
-      }
-    }
-  } catch (err) {
-    console.warn('[holder] poll failed:', String((err as Error)?.message ?? err).slice(0, 120));
-    return linked;
-  }
-  setSetting('holder_poll_block', to_.toString());
-  return linked;
 }

@@ -8,11 +8,25 @@ import { indexHealth, agoWords, type IndexHealth } from './indexer/health.js';
 import { providerLimitLine } from './providerlimits.js';
 import {
   addWatch, listWatches, removeWatch, countWatches, rememberDm, dmChatFor, MAX_WATCHES,
+  TIER_WATCH_LIMIT,
   addFilterWatch, listFilterWatches, removeFilterWatch,
 } from './watch.js';
 import { isFilterKey, filterDef, filterRates, rateLine } from './filters.js';
 import { LEGEND, claimLegend } from './legend.js';
 import { age } from './card.js';
+import {
+  tierOf, atLeast, thresholds, setThreshold, setVitalsToken, vitalsToken,
+  grant, revokeGrant, linkedWallet, type Tier,
+} from './tiers.js';
+import { issueNonce, linkMessage, linkBySignature, linkByTxHash, unlink, verifyAddress } from './holder.js';
+import {
+  subscribe as feedSubscribe, unsubscribe as feedUnsubscribe, setPaused, setFilters,
+  subOf, parseFilters, describeFilters, behindCount, startFeedLoop,
+} from './feed.js';
+import {
+  premiumPayAddress, expectPayment, creditPayment, PREMIUM_DAYS, PREMIUM_PRICE_WEI,
+  startInboundLoop,
+} from './inbound.js';
 import {
   registerMember, addExternal, removeExternal, statusOf, allRows, refreshBalances,
   totals, snapshot, selfRegistrationOpen, setSetting, getSetting, getNumber, normaliseWallet,
@@ -151,6 +165,8 @@ const HELP = [
   '  • /watch filter <name>: when a new launch has a shape you picked',
   '  • /filters lists the filters and how often each fires',
   '  • /watching lists your subscriptions, /unwatch <address|filter> removes one',
+  '',
+  'holding $VITALS unlocks access, not yield. tiers: 250k, 1M, 10M.',
   '',
   'one paid line at the bottom funds this. it never touches what a card says,',
   'and it always points at a scan. /sponsor for the numbers.',
@@ -936,7 +952,18 @@ export function createBot(token = TELEGRAM_BOT_TOKEN): Bot {
   });
 
   bot.command(['start', 'help'], async (ctx) => {
-    await ctx.reply(HELP.replace(/BOTNAME/g, usernameOf(ctx) ?? 'bot'), {
+    // Days remaining, when there are any. Nothing is said to somebody who has
+    // no grant: a line reading "0 days" is an advert, not a status.
+    let text = HELP.replace(/BOTNAME/g, usernameOf(ctx) ?? 'bot');
+    const userId = ctx.from?.id;
+    if (userId !== undefined && ctx.chat?.type === 'private') {
+      const r = await tierOf(userId);
+      if (r.state === 'ok' && r.grantUntil) {
+        const days = Math.max(0, Math.ceil((r.grantUntil - Date.now()) / 86_400_000));
+        if (days > 0) text += `\n\npremium: ${days} day${days === 1 ? '' : 's'} remaining`;
+      }
+    }
+    await ctx.reply(text, {
       // No preview: the footer carries a domain, and a link card would push the
       // text off the first screen.
       link_preview_options: { is_disabled: true },
@@ -944,7 +971,6 @@ export function createBot(token = TELEGRAM_BOT_TOKEN): Bot {
     // The markers mean nothing to somebody seeing them for the first time, and
     // the one thing a card cannot convey by itself is that a missing marker is
     // not an all-clear. Said once, on the way in.
-    const userId = ctx.from?.id;
     if (userId !== undefined && claimLegend(userId)) {
       await ctx.reply(LEGEND, { link_preview_options: { is_disabled: true } });
     }
@@ -1032,9 +1058,9 @@ export function createBot(token = TELEGRAM_BOT_TOKEN): Bot {
         );
         return;
       }
-      const res = addFilterWatch(userId, name, dm);
+      const res = addFilterWatch(userId, name, dm, undefined, await watchLimit(userId));
       if ('reason' in res && res.reason === 'limit') {
-        await ctx.reply(`that is ${res.count} watches, which is the limit. /unwatch one first.`);
+        await ctx.reply(await limitLine(userId, res.count));
         return;
       }
       if ('reason' in res) {
@@ -1067,9 +1093,9 @@ export function createBot(token = TELEGRAM_BOT_TOKEN): Bot {
       return;
     }
 
-    const res = addWatch(userId, kind, address, dm);
+    const res = addWatch(userId, kind, address, dm, undefined, await watchLimit(userId));
     if (!res.ok && res.reason === 'limit') {
-      await ctx.reply(`that is ${res.count} watches, which is the limit. /unwatch one first.`);
+      await ctx.reply(await limitLine(userId, res.count));
       return;
     }
     if (!res.ok) {
@@ -1118,6 +1144,338 @@ export function createBot(token = TELEGRAM_BOT_TOKEN): Bot {
     }
     const gone = removeWatch(userId, address);
     await ctx.reply(gone ? `stopped watching ${address.slice(0, 6)}…${address.slice(-4)}` : 'not watching that address');
+  });
+
+  // ------------------------------------------------------------------ tiers
+
+  /** What a gated command says when it cannot answer, rather than refusing. */
+  const tierLine = async (userId: number): Promise<{ tier: Tier; note: string | null }> => {
+    const r = await tierOf(userId);
+    if (r.state === 'unlinked') {
+      return { tier: 'none', note: 'link a wallet first: /holder link' };
+    }
+    if (r.state === 'undetermined') {
+      // A check that did not run is not a check you failed.
+      return { tier: 'none', note: `${r.reason}. try again` };
+    }
+    return { tier: r.tier, note: null };
+  };
+
+  /**
+   * How many targets this user may watch.
+   *
+   * Nobody is ever cut back: somebody holding twenty watches from before these
+   * limits existed keeps all twenty, and the limit only refuses a NEW one. A
+   * cap is not a confiscation.
+   */
+  const watchLimit = async (userId: number): Promise<number> => {
+    const r = await tierOf(userId);
+    // A tier that could not be read must not silently demote somebody to the
+    // free allowance, so an undetermined answer keeps the old flat limit.
+    if (r.state === 'undetermined') return MAX_WATCHES;
+    const tier = r.state === 'ok' ? r.tier : 'none';
+    return TIER_WATCH_LIMIT[tier] ?? MAX_WATCHES;
+  };
+
+  const limitLine = async (userId: number, count: number): Promise<string> => {
+    const r = await tierOf(userId);
+    const tier = r.state === 'ok' ? r.tier : 'none';
+    const more = tier === 'none'
+      ? ` ${thresholds().watch.toLocaleString()} $VITALS held raises it to ${TIER_WATCH_LIMIT.watch}.`
+      : tier === 'watch'
+        ? ` ${thresholds().premium.toLocaleString()} $VITALS held removes the limit.`
+        : '';
+    return `that is ${count} watches, which is your limit. /unwatch one first.${more}`;
+  };
+
+  bot.command('token', async (ctx) => {
+    if (!isAdmin(ctx.from?.id)) return;
+    const arg = (ctx.match ?? '').toString().trim().split(/\s+/).filter(Boolean);
+    if (arg[0]?.toLowerCase() !== 'set' || !arg[1]) {
+      const cur = vitalsToken();
+      await ctx.reply(cur ? `$VITALS: ${cur}` : 'no $VITALS token set. /token set 0x…');
+      return;
+    }
+    const set = setVitalsToken(arg[1]);
+    await ctx.reply(set ? `$VITALS: ${set}` : 'that is not an address');
+  });
+
+  bot.command('tiers', async (ctx) => {
+    const t = thresholds();
+    const arg = (ctx.match ?? '').toString().trim().split(/\s+/).filter(Boolean);
+    if (arg[0]?.toLowerCase() === 'set') {
+      if (!isAdmin(ctx.from?.id)) return;
+      const res = setThreshold(arg[1] ?? '', arg[2] ?? '');
+      if (res.ok) {
+        await ctx.reply(`${res.tier}: ${res.from.toLocaleString()} → ${res.to.toLocaleString()}`);
+        return;
+      }
+      await ctx.reply(
+        res.reason === 'raise'
+          ? `a threshold can only go down. ${res.current.toLocaleString()} is the current one, ` +
+            'and raising it would take access from people who bought to have it'
+          : res.reason === 'unknown-tier' ? 'which tier: watch, premium or desk'
+          : 'that is not a number',
+      );
+      return;
+    }
+    const me = await tierLine(ctx.from?.id ?? 0);
+    await ctx.reply([
+      `watch    ${t.watch.toLocaleString()} $VITALS`,
+      `premium  ${t.premium.toLocaleString()} $VITALS`,
+      `desk     ${t.desk.toLocaleString()} $VITALS`,
+      '',
+      me.note ?? `you: ${me.tier}`,
+    ].join('\n'));
+  });
+
+  bot.command('holder', async (ctx) => {
+    const userId = ctx.from?.id;
+    if (userId === undefined || ctx.chat?.type !== 'private') return;
+    const parts = (ctx.match ?? '').toString().trim().split(/\s+/).filter(Boolean);
+    const sub = parts[0]?.toLowerCase();
+
+    if (sub === 'unlink') {
+      await ctx.reply(unlink(userId) ? 'wallet unlinked' : 'no wallet linked');
+      return;
+    }
+    if (sub === 'link' && parts[1]) {
+      // A signature or a transaction hash, told apart by length.
+      const arg = parts[1];
+      const res = /^0x[0-9a-fA-F]{64}$/.test(arg)
+        ? await linkByTxHash(userId, arg)
+        : await linkBySignature(userId, arg);
+      if (res.ok) {
+        const t = await tierLine(userId);
+        await ctx.reply(`linked ${res.wallet}\ntier: ${t.tier}`);
+        return;
+      }
+      await ctx.reply(
+        res.reason === 'no-nonce' ? 'that code has expired. /holder link for a new one'
+        : res.reason === 'taken' ? 'that wallet is already linked to another account'
+        : res.reason === 'unreadable' ? `could not check that: ${res.detail ?? 'unknown'}. try again`
+        : `that did not verify${res.detail ? `: ${res.detail}` : ''}`,
+      );
+      return;
+    }
+    if (sub === 'link') {
+      const nonce = issueNonce(userId);
+      const verify = verifyAddress();
+      const lines = [
+        'prove the wallet is yours. sign this exact message in your wallet:',
+        '',
+        linkMessage(nonce),
+        '',
+        'then send: /holder link <signature>',
+      ];
+      if (verify) {
+        lines.push(
+          '',
+          'custodial wallet that cannot sign? send 0.0001 ETH on Robinhood Chain to',
+          verify,
+          `with ${nonce} in the data field, then send: /holder link <tx hash>`,
+        );
+      }
+      await ctx.reply(lines.join('\n'));
+      return;
+    }
+
+    const wallet = linkedWallet(userId);
+    const t = await tierLine(userId);
+    await ctx.reply(wallet ? `${wallet}\ntier: ${t.tier}` : 'no wallet linked. /holder link');
+  });
+
+  // ------------------------------------------------------------------- feed
+
+  bot.command('feed', async (ctx) => {
+    const userId = ctx.from?.id;
+    if (userId === undefined || ctx.chat?.type !== 'private') {
+      if (ctx.chat?.type !== 'private') {
+        await replyEphemeral(ctx, 'the feed is a DM. message me directly.', {});
+      }
+      return;
+    }
+    const raw = (ctx.match ?? '').toString().trim();
+    const parts = raw.split(/\s+/).filter(Boolean);
+    const sub = parts[0]?.toLowerCase();
+
+    if (sub === 'pause' || sub === 'resume') {
+      if (!subOf(userId)) { await ctx.reply('not subscribed. /feed on'); return; }
+      setPaused(userId, sub === 'pause');
+      await ctx.reply(sub === 'pause' ? 'feed paused. /feed resume when you want it back' : 'feed resumed');
+      return;
+    }
+    if (sub === 'off') {
+      await ctx.reply(feedUnsubscribe(userId) ? 'feed off' : 'not subscribed');
+      return;
+    }
+    if (sub === 'filters') {
+      const current = subOf(userId);
+      if (!current) { await ctx.reply('not subscribed. /feed on'); return; }
+      if (parts.length === 1) {
+        await ctx.reply([
+          `filters: ${describeFilters(current.filters)}`,
+          '',
+          'set them like: /feed filters exempt>0 pair=eth mute 22:00-07:00',
+          'min_buyers=n only matches once the opening window has been indexed,',
+          'which is minutes after a launch, so on a live feed it matches almost nothing.',
+          '/feed filters clear removes them.',
+        ].join('\n'));
+        return;
+      }
+      const parsed = parseFilters(parts.slice(1).join(' '));
+      if (!parsed.ok) { await ctx.reply(parsed.reason); return; }
+      setFilters(userId, parsed.filters);
+      await ctx.reply(`filters: ${describeFilters(parsed.filters)}`);
+      return;
+    }
+
+    const t = await tierLine(userId);
+    if (!atLeast(t.tier, 'premium')) {
+      await ctx.reply(t.note ?? `the feed is premium. ${thresholds().premium.toLocaleString()} $VITALS held, or /premium`);
+      return;
+    }
+    const existing = subOf(userId);
+    if (sub === 'on' || !existing) {
+      feedSubscribe(userId);
+      await ctx.reply('feed on. every new pons v2 launch, as the quick card, here. /feed filters to narrow it');
+      return;
+    }
+    await ctx.reply([
+      existing.paused ? 'feed paused' : 'feed on',
+      `filters: ${describeFilters(existing.filters)}`,
+      `${behindCount(existing)} launches not sent yet`,
+    ].join('\n'));
+  });
+
+  // ---------------------------------------------------------------- premium
+
+  bot.command('premium', async (ctx) => {
+    const userId = ctx.from?.id;
+    if (userId === undefined || ctx.chat?.type !== 'private') return;
+    const arg = (ctx.match ?? '').toString().trim();
+
+    if (/^0x[0-9a-fA-F]{64}$/.test(arg)) {
+      const res = await creditPayment(arg);
+      if (res.ok) {
+        await ctx.reply(`premium until ${new Date(res.until).toISOString().slice(0, 10)}`);
+        return;
+      }
+      await ctx.reply(
+        res.reason === 'unlinked' ? 'that payment came from a wallet no account has linked. /holder link first'
+        : res.reason === 'already_used' ? 'that payment has already been credited'
+        : res.reason === 'too_little' ? `that was less than ${Number(PREMIUM_PRICE_WEI) / 1e18} ETH`
+        : res.reason === 'wrong_recipient' ? 'that payment did not go to the premium address'
+        : res.reason === 'not_found' ? 'no transaction with that hash'
+        : res.reason === 'unconfigured' ? 'paid premium is not configured on this bot yet'
+        : 'that transaction could not be read. try again',
+      );
+      return;
+    }
+
+    const to = premiumPayAddress();
+    if (!to) { await ctx.reply('paid premium is not configured on this bot yet'); return; }
+    if (!linkedWallet(userId)) {
+      await ctx.reply('link the wallet you will pay from first: /holder link');
+      return;
+    }
+    expectPayment(userId);
+    await ctx.reply([
+      `send ${Number(PREMIUM_PRICE_WEI) / 1e18} ETH to ${to} on Robinhood Chain from your linked wallet.`,
+      `${PREMIUM_DAYS} days start when it lands.`,
+      '',
+      'send me the transaction hash and it is credited immediately: /premium <tx hash>',
+    ].join('\n'));
+  });
+
+  bot.command('grant', async (ctx) => {
+    if (!isAdmin(ctx.from?.id)) return;
+    const parts = (ctx.match ?? '').toString().trim().split(/\s+/).filter(Boolean);
+    const target = Number(parts[0]?.replace(/^@/, ''));
+    const m = /^(\d+)d$/.exec(parts[1] ?? '');
+    if (!Number.isFinite(target) || target <= 0 || !m) {
+      await ctx.reply('/grant <telegram user id> 30d   ·   /grant <id> revoke');
+      return;
+    }
+    const g = grant(target, 'premium', Number(m[1]), 'admin');
+    await ctx.reply(`${target}: premium until ${new Date(g.expiresAt).toISOString().slice(0, 10)}`);
+  });
+
+  bot.command('revoke', async (ctx) => {
+    if (!isAdmin(ctx.from?.id)) return;
+    const target = Number((ctx.match ?? '').toString().trim().replace(/^@/, ''));
+    if (!Number.isFinite(target) || target <= 0) { await ctx.reply('/revoke <telegram user id>'); return; }
+    await ctx.reply(revokeGrant(target) ? `${target}: grant revoked` : `${target}: no grant`);
+  });
+
+  // -------------------------------------------------------------------- desk
+
+  /**
+   * A DESK holder's one group licence.
+   *
+   * One per holder, enforced by a unique index rather than by counting here:
+   * the whole point is that DESK buys one group, and "how many have you
+   * licensed" is a question the database should not need to be asked twice.
+   */
+  bot.command('license', async (ctx) => {
+    const userId = ctx.from?.id;
+    if (userId === undefined) return;
+    if (ctx.chat?.type === 'private') {
+      const row = db.prepare('SELECT chat_id FROM licences WHERE user_id = ?').get(userId) as { chat_id: number } | undefined;
+      await ctx.reply(row ? 'your licence is active in one group' : 'run /license in the group you want to license');
+      return;
+    }
+    const t = await tierLine(userId);
+    if (!atLeast(t.tier, 'desk')) {
+      await replyEphemeral(ctx, t.note ?? `a group licence is desk: ${thresholds().desk.toLocaleString()} $VITALS held.`, {});
+      return;
+    }
+    const chatId = ctx.chat!.id;
+    const held = db.prepare('SELECT user_id FROM licences WHERE chat_id = ?').get(chatId) as { user_id: number } | undefined;
+    if (held && held.user_id !== userId) {
+      await replyEphemeral(ctx, 'this group is already licensed.', {});
+      return;
+    }
+    try {
+      db.prepare(
+        `INSERT INTO licences (chat_id, user_id, granted_at) VALUES (?,?,?)
+         ON CONFLICT(chat_id) DO UPDATE SET user_id = excluded.user_id, granted_at = excluded.granted_at`,
+      ).run(chatId, userId, Math.floor(Date.now() / 1000));
+    } catch (err) {
+      // The unique index on user_id: this holder has already licensed a group.
+      console.warn('[license] refused:', String((err as Error)?.message ?? err).slice(0, 100));
+      await replyEphemeral(ctx, 'you have already licensed a group. one licence per holder.', {});
+      return;
+    }
+    await ctx.reply('licensed. premium commands are open to this group.');
+  });
+
+  bot.command('export', async (ctx) => {
+    const userId = ctx.from?.id;
+    if (userId === undefined || ctx.chat?.type !== 'private') return;
+    const t = await tierLine(userId);
+    if (!atLeast(t.tier, 'desk')) {
+      await ctx.reply(t.note ?? `/export is desk: ${thresholds().desk.toLocaleString()} $VITALS held.`);
+      return;
+    }
+    const rows = db.prepare(
+      `SELECT token, symbol, deployer, pair_token, block_number, launched_at,
+              snipe_exemption_count, creator_tax_bps
+         FROM launches ORDER BY block_number DESC LIMIT 20000`,
+    ).all() as any[];
+    if (!rows.length) { await ctx.reply('the index is empty'); return; }
+    const csv = [
+      'token,symbol,deployer,pair_token,block_number,launched_at,snipe_exemptions,creator_tax_bps',
+      ...rows.map((r) => [
+        r.token, JSON.stringify(r.symbol ?? ''), r.deployer, r.pair_token, r.block_number,
+        r.launched_at,
+        // NULL is undetermined, not zero, and a CSV that writes 0 here turns
+        // "we could not decode it" into "there were none".
+        r.snipe_exemption_count === null ? '' : r.snipe_exemption_count,
+        r.creator_tax_bps === null ? '' : r.creator_tax_bps,
+      ].join(',')),
+    ].join('\n');
+    await ctx.replyWithDocument(new InputFile(Buffer.from(csv, 'utf8'), `vitals-index-${rows.length}.csv`));
   });
 
   // ------------------------------------------------------------ ready / tge
@@ -1645,6 +2003,9 @@ export async function startBot(): Promise<void> {
     { command: 'scan', description: 'What the chain shows about a pons v2 launch' },
     { command: 'legend', description: 'What the markers on a card mean' },
     { command: 'ready', description: 'How many wallets are ready for launch' },
+    { command: 'holder', description: 'Link the wallet that holds your $VITALS' },
+    { command: 'feed', description: 'Every new launch, in a DM (premium)' },
+    { command: 'tiers', description: 'What each $VITALS tier unlocks' },
     { command: 'tge', description: 'Readiness totals and the countdown' },
     { command: 'stats', description: 'Index, cache and usage statistics' },
     { command: 'help', description: 'What this bot reports' },
@@ -1675,6 +2036,10 @@ export async function startBot(): Promise<void> {
 
   startReadyAutoPost(bot.api, me.username);
   startLaunchLoop(bot.api, me.username);
+  startFeedLoop(bot.api);
+  // Reads whole blocks, so it is inert unless a link challenge or a payment is
+  // outstanding. See the comment in inbound.ts.
+  startInboundLoop();
 
   // chat_member has to be asked for explicitly -- it is excluded from the
   // default update set, and without it the invite-link attribution records

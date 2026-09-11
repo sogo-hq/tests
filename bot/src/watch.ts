@@ -32,6 +32,23 @@ export function dmChatFor(userId: number): number | null {
 /** Per user. Enough to follow a handful of deployers without becoming a feed. */
 export const MAX_WATCHES = Number(process.env.MAX_WATCHES || 20) || 20;
 
+/**
+ * How many targets each tier may watch.
+ *
+ * Passed in rather than read here, so watch.ts keeps knowing nothing about
+ * tokens or tiers. Infinity is a real answer: PREMIUM is unlimited.
+ *
+ * Nobody is ever cut back. Somebody who holds twenty watches from before these
+ * limits existed keeps all twenty; the limit only refuses a NEW one, which is
+ * the difference between a cap and a confiscation.
+ */
+export const TIER_WATCH_LIMIT: Record<string, number> = {
+  none: Number(process.env.WATCH_LIMIT_FREE || 3) || 3,
+  watch: Number(process.env.WATCH_LIMIT_WATCH || 10) || 10,
+  premium: Infinity,
+  desk: Infinity,
+};
+
 export interface Watch {
   kind: WatchKind;
   address: string;
@@ -49,6 +66,7 @@ export function addWatch(
   address: string,
   dmChatId: number,
   now = Math.floor(Date.now() / 1000),
+  limit = MAX_WATCHES,
 ): AddResult {
   const addr = address.toLowerCase();
   const existing = db
@@ -57,7 +75,7 @@ export function addWatch(
   if (existing) return { ok: false, reason: 'duplicate' };
 
   const count = countWatches(userId);
-  if (count >= MAX_WATCHES) return { ok: false, reason: 'limit', count };
+  if (count >= limit) return { ok: false, reason: 'limit', count };
 
   db.prepare(
     `INSERT INTO watches (user_id, kind, address, dm_chat_id, created_at) VALUES (?,?,?,?,?)`,
@@ -177,6 +195,7 @@ export function addFilterWatch(
   filter: FilterKey,
   dmChatId: number,
   now = Math.floor(Date.now() / 1000),
+  limit = MAX_WATCHES,
 ): AddResult | { ok: true; filter: FilterKey } {
   const existing = db
     .prepare('SELECT 1 FROM filter_watches WHERE user_id = ? AND filter = ?')
@@ -187,7 +206,7 @@ export function addFilterWatch(
   // about how much mail the bot may send someone, and that does not care which
   // table the subscription lives in.
   const count = countWatches(userId);
-  if (count >= MAX_WATCHES) return { ok: false, reason: 'limit', count };
+  if (count >= limit) return { ok: false, reason: 'limit', count };
 
   db.prepare(
     'INSERT INTO filter_watches (user_id, filter, dm_chat_id, created_at) VALUES (?,?,?,?)',
