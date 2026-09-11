@@ -141,3 +141,15 @@ test('a tax policy that could not be read is undetermined', async () => {
   client.readContract = async () => { throw new Error('rpc down'); };
   assert.equal(await O.snipeTaxPolicy(), null);
 });
+
+test('the log query is bounded to the opening window, not left at latest', async () => {
+  logMode = 'full';
+  let seen = null;
+  const real = client.getLogs;
+  client.getLogs = async (args) => { seen = args; return real(args); };
+  await O.readOpeningWindow({ curve: CURVE, deployer: DEPLOYER, totalSupply: SUPPLY, fromBlock: 60081281n });
+  client.getLogs = real;
+  assert.equal(typeof seen.toBlock, 'bigint', "'latest' grows by 600 blocks a minute on a 0.1s chain");
+  assert.equal(seen.toBlock - seen.fromBlock, O.OPENING_WINDOW_BLOCKS);
+  assert.ok(O.OPENING_WINDOW_BLOCKS <= 20000n, 'and stays inside the node log-query limit forever');
+});

@@ -50,10 +50,23 @@ export interface OpeningInput {
   toBlock?: bigint;
 }
 
+/**
+ * How far past the launch block the opening window is read.
+ *
+ * Bounded rather than left at 'latest'. Blocks are 0.1s here, so 'latest' grows
+ * by 600 blocks a minute and a self-scan delayed past about half an hour would
+ * exceed the node's log-query limit and time out -- turning a measurement into
+ * an undetermined, for no gain. Everything this reads lives in the first
+ * seconds: SnipeTaxCharged is self-terminating inside 3 s, and the exemptions
+ * and opening buys are emitted in the launch transaction itself. Sixty seconds
+ * is generous cover for all of it.
+ */
+export const OPENING_WINDOW_BLOCKS = 600n;
+
 export async function readOpeningWindow(input: OpeningInput): Promise<OpeningWindow | null> {
   const address = input.curve as Address;
   const fromBlock = input.fromBlock;
-  const toBlock = input.toBlock ?? 'latest' as const;
+  const toBlock = input.toBlock ?? fromBlock + OPENING_WINDOW_BLOCKS;
 
   try {
     const [exempt, taxes, buys] = await Promise.all([
