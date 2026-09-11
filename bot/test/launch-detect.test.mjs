@@ -295,3 +295,79 @@ test('moving the launch time restarts the countdown', async () => {
   assert.equal(await D.countdownTick(s.api, { now: later - 2 * 86_400_000 + 1000 }), 'T-2d');
   assert.equal(s.drain().filter((x) => x.method === 'sendMessage').length, 1);
 });
+
+test('only a launch near the scheduled time is announced as the CA', async () => {
+  armed();
+  // The team wallet is a working wallet: a test token four days out, a second
+  // project, a redeploy after a failed attempt.
+  const EARLY = '0x2222222222222222222222222222222222222222';
+  insertLaunch(EARLY, DEPLOYER, 60000000, Math.floor(LAUNCH / 1000) - 4 * 86_400);
+  const s = stubApi();
+  assert.equal(await D.launchDetected(s.api, [EARLY], { now: LAUNCH - 4 * 86_400_000 }), null);
+  assert.equal(await D.reconcileLaunch(s.api, { now: LAUNCH - 4 * 86_400_000 }), null);
+  assert.equal(s.calls.length, 0, 'a test token must not be pinned as "the only CA"');
+
+  // The real one, slightly early, still counts.
+  insertLaunch(TOKEN, DEPLOYER, 60081281, Math.floor(LAUNCH / 1000) - 600);
+  assert.equal(await D.launchDetected(s.api, [TOKEN], { now: LAUNCH - 600_000 }), TOKEN);
+});
+
+test('a delayed launch is still this launch', async () => {
+  armed();
+  insertLaunch(TOKEN, DEPLOYER, 60081281, Math.floor(LAUNCH / 1000) + 3 * 3600);
+  const s = stubApi();
+  assert.equal(await D.launchDetected(s.api, [TOKEN], { now: LAUNCH + 3 * 3_600_000 }), TOKEN);
+});
+
+test('the two detectors cannot both announce the same launch', async () => {
+  armed();
+  insertLaunch(TOKEN, DEPLOYER, 60081281, Math.floor(LAUNCH / 1000));
+  // The 3s index callback and the 20s reconcile pass race: both read plan.ca as
+  // null while the first send is still in flight.
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  const s = stubApi();
+  const slow = { ...s.api, sendMessage: async (...a) => { await gate; return s.api.sendMessage(...a); } };
+  const first = D.launchDetected(slow, [TOKEN], { now: LAUNCH });
+  const second = D.reconcileLaunch(s.api, { now: LAUNCH });
+  release();
+  await Promise.all([first, second]);
+  assert.equal(s.calls.filter((x) => x.method === 'sendMessage').length, 1,
+    'one launch, one "this is the only CA"');
+});
+
+test('scheduling a new launch retires the one that already landed', async () => {
+  armed();
+  insertLaunch(TOKEN, DEPLOYER, 60081281, Math.floor(LAUNCH / 1000));
+  const s = stubApi();
+  await D.launchDetected(s.api, [TOKEN], { now: LAUNCH });
+  D.recordOffence(4242);
+  s.drain();
+
+  L.retireLandedLaunch();
+  assert.equal(D.pinnedCa(), null, 'the countdown can run again');
+  assert.equal(D.offencesOf(4242), 0, 'and strikes do not carry into it');
+  assert.equal(R.getSetting('launch_scanned'), '');
+
+  // A second launch from the same deployer now announces normally.
+  const NEXT = '0x3333333333333333333333333333333333333333';
+  R.setSetting('launch_at', String(Math.floor((LAUNCH + 7 * 86_400_000) / 1000)));
+  insertLaunch(NEXT, DEPLOYER, 60900000, Math.floor((LAUNCH + 7 * 86_400_000) / 1000));
+  assert.equal(await D.launchDetected(s.api, [NEXT], { now: LAUNCH + 7 * 86_400_000 }), NEXT);
+});
+
+test('the full card posted to the group names no address but the CA', () => {
+  const card = [
+    '<b>$VITALS</b>: Vitals',
+    'deployer launched 3 tokens in 7d',
+    `<a href="https://x/address/${TOKEN}">token</a> · ` +
+      `<a href="https://x/address/0xcccccccccccccccccccccccccccccccccccccccc">curve</a> · ` +
+      `<a href="https://x/address/${DEPLOYER}">deployer</a>`,
+  ].join('\n');
+  const out = D.redactAddresses(card, TOKEN);
+  assert.ok(out.includes(TOKEN), 'the CA stays, link and all');
+  assert.ok(!out.includes(DEPLOYER), 'the deployer wallet does not');
+  assert.ok(!out.includes('0xcccccccccccccccccccccccccccccccccccccccc'));
+  assert.ok(out.includes('>curve</a>') === false && out.includes('curve'), 'the label survives, the link does not');
+  assert.equal([...out.matchAll(/0x[0-9a-fA-F]{40}/g)].length, 1, 'exactly one address reaches the group');
+});

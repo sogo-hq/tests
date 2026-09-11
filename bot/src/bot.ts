@@ -22,7 +22,10 @@ import {
 import {
   totalsBlock, isAdmin, gateHit, countdownLine, dueAutoPost, markAutoPost, dailyDue,
 } from './tge.js';
-import { parseLaunchTime, launchTimeLine, getLaunchPlan, clearLaunchPlan, resetCountdownMarks } from './launch.js';
+import {
+  parseLaunchTime, launchTimeLine, getLaunchPlan, clearLaunchPlan, resetCountdownMarks,
+  retireLandedLaunch,
+} from './launch.js';
 import {
   launchChat, preflight, preflightLine, startLaunchLoop, retirePin,
   guardVerdict, guardActive, pinnedCa, offencesOf, recordOffence,
@@ -853,7 +856,12 @@ export function createBot(token = TELEGRAM_BOT_TOKEN): Bot {
     // as a fake-CA offence deleted the command, recorded a strike and DM'd a
     // warning, so using the tool during its own launch walked members into a
     // 24 hour mute.
-    if ((msg.entities ?? []).some((e) => e.type === 'bot_command' && e.offset === 0)) {
+    // caption_entities too: a chart screenshot captioned "/scan 0x…" has
+    // entities undefined, so it was struck as a fake CA and the second one
+    // muted the sender for a day, which is the exact outcome the exemption
+    // exists to prevent.
+    if ([...(msg.entities ?? []), ...(msg.caption_entities ?? [])]
+      .some((e) => e.type === 'bot_command' && e.offset === 0)) {
       await next();
       return;
     }
@@ -1302,6 +1310,12 @@ export function createBot(token = TELEGRAM_BOT_TOKEN): Bot {
       const res = parseLaunchTime(rest, Date.now());
       if (!res.ok) { await ctx.reply(res.reason); return; }
       const previous = getLaunchPlan();
+      // A landed launch leaves launch_ca, the self-scan marks and the guard's
+      // strike ledger behind. Stacking a new plan on top of them produced a
+      // completely dead launch: the countdown never posts because a CA is
+      // already set, the CA never posts because one is already claimed, and
+      // members carry strikes from the launch before.
+      retireLandedLaunch();
       setSetting('launch_at', String(Math.floor(res.at / 1000)));
       // A moved launch starts its countdown over. Keeping the ledger meant
       // every offset already consumed against the old time was dead for the

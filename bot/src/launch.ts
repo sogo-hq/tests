@@ -310,6 +310,7 @@ export function clearLaunchPlan(): void {
     'launch_scanned', 'launch_fulled', 'launch_detected_at',
     // The pin slots too. Left behind, countdown_pinned would make the first
     // post of the NEXT launch unpin a message from the cancelled one.
+    'launch_ca_claim',
     'countdown_pinned', 'countdown_pinned_stale', 'launch_pinned_stale',
   ]) {
     setSetting(k, '');
@@ -339,6 +340,24 @@ export function clearLaunchPlan(): void {
  * already marked, so the group gets nothing more and the pinned post still
  * shows the old time.
  */
+/**
+ * Forget that a launch ever landed, keeping nothing but the plan itself.
+ *
+ * The counterpart to resetCountdownMarks for the other half of the state. Used
+ * when a new launch is scheduled on a bot that has already run one.
+ */
+export function retireLandedLaunch(): void {
+  for (const k of [
+    'launch_ca', 'launch_ca_claim', 'launch_detected_at', 'launch_scanned', 'launch_fulled',
+    'launch_pinned', 'launch_pinned_stale',
+  ]) {
+    setSetting(k, '');
+  }
+  // Strikes belong to the launch they were earned in.
+  clearSettingPrefix('ca_offence:');
+  clearSettingPrefix('ca_msg:');
+}
+
 export function resetCountdownMarks(): void {
   for (const o of COUNTDOWN_OFFSETS) setSetting(`countdown:${o.key}`, '');
 }

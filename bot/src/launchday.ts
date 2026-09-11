@@ -403,12 +403,27 @@ export async function launchDetected(api: Api, tokens: string[], opts: TickOpts 
   const row = db
     .prepare(
       `SELECT token FROM launches
-        WHERE deployer = ? AND token IN (${lower.map(() => '?').join(',')})
+        WHERE deployer = ? AND launched_at >= ? AND token IN (${lower.map(() => '?').join(',')})
         ORDER BY block_number DESC LIMIT 1`,
     )
-    .get(plan.deployer, ...lower) as { token: string } | undefined;
+    .get(plan.deployer, matchFrom(plan.at), ...lower) as { token: string } | undefined;
   if (!row) return null;
   return announceLaunch(api, chatId, row.token, plan.name, opts);
+}
+
+/**
+ * The earliest a launch can be THIS launch.
+ *
+ * Without a lower bound, anything the watched deployer shipped while the plan
+ * was armed was announced as the CA and pinned: a test token four days out, a
+ * second project, a redeploy after a failed attempt. The team wallet is a
+ * working wallet. An hour of slack covers a launch fired early and nothing
+ * else; a delayed launch is still this launch, so there is no upper bound.
+ */
+export const LAUNCH_MATCH_EARLY_MS = envNumber('LAUNCH_MATCH_EARLY_MS', 3_600_000);
+
+function matchFrom(at: number): number {
+  return Math.floor((at - LAUNCH_MATCH_EARLY_MS) / 1000);
 }
 
 /**
@@ -425,9 +440,8 @@ export async function reconcileLaunch(api: Api, opts: TickOpts = {}): Promise<st
   if (!plan?.deployer || plan.ca) return null;
   const chatId = launchChat();
   if (chatId === null) return null;
-  // Only launches from this launch's own window: the watched deployer has a
-  // history, and the newest row from last month is not today's launch.
-  const since = Math.floor((plan.at - 6 * 3_600_000) / 1000);
+  // The same window the callback path uses, for the same reason.
+  const since = matchFrom(plan.at);
   const row = db
     .prepare(
       `SELECT token FROM launches WHERE deployer = ? AND launched_at >= ?
@@ -455,12 +469,30 @@ async function announceLaunch(
   const now = opts.now ?? Date.now();
   const ca = normaliseWallet(token) ?? token.toLowerCase();
 
+  // Claimed synchronously, before the await.
+  //
+  // Two independent detectors race here: the 3 s index callback and the 20 s
+  // reconcile pass. Both read plan.ca, both saw null while the first send was
+  // still in flight, and the group got two "this is the only CA" posts for one
+  // launch, which is precisely the message that must be unambiguous.
+  // better-sqlite3 is synchronous, so this read-and-write cannot interleave.
+  if (getSetting('launch_ca_claim') === ca) return ca;
+  setSetting('launch_ca_claim', ca);
+
   const label = name ?? 'the token';
-  const sent = await api.sendMessage(
-    chatId,
-    `${label} is live. CA: ${ca}\nthis is the only CA.`,
-    { link_preview_options: { is_disabled: true } },
-  );
+  let sent;
+  try {
+    sent = await api.sendMessage(
+      chatId,
+      `${label} is live. CA: ${ca}\nthis is the only CA.`,
+      { link_preview_options: { is_disabled: true } },
+    );
+  } catch (err) {
+    // Release the claim so the next tick retries rather than the launch going
+    // unannounced because one send hit a 429.
+    setSetting('launch_ca_claim', '');
+    throw err;
+  }
   setSetting('launch_ca', ca);
   setSetting('launch_detected_at', String(Math.floor(now / 1000)));
   await repin(api, chatId, sent.message_id, 'launch_pinned');
@@ -534,14 +566,33 @@ export async function selfScanTick(api: Api, opts: TickOpts = {}): Promise<'quic
       token: plan.ca, source: 'cli', unlimited: true, botUsername: opts.botUsername,
     });
     if (out.kind !== 'ok') return null;
-    // The /full card is HTML, unlike the default one.
-    await api.sendMessage(chatId, out.fullCard, {
+    // The /full card is HTML, unlike the default one. Its footer links the
+    // token, the curve AND the deployer, and the deployer is a wallet: exactly
+    // one address may appear in a group message and it is the CA the bot
+    // posted. A user asking for /full is one thing; the bot volunteering a
+    // deployer wallet into the group is another.
+    await api.sendMessage(chatId, redactAddresses(out.fullCard, plan.ca), {
       parse_mode: 'HTML', link_preview_options: { is_disabled: true },
     });
     setSetting('launch_fulled', String(Math.floor(now / 1000)));
     return 'full';
   }
   return null;
+}
+
+/**
+ * Strip every address but the one allowed, links and all.
+ *
+ * Applied to a rendered card rather than to its source because the card is
+ * shared with the DM and inline surfaces, where the links belong.
+ */
+export function redactAddresses(html: string, keep: string | null): string {
+  const allowed = keep?.toLowerCase() ?? null;
+  // Whole anchors first, so a redacted link does not leave dangling markup.
+  return html
+    .replace(/<a href="[^"]*\/address\/(0x[0-9a-fA-F]{40})"[^>]*>([^<]*)<\/a>/g,
+      (whole, addr: string, label: string) => (addr.toLowerCase() === allowed ? whole : label))
+    .replace(/0[xX][0-9a-fA-F]{40}/g, (a) => (a.toLowerCase() === allowed ? a : '[address]'));
 }
 
 /**

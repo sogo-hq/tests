@@ -4,6 +4,17 @@ import { DB_PATH } from './config.js';
 export const db = new Database(DB_PATH);
 db.pragma('journal_mode = WAL');
 db.pragma('synchronous = NORMAL');
+/**
+ * Wait for a busy writer instead of failing on it.
+ *
+ * WAL lets readers and one writer coexist, but a SECOND writer gets SQLITE_BUSY
+ * immediately with no timeout set, and that is a thrown error rather than a
+ * wait. Two processes touch this database in normal use -- the bot and any CLI
+ * command run beside it -- and the test suite runs a dozen files in parallel,
+ * where it showed up as a single unreproducible failure. Five seconds is far
+ * longer than any write here takes.
+ */
+db.pragma('busy_timeout = 5000');
 db.pragma('foreign_keys = ON');
 
 db.exec(`

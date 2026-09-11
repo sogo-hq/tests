@@ -424,3 +424,40 @@ test('an ordinary message with no address is untouched and costs no API call', a
     assert.equal(h.drain().length, 0, `"${text}" should be invisible to the guard`);
   }
 });
+
+test('a command in a photo caption is not a fake-CA offence', async () => {
+  armed();
+  const h = harness();
+  rememberDm(6300, 6300);
+  // A chart screenshot captioned "/scan 0x…" has entities undefined, so the
+  // exemption missed it and the sender was struck, then muted.
+  await h.bot.handleUpdate({
+    update_id: 7100,
+    message: {
+      message_id: 20, date: 0,
+      chat: { id: GROUP, type: 'supergroup', title: 'g' },
+      from: { id: 6300, is_bot: false, first_name: 'U' },
+      photo: [{ file_id: 'x', file_unique_id: 'y', width: 10, height: 10 }],
+      caption: `/scan ${FAKE}`,
+      caption_entities: [{ type: 'bot_command', offset: 0, length: 5 }],
+    },
+  });
+  assert.equal(h.drain().filter((x) => x.method === 'deleteMessage').length, 0);
+  assert.equal(D.offencesOf(6300), 0);
+});
+
+test('a plain caption with an address is still caught', async () => {
+  armed();
+  const h = harness();
+  await h.bot.handleUpdate({
+    update_id: 7101,
+    message: {
+      message_id: 21, date: 0,
+      chat: { id: GROUP, type: 'supergroup', title: 'g' },
+      from: { id: 6301, is_bot: false, first_name: 'U' },
+      photo: [{ file_id: 'x', file_unique_id: 'y', width: 10, height: 10 }],
+      caption: `ape ${FAKE}`,
+    },
+  });
+  assert.equal(h.drain().filter((x) => x.method === 'deleteMessage').length, 1);
+});
