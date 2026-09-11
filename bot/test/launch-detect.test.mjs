@@ -371,3 +371,51 @@ test('the full card posted to the group names no address but the CA', () => {
   assert.ok(out.includes('>curve</a>') === false && out.includes('curve'), 'the label survives, the link does not');
   assert.equal([...out.matchAll(/0x[0-9a-fA-F]{40}/g)].length, 1, 'exactly one address reaches the group');
 });
+
+test('an unrelated deploy days early does not hijack the whole launch', async () => {
+  // The composite failure, end to end. One stray token from the team wallet
+  // used to: be pinned as "the only CA"; unpin the live countdown; kill the
+  // countdown for the remaining days; suppress the genuine launch when it
+  // landed; and invert the guard, so a member pasting the REAL contract
+  // address was deleted and warned while the wrong one was whitelisted.
+  armed();
+  const STRAY = '0xaaaa111111111111111111111111111111111111';
+  insertLaunch(STRAY, DEPLOYER, 60000000, Math.floor(LAUNCH / 1000) - 4 * 86_400);
+  const s = stubApi();
+
+  await D.countdownTick(s.api, { now: LAUNCH - 5 * 86_400_000 + 1000 });
+  s.drain();
+
+  assert.equal(await D.launchDetected(s.api, [STRAY], { now: LAUNCH - 4 * 86_400_000 }), null);
+  assert.equal(s.calls.length, 0, 'nothing posted, nothing unpinned');
+  assert.equal(D.pinnedCa(), null);
+
+  // The countdown runs to the end.
+  assert.equal(await D.countdownTick(s.api, { now: LAUNCH - 86_400_000 + 1000 }), 'T-24h');
+  assert.equal(await D.countdownTick(s.api, { now: LAUNCH - 600_000 + 1000 }), 'T-10min');
+  // Each countdown post repins, so the live pin is the last one, not the first.
+  const countdownPin = s.drain().filter((x) => x.method === 'pin').pop().message_id;
+
+  // The guard is still protecting the right thing: before launch, no address
+  // is the CA, so the genuine one is treated like any other.
+  assert.equal(D.guardActive(LAUNCH - 3_600_000), true);
+
+  // And the real launch is announced.
+  insertLaunch(TOKEN, DEPLOYER, 60081281, Math.floor(LAUNCH / 1000));
+  assert.equal(await D.launchDetected(s.api, [TOKEN], { now: LAUNCH }), TOKEN);
+  assert.equal(D.pinnedCa(), TOKEN);
+  const c = s.drain();
+  assert.match(c.find((x) => x.method === 'sendMessage').text, new RegExp(TOKEN));
+  assert.ok(c.some((x) => x.method === 'unpin' && x.message_id === countdownPin),
+    'the countdown pin comes down for the real CA, not for a stray deploy');
+
+  // The inversion, gone: the genuine address is now the one that is allowed.
+  assert.equal(
+    D.guardVerdict(`CA ${TOKEN}`, { pinnedCa: D.pinnedCa(), isAdmin: false, priorOffences: 0, active: true }).action,
+    'ignore',
+  );
+  assert.equal(
+    D.guardVerdict(`CA ${STRAY}`, { pinnedCa: D.pinnedCa(), isAdmin: false, priorOffences: 0, active: true }).action,
+    'warn',
+  );
+});
