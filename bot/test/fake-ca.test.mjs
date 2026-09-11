@@ -392,3 +392,35 @@ test('offence counts do not carry from one launch to the next', async () => {
     'somebody warned once months ago must not be muted on their first message of the next launch');
   assert.equal(D.alreadyHandled(GROUP, 99), false);
 });
+
+test('every other command still works while a launch is armed', async () => {
+  armed();
+  const h = harness();
+  // The guard is registered before every command and must pass control on.
+  // Written the other way once, it silently disabled everything below it.
+  const cases = [
+    ['/help', /VITALS/],
+    ['/legend', /a finding/],
+    ['/filters', /filters/],
+    ['/watching', /not watching|watching/],
+    ['/tge', /READY FOR LAUNCH/],
+    ['/ready', /READY FOR LAUNCH/],
+  ];
+  for (const [cmd, want] of cases) {
+    await h.bot.handleUpdate(h.msg(cmd, 6200));
+    // Inside the ten-minute window the totals block answers with an edit rather
+    // than a new message, so both count as "the command ran".
+    const sent = h.drain().filter((x) => x.method === 'sendMessage' || x.method === 'editMessageText');
+    assert.ok(sent.length >= 1, `${cmd} produced no reply while a launch was armed`);
+    assert.ok(sent.some((x) => want.test(x.payload.text)), `${cmd} replied with ${JSON.stringify(sent[0]?.payload.text?.slice(0, 80))}`);
+  }
+});
+
+test('an ordinary message with no address is untouched and costs no API call', async () => {
+  armed();
+  const h = harness();
+  for (const text of ['gm', 'wen launch', 'lfg 100x', 'is it live yet']) {
+    await h.bot.handleUpdate(h.msg(text, 6201));
+    assert.equal(h.drain().length, 0, `"${text}" should be invisible to the guard`);
+  }
+});
