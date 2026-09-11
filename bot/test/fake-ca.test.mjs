@@ -12,6 +12,7 @@ import assert from 'node:assert/strict';
 process.env.DB_PATH = process.env.DB_PATH || `/tmp/vitals-fakeca-${process.pid}.db`;
 const { db } = await import('../dist/db.js');
 const R = await import('../dist/ready.js');
+const L = await import('../dist/launch.js');
 const D = await import('../dist/launchday.js');
 
 const CA = '0xd384722f6adfe7d79E8e6623896DF199afD31B76';
@@ -287,4 +288,107 @@ test('a user with no DM open is still deleted and counted, silently', async () =
   assert.equal(c.filter((x) => x.method === 'deleteMessage').length, 1);
   assert.equal(c.filter((x) => x.method === 'sendMessage').length, 0, 'nothing is said in the group instead');
   assert.equal(D.offencesOf(6010), 1);
+});
+
+// ------------------------------------------- defects found by the 2.5 audit
+
+test('the guard runs in the launch group only, not every group the bot is in', async () => {
+  armed();
+  const OTHER_GROUP = -100111;
+  const h = harness();
+  rememberDm(6100, 6100);
+  await h.bot.handleUpdate({
+    update_id: 7001,
+    message: {
+      message_id: 11, date: 0,
+      chat: { id: OTHER_GROUP, type: 'supergroup', title: 'someone else' },
+      from: { id: 6100, is_bot: false, first_name: 'U' },
+      text: `gm ${FAKE}`,
+    },
+  });
+  const c = h.drain();
+  assert.equal(c.filter((x) => x.method === 'deleteMessage').length, 0,
+    'this bot sits in many groups; only the one running the countdown is guarded');
+  assert.equal(D.offencesOf(6100), 0);
+});
+
+test("the bot's own commands are not fake-CA offences", async () => {
+  armed();
+  const h = harness();
+  rememberDm(6101, 6101);
+  // /scan in a group is advertised in the help text. Treating it as an offence
+  // walked members into a 24 h mute for using the tool during its own launch.
+  await h.bot.handleUpdate(h.msg(`/scan ${FAKE}`, 6101));
+  const c = h.drain();
+  assert.equal(c.filter((x) => x.method === 'deleteMessage').length, 0);
+  assert.equal(D.offencesOf(6101), 0);
+  assert.equal(c.filter((x) => x.method === 'restrictChatMember').length, 0);
+});
+
+test('an uppercase 0X prefix is caught, like the wallet guard already caught it', async () => {
+  armed();
+  const h = harness();
+  const shouted = '0X' + FAKE.slice(2).toUpperCase();
+  await h.bot.handleUpdate(h.msg(`buy ${shouted}`, 6102));
+  assert.equal(h.drain().filter((x) => x.method === 'deleteMessage').length, 1);
+  assert.equal(D.guardVerdict(shouted, on()).action, 'warn');
+});
+
+test('a poll question and a hidden link URL are both scanned', async () => {
+  armed();
+  const h = harness();
+
+  await h.bot.handleUpdate({
+    update_id: 7002,
+    message: {
+      message_id: 12, date: 0,
+      chat: { id: GROUP, type: 'supergroup', title: 'g' },
+      from: { id: 6103, is_bot: false, first_name: 'U' },
+      poll: { id: 'p1', question: `real CA is ${FAKE}, ape now?`, options: [{ text: 'yes' }] },
+    },
+  });
+  assert.equal(h.drain().filter((x) => x.method === 'deleteMessage').length, 1,
+    'a poll question is 300 readable characters the guard could not see');
+
+  await h.bot.handleUpdate({
+    update_id: 7003,
+    message: {
+      message_id: 13, date: 0,
+      chat: { id: GROUP, type: 'supergroup', title: 'g' },
+      from: { id: 6104, is_bot: false, first_name: 'U' },
+      text: 'BUY HERE',
+      entities: [{ type: 'text_link', offset: 0, length: 8, url: `https://app.uniswap.org/#/swap?outputCurrency=${FAKE}` }],
+    },
+  });
+  assert.equal(h.drain().filter((x) => x.method === 'deleteMessage').length, 1,
+    'the visible text carries no address; the URL behind it does');
+});
+
+test('a cancelled and rebooked launch does not switch the guard off at launch time', async () => {
+  reset();
+  const at = Date.parse('2026-09-22T14:00:00Z');
+  R.setSetting('launch_at', String(Math.floor(at / 1000)));
+  R.setSetting('launch_ca', CA);
+  assert.equal(D.guardActive(at + 3600_000), false);
+
+  L.clearLaunchPlan();
+  R.setSetting('launch_at', String(Math.floor(at / 1000)));
+  // clearLaunchPlan writes an empty string rather than deleting the row, and an
+  // empty string is not null. Read with ??, the guard went off an hour after a
+  // rebooked launch with no CA known: the moment a fake is most believed.
+  assert.equal(D.guardActive(at + 3600_000), true);
+  assert.equal(D.pinnedCa(), null);
+});
+
+test('offence counts do not carry from one launch to the next', async () => {
+  reset();
+  const at = Date.parse('2026-09-22T14:00:00Z');
+  R.setSetting('launch_at', String(Math.floor(at / 1000)));
+  assert.equal(D.recordOffence(6105), 1);
+  D.markHandled(GROUP, 99);
+
+  L.clearLaunchPlan();
+  assert.equal(D.offencesOf(6105), 0,
+    'somebody warned once months ago must not be muted on their first message of the next launch');
+  assert.equal(D.alreadyHandled(GROUP, 99), false);
 });

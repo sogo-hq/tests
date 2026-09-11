@@ -1,4 +1,4 @@
-import { getSetting, setSetting } from './ready.js';
+import { getSetting, setSetting, clearSettingPrefix } from './ready.js';
 
 /**
  * The launch clock.
@@ -256,9 +256,14 @@ export function getLaunchPlan(): LaunchPlan | null {
   return {
     // Stored in seconds by /launch set, as everything else in this table is.
     at: at * 1000,
-    name: getSetting('launch_name'),
-    deployer: getSetting('launch_deployer'),
-    ca: getSetting('launch_ca'),
+    // `|| null` rather than `??`: clearing a setting writes an EMPTY STRING
+    // rather than deleting the row, and an empty string is not null. Read with
+    // `??`, a cancelled-then-rebooked launch left plan.ca as '' and the guard's
+    // `plan.ca === null` test went false, switching the guard off at launch
+    // time with no CA known: the exact moment a fake is most believed.
+    name: getSetting('launch_name') || null,
+    deployer: getSetting('launch_deployer') || null,
+    ca: getSetting('launch_ca') || null,
     pinned: pinned || null,
   };
 }
@@ -269,11 +274,16 @@ export function clearLaunchPlan(): void {
     'launch_scanned', 'launch_fulled', 'launch_detected_at',
     // The pin slots too. Left behind, countdown_pinned would make the first
     // post of the NEXT launch unpin a message from the cancelled one.
-    'countdown_pinned',
-    ...COUNTDOWN_OFFSETS.map((o) => `countdown:${o.key}`),
+    'countdown_pinned', 'countdown_pinned_stale', 'launch_pinned_stale',
   ]) {
     setSetting(k, '');
   }
+  resetCountdownMarks();
+  // The guard's per-user ledger belongs to the launch it was kept for. Carried
+  // over, somebody warned once months ago is muted for 24 hours on their first
+  // message of the next launch, with no warning and no idea why.
+  clearSettingPrefix('ca_offence:');
+  clearSettingPrefix('ca_msg:');
 }
 
 /**
@@ -284,6 +294,19 @@ export function clearLaunchPlan(): void {
  * printed as zero: "declared launches so far: 0" is a claim, and an unset
  * variable is not a measurement of anything.
  */
+/**
+ * Forget which countdown posts have gone out.
+ *
+ * Called when a launch is cancelled AND when its time is changed. A postponed
+ * launch that kept its ledger lost every offset already consumed against the
+ * old time: move a launch back by a day and T-2d, T-24h and the rest are
+ * already marked, so the group gets nothing more and the pinned post still
+ * shows the old time.
+ */
+export function resetCountdownMarks(): void {
+  for (const o of COUNTDOWN_OFFSETS) setSetting(`countdown:${o.key}`, '');
+}
+
 export function declaredCount(): number | null {
   const raw = (process.env.DECLARED_COUNT ?? '').trim();
   if (!raw) return null;

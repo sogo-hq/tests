@@ -47,6 +47,11 @@ export function setSetting(key: string, value: string): void {
   ).run(key, value);
 }
 
+/** Delete every setting under a prefix. Used to retire a launch's scratch keys. */
+export function clearSettingPrefix(prefix: string): number {
+  return db.prepare('DELETE FROM ready_settings WHERE key LIKE ?').run(`${prefix}%`).changes;
+}
+
 export function getSetting(key: string): string | null {
   const row = db.prepare('SELECT value FROM ready_settings WHERE key = ?').get(key) as
     | { value: string }

@@ -229,3 +229,69 @@ test('no registered wallet reaches the group on any launch-day surface', async (
   const addresses = [...new Set([...said.matchAll(/0x[0-9a-fA-F]{40}/g)].map((m) => m[0].toLowerCase()))];
   assert.deepEqual(addresses, [TOKEN], `only the CA may appear, saw ${addresses.join(', ')}`);
 });
+
+// ------------------------------------------- defects found by the 2.5 audit
+
+test('a CA send that fails leaves the launch due, not stranded', async () => {
+  armed();
+  insertLaunch(TOKEN, DEPLOYER, 60081281, Math.floor(LAUNCH / 1000));
+  const failing = stubApi({ sendThrows: true });
+  await assert.rejects(() => D.launchDetected(failing.api, [TOKEN], { now: LAUNCH }));
+
+  // A 429 at the busiest second of the launch must not commit the CA with
+  // nothing posted, nothing pinned and the guard switched off.
+  assert.equal(D.pinnedCa(), null, 'the CA is not claimed by a post that never went out');
+  assert.equal(D.guardActive(LAUNCH + 1000), true, 'and the guard stays up');
+
+  const s = stubApi();
+  assert.equal(await D.reconcileLaunch(s.api, { now: LAUNCH + 20_000 }), TOKEN, 'the next tick recovers it');
+  assert.equal(D.pinnedCa(), TOKEN);
+});
+
+test('the countdown stops once the CA is out, however early it lands', async () => {
+  armed();
+  insertLaunch(TOKEN, DEPLOYER, 60081281, Math.floor(LAUNCH / 1000));
+  const s = stubApi();
+  await D.countdownTick(s.api, { now: LAUNCH - 5 * 86_400_000 + 1000 });
+  s.drain();
+  // The launch lands two days early.
+  await D.launchDetected(s.api, [TOKEN], { now: LAUNCH - 2 * 86_400_000 });
+  s.drain();
+  assert.equal(await D.countdownTick(s.api, { now: LAUNCH - 86_400_000 }), null,
+    'no more "anything before that is fake" underneath the bot\'s own pinned CA');
+  assert.equal(s.calls.length, 0);
+});
+
+test('a pin whose unpin failed is retried rather than lost', async () => {
+  armed();
+  let failUnpin = true;
+  const s = stubApi();
+  s.api.unpinChatMessage = async (chat_id, message_id) => {
+    s.calls.push({ method: 'unpin', chat_id, message_id });
+    if (failUnpin) throw new Error('Bad Gateway');
+    return true;
+  };
+  await D.repin(s.api, GROUP, 101, 'slot');
+  await D.repin(s.api, GROUP, 102, 'slot');
+  assert.equal(s.drain().filter((x) => x.method === 'unpin' && x.message_id === 101).length, 1);
+
+  failUnpin = false;
+  await D.repin(s.api, GROUP, 103, 'slot');
+  const tried = s.drain().filter((x) => x.method === 'unpin').map((x) => x.message_id).sort();
+  assert.deepEqual(tried, [101, 102], 'the id whose unpin failed is still known and tried again');
+});
+
+test('moving the launch time restarts the countdown', async () => {
+  armed();
+  const s = stubApi();
+  await D.countdownTick(s.api, { now: LAUNCH - 2 * 86_400_000 + 1000 });
+  assert.equal(s.drain().filter((x) => x.method === 'sendMessage').length, 1);
+
+  // Postponed by a week. Without resetting the ledger, T-2d through T-10min are
+  // already marked and the group hears nothing more.
+  const later = LAUNCH + 7 * 86_400_000;
+  L.resetCountdownMarks();
+  R.setSetting('launch_at', String(Math.floor(later / 1000)));
+  assert.equal(await D.countdownTick(s.api, { now: later - 2 * 86_400_000 + 1000 }), 'T-2d');
+  assert.equal(s.drain().filter((x) => x.method === 'sendMessage').length, 1);
+});

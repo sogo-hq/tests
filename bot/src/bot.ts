@@ -22,12 +22,12 @@ import {
 import {
   totalsBlock, isAdmin, gateHit, countdownLine, dueAutoPost, markAutoPost, dailyDue,
 } from './tge.js';
-import { parseLaunchTime, launchTimeLine, getLaunchPlan, clearLaunchPlan } from './launch.js';
+import { parseLaunchTime, launchTimeLine, getLaunchPlan, clearLaunchPlan, resetCountdownMarks } from './launch.js';
 import {
   launchChat, preflight, preflightLine, startLaunchLoop,
   guardVerdict, guardActive, pinnedCa, offencesOf, recordOffence,
   alreadyHandled, markHandled, muteFor24h, GUARD_WARNING, GUARD_MUTED,
-  launchDetected,
+  launchDetected, ADDRESS_ANYWHERE,
 } from './launchday.js';
 import { ALERTS_PER_HOUR } from './alerts.js';
 import { buildAlerts } from './alerts.js';
@@ -840,12 +840,43 @@ export function createBot(token = TELEGRAM_BOT_TOKEN): Bot {
       await next();
       return;
     }
-    // A caption carries an address as readily as a body does.
-    const text = `${msg.text ?? ''} ${msg.caption ?? ''}`.trim();
-    if (!text || !/0x[0-9a-fA-F]{40}/.test(text)) {
+    // ONE group: the one the countdown is running in. The bot is a public
+    // scanner that sits in many groups, and an unscoped guard deleted messages
+    // and muted members in every one of them for the five days before somebody
+    // else's launch, with no countdown there to explain it.
+    if (ctx.chat!.id !== launchChat()) {
       await next();
       return;
     }
+    // A command addressed to the bot is the bot's own advertised surface, and
+    // /ready already deletes an address pasted with it. Treating `/scan 0x…`
+    // as a fake-CA offence deleted the command, recorded a strike and DM'd a
+    // warning, so using the tool during its own launch walked members into a
+    // 24 hour mute.
+    if ((msg.entities ?? []).some((e) => e.type === 'bot_command' && e.offset === 0)) {
+      await next();
+      return;
+    }
+
+    // Everything readable in the message, not just the body: a caption carries
+    // an address as readily, a poll question is 300 characters of plain text
+    // the guard cannot see otherwise, and a text_link hides the address in a
+    // URL behind words like "BUY HERE".
+    const text = [
+      msg.text ?? '',
+      msg.caption ?? '',
+      (msg as any).poll?.question ?? '',
+      ...(((msg as any).poll?.options ?? []) as any[]).map((o) => o?.text ?? ''),
+      ...[...(msg.entities ?? []), ...(msg.caption_entities ?? [])].map((e: any) => e.url ?? ''),
+    ].join(' ').trim();
+    if (!text || !ADDRESS_ANYWHERE.test(text)) {
+      // A global regex carries lastIndex between calls, so it is reset rather
+      // than left to skip every other message.
+      ADDRESS_ANYWHERE.lastIndex = 0;
+      await next();
+      return;
+    }
+    ADDRESS_ANYWHERE.lastIndex = 0;
 
     const verdict = guardVerdict(text, {
       pinnedCa: pinnedCa(),
@@ -1271,6 +1302,11 @@ export function createBot(token = TELEGRAM_BOT_TOKEN): Bot {
       const res = parseLaunchTime(rest, Date.now());
       if (!res.ok) { await ctx.reply(res.reason); return; }
       setSetting('launch_at', String(Math.floor(res.at / 1000)));
+      // A moved launch starts its countdown over. Keeping the ledger meant
+      // every offset already consumed against the old time was dead for the
+      // new one, so postponing by a day silently cancelled T-2d through
+      // T-10min and left a pin showing the time it no longer launches at.
+      resetCountdownMarks();
       const lines = [launchTimeLine(res.at)];
 
       // Everything promised from here on needs rights an admin grants by hand.

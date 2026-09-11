@@ -99,6 +99,10 @@ export interface TickOpts {
 export async function countdownTick(api: Api, opts: TickOpts = {}): Promise<string | null> {
   const plan = getLaunchPlan();
   if (!plan) return null;
+  // Once the CA is out, the countdown is over whatever the clock says. A launch
+  // that lands early otherwise kept posting "anything before that is fake"
+  // underneath the bot's own pinned CA, and re-pinned itself on top of it.
+  if (plan.ca) return null;
   const chatId = launchChat();
   if (chatId === null) return null;
   const now = opts.now ?? Date.now();
@@ -142,15 +146,25 @@ export async function repin(api: Api, chatId: number, messageId: number, slot: s
     return;
   }
   const prev = Number(getSetting(slot) || 0);
+  const stale = Number(getSetting(`${slot}_stale`) || 0);
   setSetting(slot, String(messageId));
-  if (prev && prev !== messageId) {
+
+  // Both the one we are replacing and any earlier one whose unpin did not take.
+  // Overwriting the stored id before attempting the unpin dropped the only
+  // reference to it, so a single transient 502 left a message pinned for good.
+  let unresolved = 0;
+  for (const id of [prev, stale]) {
+    if (!id || id === messageId) continue;
     try {
-      await api.unpinChatMessage(chatId, prev);
+      await api.unpinChatMessage(chatId, id);
     } catch (err) {
-      // A message already unpinned or deleted is not a problem worth surfacing.
+      // A message already unpinned or deleted is not worth surfacing; a
+      // transient failure is worth retrying on the next pin.
       console.warn(`[launch] unpin failed: ${String((err as Error)?.message ?? err).slice(0, 120)}`);
+      unresolved = id;
     }
   }
+  setSetting(`${slot}_stale`, unresolved ? String(unresolved) : '');
 }
 
 async function memberCount(api: Api, chatId: number): Promise<number | null> {
@@ -163,6 +177,17 @@ async function memberCount(api: Api, chatId: number): Promise<number | null> {
 }
 
 // -------------------------------------------------------------- the fake-CA guard
+
+/**
+ * Anything shaped like an address, in either prefix case.
+ *
+ * Written `/0x…/` first, which missed `0X1111…` entirely: not deleted, no
+ * offence, no warning. Etherscan and the common Telegram trading bots all
+ * render addresses in forms a paste can shout, and the sibling wallet-leak
+ * guard in bot.ts already accepted 0X, so the two disagreed about what an
+ * address even is.
+ */
+export const ADDRESS_ANYWHERE = /0[xX][0-9a-fA-F]{40}/g;
 
 export type GuardVerdict =
   | { action: 'ignore' }
@@ -186,7 +211,7 @@ export function guardVerdict(
   opts: { pinnedCa: string | null; isAdmin: boolean; priorOffences: number; active: boolean },
 ): GuardVerdict {
   if (!opts.active || opts.isAdmin) return { action: 'ignore' };
-  const found = [...text.matchAll(/0x[0-9a-fA-F]{40}/g)].map((m) => m[0]);
+  const found = [...text.matchAll(ADDRESS_ANYWHERE)].map((m) => m[0]);
   if (!found.length) return { action: 'ignore' };
   const ca = opts.pinnedCa?.toLowerCase() ?? null;
   const wrong = found.filter((a) => a.toLowerCase() !== ca);
@@ -396,22 +421,19 @@ export async function reconcileLaunch(api: Api, opts: TickOpts = {}): Promise<st
 /**
  * Post and pin the one CA.
  *
- * launch_ca is written BEFORE the post, not after. That single write is what
- * closes the fake-CA guard window and makes this address the authoritative one;
- * writing it afterwards leaves a gap in which the genuine CA is the only
- * address the guard has never heard of.
- *
- * The exception to mark-after-send, and for a reason: a double post here is a
- * second "this is the only CA" message, which is survivable, while a gap is the
- * guard deleting the truth.
+ * Marked AFTER the send, like every other scheduled post here. Written the
+ * other way round first, on the theory that committing launch_ca early closed
+ * the guard window sooner: but the bot never receives its own messages as
+ * updates, so there was no window to close, and a 429 or a 502 on the send then
+ * left launch_ca committed with nothing posted, nothing pinned, the fake-CA
+ * guard switched off, and no path that ever retried. A transient Telegram
+ * error at the busiest second of the launch is exactly when that happens.
  */
 async function announceLaunch(
   api: Api, chatId: number, token: string, name: string | null, opts: TickOpts,
 ): Promise<string> {
   const now = opts.now ?? Date.now();
   const ca = normaliseWallet(token) ?? token.toLowerCase();
-  setSetting('launch_ca', ca);
-  setSetting('launch_detected_at', String(Math.floor(now / 1000)));
 
   const label = name ?? 'the token';
   const sent = await api.sendMessage(
@@ -419,6 +441,8 @@ async function announceLaunch(
     `${label} is live. CA: ${ca}\nthis is the only CA.`,
     { link_preview_options: { is_disabled: true } },
   );
+  setSetting('launch_ca', ca);
+  setSetting('launch_detected_at', String(Math.floor(now / 1000)));
   await repin(api, chatId, sent.message_id, 'launch_pinned');
 
   // The countdown pin is a different slot, so it has to be taken down here.
