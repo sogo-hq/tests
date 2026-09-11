@@ -198,6 +198,43 @@ export async function readConcentration(
   };
 }
 
+export interface HolderBreakdown {
+  /** The largest wallets, as percentages of circulating supply, longest first. */
+  top: number[];
+  top5: number;
+  top10: number;
+  holders: number;
+}
+
+/**
+ * The largest wallets, from the balances the last read stored.
+ *
+ * Synchronous and free: it reads the map already kept so a refresh only has to
+ * fetch what changed. The exclusion set is the same one the flag uses, which is
+ * the point of it living here: the protocol's own contracts, the curve and the
+ * token are not holders, and a card that counted the PoolManager as the largest
+ * wallet would be reporting the pool as a whale on every graduated launch.
+ */
+export function holderBreakdown(token: string, curve: string): HolderBreakdown | null {
+  const stored = loadBalances(token);
+  if (!stored) return null;
+  const excluded = new Set([...PROTOCOL_EXCLUDED, curve.toLowerCase(), token.toLowerCase()]);
+  const held = [...stored.balances.entries()]
+    .filter(([addr, v]) => v > 0n && !excluded.has(addr.toLowerCase()))
+    .map(([, v]) => v)
+    .sort((a, b) => (a === b ? 0 : a > b ? -1 : 1));
+
+  const circulating = held.reduce((a, v) => a + v, 0n);
+  if (circulating <= 0n) return null;
+  const pct = (v: bigint) => Number((v * 10_000n) / circulating) / 100;
+  return {
+    top: held.slice(0, 5).map(pct),
+    top5: pct(held.slice(0, 5).reduce((a, v) => a + v, 0n)),
+    top10: pct(held.slice(0, 10).reduce((a, v) => a + v, 0n)),
+    holders: held.length,
+  };
+}
+
 /** Record an observation so the threshold has a distribution to come from. */
 export function recordConcentration(token: string, c: Concentration, at?: number): void {
   const excess = excessConcentration(c);
