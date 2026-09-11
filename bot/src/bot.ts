@@ -343,8 +343,8 @@ async function handleScan(ctx: Context, raw: string, full = false): Promise<void
     && ctx.chat?.type !== 'private' && !ctx.from?.is_bot
   ) {
     try {
-      const mcap = BigInt(outcome.meta.mcapQuote || '0');
-      if (mcap > 0n) {
+      const mcap = Number(outcome.meta.mcapQuote || '0');
+      if (Number.isFinite(mcap) && mcap > 0) {
         recordFirstCall({
           chatId, token, userId: callerId,
           username: ctx.from?.username ?? null,

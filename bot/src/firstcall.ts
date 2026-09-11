@@ -21,7 +21,8 @@ export interface FirstCall {
   userId: number;
   username: string | null;
   calledAt: number;
-  mcapQuote: bigint | null;
+  /** Market cap in the quote asset, in whole units, as the card showed it. */
+  mcapQuote: number | null;
   blockNumber: number | null;
 }
 
@@ -32,7 +33,7 @@ function rowToCall(row: any): FirstCall {
     userId: row.user_id,
     username: row.username ?? null,
     calledAt: row.called_at,
-    mcapQuote: row.mcap_quote === null ? null : BigInt(row.mcap_quote),
+    mcapQuote: row.mcap_quote === null ? null : Number(row.mcap_quote),
     blockNumber: row.block_number ?? null,
   };
 }
@@ -53,7 +54,7 @@ export function firstCallOf(chatId: number, token: string): FirstCall | null {
  */
 export function recordFirstCall(call: {
   chatId: number; token: string; userId: number; username?: string | null;
-  mcapQuote?: bigint | null; blockNumber?: number | null; now?: number;
+  mcapQuote?: number | null; blockNumber?: number | null; now?: number;
 }): FirstCall {
   const token = call.token.toLowerCase();
   const existing = firstCallOf(call.chatId, token);
@@ -80,8 +81,8 @@ export interface LeaderRow {
   token: string;
   symbol: string | null;
   calledAt: number;
-  mcapQuote: bigint;
-  peakQuote: bigint;
+  mcapQuote: number;
+  peakQuote: number;
   multiple: number;
 }
 
@@ -111,7 +112,7 @@ export function leaderboard(chatId: number, days: number, now = Date.now()): Lea
   const best = new Map<number, LeaderRow>();
   for (const row of calls) {
     const call = rowToCall(row);
-    if (call.mcapQuote === null || call.mcapQuote <= 0n) continue;
+    if (call.mcapQuote === null || call.mcapQuote <= 0) continue;
     const peak = peakAfter(call.token, call.calledAt, call.mcapQuote);
     if (peak === null) continue;
     const multiple = ratio(peak, call.mcapQuote);
@@ -140,7 +141,7 @@ export function leaderboard(chatId: number, days: number, now = Date.now()): Lea
  * token is quote/token on each trade; scaled by the market cap at the call and
  * the price at the call, it gives the peak market cap in the same unit.
  */
-function peakAfter(token: string, calledAt: number, mcapAtCall: bigint): bigint | null {
+function peakAfter(token: string, calledAt: number, mcapAtCall: number): number | null {
   const rows = db
     .prepare(
       `SELECT quote_amount AS q, token_amount AS t, block_time AS bt FROM trades
@@ -169,12 +170,12 @@ function peakAfter(token: string, calledAt: number, mcapAtCall: bigint): bigint 
     if (bestQ === null || q * bestT! > bestQ * t) { bestQ = q; bestT = t; }
   }
   if (bestQ === null || firstQ === null) return null;
-  // peak = mcapAtCall * (bestPrice / firstPriceAfterCall).
-  return (mcapAtCall * bestQ * firstT!) / (bestT! * firstQ);
+  // peak = mcapAtCall * (bestPrice / firstPriceAfterCall). The ratio is taken
+  // in bigint, exactly, and only then becomes a number.
+  return mcapAtCall * (Number((bestQ * firstT! * 1_000_000n) / (bestT! * firstQ)) / 1_000_000);
 }
 
-/** A multiple, as a number, for ordering and for printing to one decimal. */
-export function ratio(peak: bigint, call: bigint): number {
-  if (call <= 0n) return 0;
-  return Number((peak * 1000n) / call) / 1000;
+/** A multiple, for ordering and for printing to one decimal. */
+export function ratio(peak: number, call: number): number {
+  return call <= 0 ? 0 : peak / call;
 }

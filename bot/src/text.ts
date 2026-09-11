@@ -49,3 +49,19 @@ export function clampMessage(html: string, max = TELEGRAM_MAX_MESSAGE): string {
   }
   return [...kept, notice, footer].join('\n');
 }
+
+/**
+ * An age in one token: 45s, 30m, 3h, 9d.
+ *
+ * Whole units only. The older `age()` in card.ts renders one decimal place
+ * above ninety minutes, which is right for a technical card and wrong for a
+ * header somebody reads in passing: "graduated 3.0h ago" reads as a
+ * measurement of something. Kept here rather than in either renderer because
+ * both the picture and the group card use it and they must not drift.
+ */
+export function shortAge(seconds: number): string {
+  if (seconds < 90) return `${Math.max(0, Math.round(seconds))}s`;
+  if (seconds < 5400) return `${Math.round(seconds / 60)}m`;
+  if (seconds < 172_800) return `${Math.round(seconds / 3600)}h`;
+  return `${Math.round(seconds / 86_400)}d`;
+}

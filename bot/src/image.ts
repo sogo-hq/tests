@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 import type { ScanResult } from './scan.js';
 import { measure, wrap, fitSize, hasGlyph } from './fontmetrics.js';
+import { shortAge as age } from './text.js';
 import { sponsorLine } from './sponsor.js';
 import { launchNotice } from './launchnotice.js';
 import { type Declaration } from './declare.js';
@@ -158,12 +159,7 @@ function mark(kind: Mark, x: number, y: number, h: number): string {
 
 // --------------------------------------------------------------- the content
 
-function age(seconds: number): string {
-  if (seconds < 90) return `${Math.max(0, Math.round(seconds))}s`;
-  if (seconds < 5400) return `${Math.round(seconds / 60)}m`;
-  if (seconds < 172_800) return `${Math.round(seconds / 3600)}h`;
-  return `${Math.round(seconds / 86_400)}d`;
-}
+
 
 function compact(v: number): string {
   const a = Math.abs(v);

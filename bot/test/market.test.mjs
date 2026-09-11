@@ -41,8 +41,10 @@ const trade = (agoSec, quoteEth, tokenQty, side = 'buy') => {
   );
 };
 
+// Quote units, not wei: the scan's own reads are already scaled, and the card
+// prints "1.68 ETH mc" beside a volume in the same unit.
 const snap = (over = {}) => M.marketSnapshot({
-  token: TOKEN, mcapQuote: 100n * E, liquidityQuote: 40n * E,
+  token: TOKEN, mcapQuote: 100, liquidityQuote: 40, pairDecimals: 18,
   currentBlock: 100_000, now: NOW, ...over,
 });
 
@@ -52,7 +54,7 @@ test('no trades is not a zero, it is nothing to say', () => {
   assert.equal(s.athQuote, null);
   assert.equal(s.change5m, null);
   assert.equal(s.change1h, null);
-  assert.equal(s.vol1h, 0n);
+  assert.equal(s.vol1h, 0);
   assert.equal(s.trades, 0);
   assert.equal(s.complete, false, 'a token with no trade log is not a complete reading');
 });
@@ -65,8 +67,8 @@ test('volume is summed per window, in the quote asset', () => {
   trade(3000, 5n * E, 5n * E);    // inside 1h
   trade(7000, 9n * E, 9n * E);    // outside both
   const s = snap();
-  assert.equal(s.vol5m, 3n * E);
-  assert.equal(s.vol1h, 10n * E, '1h must include the 5m trades');
+  assert.equal(s.vol5m, 3);
+  assert.equal(s.vol1h, 10, '1h must include the 5m trades');
   assert.equal(s.trades, 4);
 });
 
@@ -89,7 +91,7 @@ test('a window with no trades in it has no change, not a zero', () => {
   trade(2000, 2n * E, 1n * E);
   const s = snap();
   assert.equal(s.change5m, null, 'a quiet five minutes is not a flat five minutes');
-  assert.equal(s.vol5m, 0n);
+  assert.equal(s.vol5m, 0);
   assert.equal(s.change1h, 100);
 });
 
@@ -107,17 +109,17 @@ test('the ATH is the highest one-minute candle, not the highest wick', () => {
   const s = snap();
   // Price now is 4.0, market cap 100; the peak price was 50, so the peak cap
   // is 100 * 50/4.
-  assert.equal(s.athQuote, 1250n * E);
+  assert.equal(s.athQuote, 1250);
   // Half an hour after the first trade.
   assert.equal(s.athMinutes, 30);
 });
 
 test('market cap and liquidity are the caller\'s, never the cache\'s', () => {
   M.resetMarketCache();
-  const first = snap({ mcapQuote: 100n * E, liquidityQuote: 40n * E });
-  const second = snap({ mcapQuote: 250n * E, liquidityQuote: 90n * E });
-  assert.equal(second.mcapQuote, 250n * E, 'a cached block served a stale market cap');
-  assert.equal(second.liquidityQuote, 90n * E);
+  const first = snap({ mcapQuote: 100, liquidityQuote: 40 });
+  const second = snap({ mcapQuote: 250, liquidityQuote: 90 });
+  assert.equal(second.mcapQuote, 250, 'a cached block served a stale market cap');
+  assert.equal(second.liquidityQuote, 90);
   // And the windowed figures did come from the cache.
   assert.equal(second.vol1h, first.vol1h);
 });

@@ -107,14 +107,14 @@ test('an address answered once is remembered forever, for the pinned CA', () => 
 test('the first caller is recorded once and never overwritten', () => {
   const first = F.recordFirstCall({
     chatId: CHAT, token: TOKEN, userId: 11, username: 'alice',
-    mcapQuote: 1_000_000_000_000_000_000n, blockNumber: 500, now: NOW,
+    mcapQuote: 1.5, blockNumber: 500, now: NOW,
   });
   assert.equal(first.userId, 11);
-  assert.equal(first.mcapQuote, 1_000_000_000_000_000_000n);
+  assert.equal(first.mcapQuote, 1.5);
 
   const second = F.recordFirstCall({
     chatId: CHAT, token: TOKEN, userId: 22, username: 'bob',
-    mcapQuote: 9_000_000_000_000_000_000n, blockNumber: 900, now: NOW + 60_000,
+    mcapQuote: 9.5, blockNumber: 900, now: NOW + 60_000,
   });
   assert.equal(second.userId, 11, 'the second poster took the record');
   assert.equal(second.username, 'alice');
@@ -123,7 +123,7 @@ test('the first caller is recorded once and never overwritten', () => {
   // Per group: the same token called in another group is another record.
   const elsewhere = F.recordFirstCall({
     chatId: -1009, token: TOKEN, userId: 22, username: 'bob',
-    mcapQuote: 2_000_000_000_000_000_000n, blockNumber: 900, now: NOW,
+    mcapQuote: 2.5, blockNumber: 900, now: NOW,
   });
   assert.equal(elsewhere.userId, 22);
 });

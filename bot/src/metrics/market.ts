@@ -20,15 +20,19 @@ import { BLOCKS_PER_MINUTE } from '../config.js';
  */
 
 export interface MarketSnapshot {
-  /** Market cap now, in the quote asset. Passed in from the scan's own reads. */
-  mcapQuote: bigint;
+  /**
+   * Everything denominated in the quote asset, as whole units of it rather than
+   * wei: that is the shape the scan's own reads are in, and a card that mixed
+   * the two would print a market cap of 1.68 beside a volume of 4.2e18.
+   */
+  mcapQuote: number;
   /** The highest market cap reached, and how long after the first trade. */
-  athQuote: bigint | null;
+  athQuote: number | null;
   athMinutes: number | null;
   /** What is actually in the curve, in the quote asset. */
-  liquidityQuote: bigint;
-  vol5m: bigint;
-  vol1h: bigint;
+  liquidityQuote: number;
+  vol5m: number;
+  vol1h: number;
   /** Percentage change over the window, or null when the window has no trades. */
   change5m: number | null;
   change1h: number | null;
@@ -89,10 +93,12 @@ function changePct(from: Price, to: Price): number {
 
 export interface MarketInput {
   token: string;
-  /** Market cap now, from the scan's reads. */
-  mcapQuote: bigint;
-  /** Quote actually in the curve, from the scan's reads. */
-  liquidityQuote: bigint;
+  /** Market cap now, from the scan's reads, in whole quote units. */
+  mcapQuote: number;
+  /** Quote actually in the curve, in whole quote units. */
+  liquidityQuote: number;
+  /** Decimals of the quote asset, to scale the wei amounts in the trade log. */
+  pairDecimals: number;
   /** The head the scan read at, to say whether the trade log reaches it. */
   currentBlock: number;
   now?: number;
@@ -154,7 +160,7 @@ function compute(
   const { mcapQuote, liquidityQuote } = input;
   const empty: MarketSnapshot = {
     mcapQuote, athQuote: null, athMinutes: null, liquidityQuote,
-    vol5m: 0n, vol1h: 0n, change5m: null, change1h: null,
+    vol5m: 0, vol1h: 0, change5m: null, change1h: null,
     trades: 0, complete: false,
   };
   if (!rows.length) return empty;
@@ -185,6 +191,7 @@ function compute(
 
   let vol5m = 0n;
   let vol1h = 0n;
+  const unit = 10 ** input.pairDecimals;
   let at5m: Price | null = null;
   let at1h: Price | null = null;
   let last: Price | null = null;
@@ -235,12 +242,13 @@ function compute(
   return {
     mcapQuote,
     // Market cap moves with price and supply is fixed, so the peak market cap
-    // is the current one scaled by the peak price over the current price.
-    athQuote: (mcapQuote * peak.price.q * last.t) / (peak.price.t * last.q),
+    // is the current one scaled by the peak price over the current price. The
+    // ratio is taken in bigint and only then becomes a number.
+    athQuote: mcapQuote * (Number((peak.price.q * last.t * 1_000_000n) / (peak.price.t * last.q)) / 1_000_000),
     athMinutes: Math.max(0, Math.round((peak.at - firstAt) / 60)),
     liquidityQuote,
-    vol5m,
-    vol1h,
+    vol5m: Number(vol5m) / unit,
+    vol1h: Number(vol1h) / unit,
     change5m: at5m ? changePct(at5m, last) : null,
     change1h: at1h ? changePct(at1h, last) : null,
     trades: counted,
