@@ -120,8 +120,53 @@ export const CurveSell = parseAbiItem(
 export const CurveBuyRefunded = parseAbiItem(
   'event CurveBuyRefunded(address indexed buyer,uint256 quoteRefunded)',
 );
+/**
+ * NOT the token. Measured on chain: all three CurveCompleted logs in a 19,000
+ * block window carry the FACTORY address in this field, while curve.token()
+ * returns something different every time. The topic0 still hashes correctly for
+ * CurveCompleted(address,uint256,uint256), so only the name was wrong. Anything
+ * keying graduation state off this field would key every launch off one address.
+ */
+/**
+ * The opening-window events, all emitted by the per-launch curve.
+ *
+ * Confirmed against chain rather than from a document: each topic0 was matched
+ * against live logs AND located as a PUSH32 constant in the deployed curve
+ * bytecode, which also bounds the curve's complete event set at eight. Notably
+ * SnipeTaxCharged exists in exactly one form -- 232 other plausible spellings
+ * were checked against every pons v2 contract's bytecode and none is present.
+ *
+ * SnipeTaxCharged is self-terminating: every one a curve will ever emit falls
+ * inside the three second window (verified at spans of 30, 40, 100, 600 and
+ * 20,000 blocks, all returning the same 16 events). So the opening tax total is
+ * simply the sum over the whole curve, with no block-window arithmetic and no
+ * off-by-one when a launch lands late in its second.
+ */
+export const SnipeTaxCharged = parseAbiItem(
+  'event SnipeTaxCharged(address indexed payer,uint256 amount)',
+);
+
+/**
+ * One per pre-exempted wallet, emitted inside the launch transaction.
+ *
+ * A more reliable source than decoding the creation calldata: it does not
+ * depend on knowing the entry point's ABI, which is what leaves exemptions
+ * undetermined today whenever a launch arrives through a contract this build
+ * has no decoder for.
+ */
+export const SnipeTaxExempted = parseAbiItem('event SnipeTaxExempted(address indexed wallet)');
+
+export const CurveInitialized = parseAbiItem('event Initialized(address token)');
+
+export const FeesSwept = parseAbiItem(
+  'event FeesSwept(uint256 quote,uint256 tokens,uint256 fees)',
+);
+
+/** Live exemption check, selector 0xd44bdfe7. isSnipeTaxExempt() does not exist. */
+export const curveExemptAbi = parseAbi(['function snipeTaxExempt(address) view returns (bool)']);
+
 export const CurveCompleted = parseAbiItem(
-  'event CurveCompleted(address token,uint256 quoteReserve,uint256 tokenReserve)',
+  'event CurveCompleted(address factory,uint256 quoteReserve,uint256 tokenReserve)',
 );
 
 /** Selectors for the four launch entry points, for fast dispatch. */

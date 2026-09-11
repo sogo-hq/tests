@@ -27,6 +27,7 @@ import {
   launchChat, preflight, preflightLine, startLaunchLoop,
   guardVerdict, guardActive, pinnedCa, offencesOf, recordOffence,
   alreadyHandled, markHandled, muteFor24h, GUARD_WARNING, GUARD_MUTED,
+  launchDetected,
 } from './launchday.js';
 import { ALERTS_PER_HOUR } from './alerts.js';
 import { buildAlerts } from './alerts.js';
@@ -1322,6 +1323,22 @@ export function createBot(token = TELEGRAM_BOT_TOKEN): Bot {
  * what happens in every non-bot mode.
  */
 let liveBot: Bot | null = null;
+
+/**
+ * The launch post, on the same callback the alerts ride.
+ *
+ * Called before deliverAlerts on purpose: this is the one message in the system
+ * with a published three second budget, and the alert loop deliberately yields
+ * to interactive work. A launch is exactly when interactive work never stops.
+ */
+export async function deliverLaunch(tokens: string[]): Promise<void> {
+  if (!liveBot || !tokens.length) return;
+  try {
+    await launchDetected(liveBot.api, tokens, { botUsername: liveBot.botInfo?.username });
+  } catch (err) {
+    console.warn('[launch] detection failed:', String((err as Error)?.message ?? err).slice(0, 160));
+  }
+}
 
 export async function deliverAlerts(tokens: string[]): Promise<number> {
   if (!liveBot || !tokens.length) return 0;

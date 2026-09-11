@@ -6,7 +6,7 @@ import { scanToken } from './scan.js';
 import { renderCardText, renderDefaultCard } from './card.js';
 import { runDueRechecks, startRecheckLoop } from './recheck.js';
 import { startWindowLoop, windowBacklog, indexWindows } from './indexer/windows.js';
-import { deliverAlerts } from './bot.js';
+import { deliverAlerts, deliverLaunch } from './bot.js';
 import { startBot } from './bot.js';
 import { db } from './db.js';
 import { BACKFILL_DAYS, BLOCKS_PER_DAY } from './config.js';
@@ -158,7 +158,14 @@ async function main(): Promise<void> {
       console.log(`scans recorded        ${q('SELECT COUNT(*) n FROM scans')}`);
       console.log(`rechecks done         ${q('SELECT COUNT(*) n FROM rechecks WHERE completed_at IS NOT NULL')}`);
       console.log(`rechecks pending      ${q('SELECT COUNT(*) n FROM rechecks WHERE completed_at IS NULL')}`);
-      const entry = db.prepare('SELECT entry_point, COUNT(*) n FROM launches GROUP BY entry_point ORDER BY n DESC').all() as any[];
+      const { snipeTaxPolicy } = await import('./metrics/opening.js');
+      const policy = await snipeTaxPolicy();
+      console.log(
+        policy
+          ? `opening tax policy    ${(policy.startBps / 100).toFixed(0)}% for ${policy.seconds}s (live from the factory)`
+          : 'opening tax policy    could not be read, undetermined',
+      );
+            const entry = db.prepare('SELECT entry_point, COUNT(*) n FROM launches GROUP BY entry_point ORDER BY n DESC').all() as any[];
       if (entry.length) {
         console.log('\nlaunch entry points:');
         for (const e of entry) console.log(`  ${String(e.entry_point).padEnd(16)} ${e.n}`);
@@ -192,7 +199,12 @@ async function main(): Promise<void> {
       // Alerts ride the index loop rather than polling: it already sees every
       // launch within three seconds, and a second poller would compete for the
       // same rate limit to learn what this one already knows.
-      startIndexLoop(3_000, async (tokens) => { await deliverAlerts(tokens); });
+      startIndexLoop(3_000, async (tokens) => {
+      // The launch post first: it is the only message here with a published
+      // three second budget, and the alert pass yields to interactive work.
+      await deliverLaunch(tokens);
+      await deliverAlerts(tokens);
+    });
       startRecheckLoop();
       // Started unconditionally. It used to start only when a backlog already
       // existed, which meant a container that came up with an empty database

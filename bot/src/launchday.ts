@@ -3,6 +3,7 @@ import {
   getLaunchPlan, dueCountdown, countdownPost, COUNTDOWN_OFFSETS, launchTimeLine, LAUNCH_TZ,
 } from './launch.js';
 import { getSetting, setSetting, refreshBalances, totals, normaliseWallet } from './ready.js';
+import { db } from './db.js';
 import { totalsBlock } from './tge.js';
 
 /**
@@ -133,7 +134,7 @@ export async function countdownTick(api: Api, opts: TickOpts = {}): Promise<stri
  * stored id left alone: the next tick tries again rather than silently
  * dropping the only visible launch time.
  */
-async function repin(api: Api, chatId: number, messageId: number, slot: string): Promise<void> {
+export async function repin(api: Api, chatId: number, messageId: number, slot: string): Promise<void> {
   try {
     await api.pinChatMessage(chatId, messageId, { disable_notification: true });
   } catch (err) {
@@ -307,11 +308,227 @@ export { launchTimeLine, COUNTDOWN_OFFSETS, LAUNCH_TZ };
  * indexed read against a table with a handful of rows.
  */
 export function startLaunchLoop(api: Api, botUsername?: string, intervalMs = 20_000): NodeJS.Timeout {
+  let running = false;
   const t = setInterval(() => {
-    void countdownTick(api, { botUsername }).catch((err) => {
-      console.warn('[launch] countdown tick failed:', String((err as Error)?.message ?? err).slice(0, 160));
-    });
+    // A tick that posts and pins can outlast the interval, and two of them at
+    // once would post the block twice.
+    if (running) return;
+    running = true;
+    void (async () => {
+      try {
+        await countdownTick(api, { botUsername });
+        // Covers the launches the index callback structurally cannot see.
+        await reconcileLaunch(api, { botUsername });
+        await selfScanTick(api, { botUsername });
+      } catch (err) {
+        console.warn('[launch] tick failed:', String((err as Error)?.message ?? err).slice(0, 160));
+      } finally {
+        running = false;
+      }
+    })();
   }, intervalMs);
   t.unref?.();
   return t;
+}
+
+// ------------------------------------------------------- the launch itself
+
+/**
+ * The launch the group has been counting down to, once it lands.
+ *
+ * Attached to the index loop's new-launch callback rather than to the twenty
+ * second loop above. The index loop already polls the factory every three
+ * seconds with a non-overlap guard, and the deployer it needs is on the
+ * TokenLaunched log itself, so matching it is one indexed SQLite read with no
+ * extra RPC. The published promise is "CA lands here 3 s after launch", and a
+ * twenty second poller cannot keep it.
+ *
+ * Deliberately NOT routed through buildAlerts: that path defers whenever a user
+ * scan is in flight, which during a launch is continuously true, so the one
+ * post that must not wait would wait the longest.
+ */
+export async function launchDetected(api: Api, tokens: string[], opts: TickOpts = {}): Promise<string | null> {
+  const plan = getLaunchPlan();
+  if (!plan?.deployer || plan.ca) return null;
+  const chatId = launchChat();
+  if (chatId === null) return null;
+
+  const lower = tokens.map((t) => t.toLowerCase());
+  if (!lower.length) return null;
+  const row = db
+    .prepare(
+      `SELECT token FROM launches
+        WHERE deployer = ? AND token IN (${lower.map(() => '?').join(',')})
+        ORDER BY block_number DESC LIMIT 1`,
+    )
+    .get(plan.deployer, ...lower) as { token: string } | undefined;
+  if (!row) return null;
+  return announceLaunch(api, chatId, row.token, plan.name, opts);
+}
+
+/**
+ * The same detection, from the table rather than from the callback edge.
+ *
+ * Two ways the callback misses a launch, both real: a cold start runs a
+ * backfill whose result carries no newTokens at all, and a token whose row was
+ * already created by somebody scanning it lands in the loop's "before" set and
+ * never appears as new. Either one would leave the group with no CA while the
+ * bot sat there believing it had nothing to do.
+ */
+export async function reconcileLaunch(api: Api, opts: TickOpts = {}): Promise<string | null> {
+  const plan = getLaunchPlan();
+  if (!plan?.deployer || plan.ca) return null;
+  const chatId = launchChat();
+  if (chatId === null) return null;
+  // Only launches from this launch's own window: the watched deployer has a
+  // history, and the newest row from last month is not today's launch.
+  const since = Math.floor((plan.at - 6 * 3_600_000) / 1000);
+  const row = db
+    .prepare(
+      `SELECT token FROM launches WHERE deployer = ? AND launched_at >= ?
+        ORDER BY block_number DESC LIMIT 1`,
+    )
+    .get(plan.deployer, since) as { token: string } | undefined;
+  if (!row) return null;
+  return announceLaunch(api, chatId, row.token, plan.name, opts);
+}
+
+/**
+ * Post and pin the one CA.
+ *
+ * launch_ca is written BEFORE the post, not after. That single write is what
+ * closes the fake-CA guard window and makes this address the authoritative one;
+ * writing it afterwards leaves a gap in which the genuine CA is the only
+ * address the guard has never heard of.
+ *
+ * The exception to mark-after-send, and for a reason: a double post here is a
+ * second "this is the only CA" message, which is survivable, while a gap is the
+ * guard deleting the truth.
+ */
+async function announceLaunch(
+  api: Api, chatId: number, token: string, name: string | null, opts: TickOpts,
+): Promise<string> {
+  const now = opts.now ?? Date.now();
+  const ca = normaliseWallet(token) ?? token.toLowerCase();
+  setSetting('launch_ca', ca);
+  setSetting('launch_detected_at', String(Math.floor(now / 1000)));
+
+  const label = name ?? 'the token';
+  const sent = await api.sendMessage(
+    chatId,
+    `${label} is live. CA: ${ca}\nthis is the only CA.`,
+    { link_preview_options: { is_disabled: true } },
+  );
+  await repin(api, chatId, sent.message_id, 'launch_pinned');
+
+  // The countdown pin is a different slot, so it has to be taken down here.
+  const countdown = Number(getSetting('countdown_pinned') || 0);
+  if (countdown) {
+    try {
+      await api.unpinChatMessage(chatId, countdown);
+      setSetting('countdown_pinned', '');
+    } catch (err) {
+      console.warn(`[launch] countdown unpin failed: ${String((err as Error)?.message ?? err).slice(0, 120)}`);
+    }
+  }
+  console.log(`[launch] ${ca} announced and pinned in ${chatId}`);
+  return ca;
+}
+
+// -------------------------------------------------- the launch, scanned
+
+/** The bot scanning its own launch, and the two posts that come out of it. */
+export const SELF_SCAN_HEADER = 'the launch, scanned by its own tool';
+export const SELF_SCAN_DELAY_MS = Number(process.env.SELF_SCAN_DELAY_MS || 300_000) || 300_000;
+export const SELF_FULL_DELAY_MS = Number(process.env.SELF_FULL_DELAY_MS || 900_000) || 900_000;
+
+/**
+ * The scan of the launch, five minutes in, and its /full ten minutes after
+ * that.
+ *
+ * Both are marked after the send returns, so a failed post stays due and the
+ * next tick retries it rather than the group silently never getting it.
+ *
+ * The scan runs unlimited: that flag, not a missing quota key, is the only
+ * thing that actually skips the limiters. performScan de-duplicates concurrent
+ * scans of the same token, so this and the flood of member scans arriving at
+ * the same moment cost one scan between them.
+ */
+export async function selfScanTick(api: Api, opts: TickOpts = {}): Promise<'quick' | 'full' | null> {
+  const plan = getLaunchPlan();
+  if (!plan?.ca) return null;
+  const chatId = launchChat();
+  if (chatId === null) return null;
+  const detected = Number(getSetting('launch_detected_at') || 0) * 1000;
+  if (!detected) return null;
+  const now = opts.now ?? Date.now();
+  const since = now - detected;
+
+  if (since >= SELF_SCAN_DELAY_MS && !getSetting('launch_scanned')) {
+    const { performScan } = await import('./service.js');
+    const out = await performScan({
+      token: plan.ca, source: 'cli', unlimited: true, botUsername: opts.botUsername,
+    });
+    if (out.kind !== 'ok') {
+      // A scan that did not finish says nothing about the chain, so nothing is
+      // posted and the tick tries again.
+      console.warn(`[launch] self-scan not ready: ${out.kind}`);
+      return null;
+    }
+    const extra = await openingBlock(plan.ca);
+    // The default card carries no parse_mode: it is built to be forwarded.
+    await api.sendMessage(chatId, [SELF_SCAN_HEADER, '', out.defaultCard, ...extra].join('\n'), {
+      link_preview_options: { is_disabled: true },
+    });
+    setSetting('launch_scanned', String(Math.floor(now / 1000)));
+    return 'quick';
+  }
+
+  if (since >= SELF_FULL_DELAY_MS && getSetting('launch_scanned') && !getSetting('launch_fulled')) {
+    const { performScan } = await import('./service.js');
+    const out = await performScan({
+      token: plan.ca, source: 'cli', unlimited: true, botUsername: opts.botUsername,
+    });
+    if (out.kind !== 'ok') return null;
+    // The /full card is HTML, unlike the default one.
+    await api.sendMessage(chatId, out.fullCard, {
+      parse_mode: 'HTML', link_preview_options: { is_disabled: true },
+    });
+    setSetting('launch_fulled', String(Math.floor(now / 1000)));
+    return 'full';
+  }
+  return null;
+}
+
+/**
+ * The opening-window lines, plus the tax policy the launch actually ran under.
+ *
+ * Read live rather than hardcoded. 9,900 bps over 3 seconds is what the factory
+ * says today, and a value compiled in would keep printing after it changed.
+ */
+async function openingBlock(token: string): Promise<string[]> {
+  const row = db
+    .prepare('SELECT curve, deployer, block_number FROM launches WHERE token = ?')
+    .get(token.toLowerCase()) as { curve: string; deployer: string; block_number: number } | undefined;
+  if (!row) return ['opening window: this launch is not indexed yet, undetermined'];
+
+  const { readOpeningWindow, openingLines, snipeTaxPolicy } = await import('./metrics/opening.js');
+  const { readToken } = await import('./reads.js');
+  const reads = await readToken(token).catch(() => null);
+  if (!reads) return ['opening window: the token could not be read, undetermined'];
+
+  const w = await readOpeningWindow({
+    curve: row.curve,
+    deployer: row.deployer,
+    totalSupply: reads.totalSupply,
+    fromBlock: BigInt(row.block_number),
+  });
+  const policy = await snipeTaxPolicy();
+  const lines = ['', ...openingLines(w, { pairSymbol: reads.pairSymbol, pairDecimals: reads.pairDecimals })];
+  lines.push(
+    policy
+      ? `opening tax policy: ${(policy.startBps / 100).toFixed(0)}% for the first ${policy.seconds} s, read from the factory`
+      : 'opening tax policy: could not be read, undetermined',
+  );
+  return lines;
 }
