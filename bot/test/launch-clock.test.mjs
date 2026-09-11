@@ -142,3 +142,33 @@ test('a zone ICU will not name falls back to an offset rather than guessing', ()
   assert.match(ny, /^(EDT|UTC-4)$/, `unexpected abbreviation ${ny}`);
   assert.equal(L.zonedParts(UTC('2026-09-22T14:00:00Z'), 'UTC').abbrev, 'UTC');
 });
+
+test('the two DST transitions round-trip, and the hour that does not exist is unreachable', () => {
+  // Bratislava springs forward on the last Sunday of March (02:00 -> 03:00) and
+  // falls back on the last Sunday of October (03:00 -> 02:00).
+  const rt = (y, m, d, hh, mm) => {
+    const p = L.zonedParts(L.zonedToUtcMs(y, m, d, hh, mm));
+    return `${p.hour}:${String(p.minute).padStart(2, '0')}`;
+  };
+  assert.equal(rt(2026, 3, 29, 1, 30), '1:30');
+  assert.equal(rt(2026, 3, 29, 3, 30), '3:30');
+  assert.equal(rt(2026, 10, 25, 1, 30), '1:30');
+  assert.equal(rt(2026, 10, 25, 2, 30), '2:30');
+  assert.equal(rt(2026, 10, 25, 3, 30), '3:30');
+  // 02:30 on the spring-forward day is a wall-clock time that does not exist;
+  // it resolves forward to 03:30. Unreachable for a launch regardless: the day
+  // is a Sunday and the time is outside the window, so two rules refuse it
+  // before the ambiguity can matter.
+  assert.equal(rt(2026, 3, 29, 2, 30), '3:30');
+  assert.match(L.parseLaunchTime('2026-03-29 02:30', UTC('2026-01-05T09:00:00Z')).reason, /Sunday is not a launch day/);
+});
+
+test('a deadline on the last day of a month does not roll into the wrong one', () => {
+  // The cutoff is the start of the day AFTER the deadline, so September's is
+  // day 31 of September. Date.UTC normalises that to 1 October rather than
+  // producing an invalid instant.
+  const cutoff = L.zonedToUtcMs(2026, 9, 31, 0, 0);
+  assert.equal(new Date(cutoff).toISOString(), '2026-09-30T22:00:00.000Z', '00:00 on 1 Oct, CEST');
+  const dec = L.zonedToUtcMs(2026, 12, 32, 0, 0);
+  assert.equal(new Date(dec).toISOString(), '2026-12-31T23:00:00.000Z', '00:00 on 1 Jan, CET');
+});
