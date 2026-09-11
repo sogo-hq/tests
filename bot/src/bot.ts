@@ -1322,9 +1322,9 @@ export function createBot(token = TELEGRAM_BOT_TOKEN): Bot {
         await ctx.reply([
           `filters: ${describeFilters(current.filters)}`,
           '',
-          'set them like: /feed filters exempt>0 pair=eth mute 22:00-07:00',
-          'min_buyers=n only matches once the opening window has been indexed,',
-          'which is minutes after a launch, so on a live feed it matches almost nothing.',
+          'set them like: /feed filters exempt>0 tax>4 pair=eth mute 22:00-07:00',
+          'pair is eth or stock: this chain pairs against native ETH or a tokenised',
+          'equity, and has no stablecoin pair.',
           '/feed filters clear removes them.',
         ].join('\n'));
         return;
@@ -1592,15 +1592,12 @@ export function createBot(token = TELEGRAM_BOT_TOKEN): Bot {
     }
 
     if (!selfRegistrationOpen()) {
-      // Premium holders register early when a room is set up for it. This is
-      // the only place the 24 h head start can mean anything today: there is no
-      // room object yet, so it is the registration gate itself that opens.
-      const early = (process.env.ROOM_EARLY_ACCESS ?? '').toLowerCase() === 'true'
-        && atLeast(await effectiveTier(userId), 'premium');
-      if (!early) {
-        await ctx.reply('registration is handled by the team right now. ask an admin to add you');
-        return;
-      }
+      // No premium head start here. The 24 h early access belongs to a launch
+      // ROOM, and rooms do not exist yet; wiring it to this gate instead would
+      // open self-registration in the main group, which is admin-only by
+      // decision rather than by accident.
+      await ctx.reply('registration is handled by the team right now. ask an admin to add you');
+      return;
     }
 
     const res = await registerMember(userId, parts[0]!, { inviteLink: inviteOf(userId) });

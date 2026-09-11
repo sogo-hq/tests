@@ -27,10 +27,12 @@ const addLaunch = (over = {}) => {
   const token = A(seq);
   db.prepare(
     `INSERT INTO launches (token, curve, deployer, pair_token, launch_config_id,
-       graduation_threshold, block_number, tx_hash, launched_at, snipe_exemption_count)
-     VALUES (?,?,?,?,0,'0',?,?,?,?)`,
+       graduation_threshold, block_number, tx_hash, launched_at, snipe_exemption_count,
+       creator_tax_bps)
+     VALUES (?,?,?,?,0,'0',?,?,?,?,?)`,
   ).run(token, A(9000 + seq), A(8000), over.pair ?? NATIVE, 60_000_000 + seq,
-        '0x' + String(seq).padStart(64, 'f'), 1_789_000_000 + seq, over.exempt ?? null);
+        '0x' + String(seq).padStart(64, 'f'), 1_789_000_000 + seq, over.exempt ?? null,
+        over.taxBps ?? 0);
   return token;
 };
 
@@ -62,10 +64,10 @@ const render = async (token) => `VITALS  ${token.slice(0, 8)}`;
 // ------------------------------------------------------------------- filters
 
 test('filters parse the way the pack writes them', () => {
-  const r = F.parseFilters('exempt>0 min_buyers=5 pair=eth mute 22:00-07:00');
+  const r = F.parseFilters('exempt>0 tax>4 pair=eth mute 22:00-07:00');
   assert.equal(r.ok, true);
-  assert.deepEqual(r.filters, { exempt: true, minBuyers: 5, pair: 'eth', mute: [22, 7] });
-  assert.equal(F.describeFilters(r.filters), 'exempt>0 min_buyers=5 pair=eth mute 22:00-07:00');
+  assert.deepEqual(r.filters, { exempt: true, taxOver: 4, pair: 'eth', mute: [22, 7] });
+  assert.equal(F.describeFilters(r.filters), 'exempt>0 tax>4 pair=eth mute 22:00-07:00');
   assert.deepEqual(F.parseFilters('').filters, {});
   assert.deepEqual(F.parseFilters('clear').filters, {});
 });
@@ -77,29 +79,34 @@ test('an unrecognised clause is refused, never ignored', () => {
 });
 
 test('exempt>0 needs a measured count, not an absent one', () => {
-  const row = (exempt) => ({ rowid: 1, token: A(1), pair_token: NATIVE, snipe_exemption_count: exempt, buyers: null });
+  const row = (exempt) => ({ rowid: 1, token: A(1), pair_token: NATIVE, snipe_exemption_count: exempt, creator_tax_bps: 0 });
   assert.equal(F.matches(row(3), { exempt: true }), true);
   assert.equal(F.matches(row(0), { exempt: true }), false);
   assert.equal(F.matches(row(null), { exempt: true }), false,
     'an undecoded creation transaction is not evidence of an exemption');
 });
 
-test('min_buyers fails an unknown buyer count, which is every fresh launch', () => {
-  const row = (buyers) => ({ rowid: 1, token: A(1), pair_token: NATIVE, snipe_exemption_count: 1, buyers });
-  assert.equal(F.matches(row(9), { minBuyers: 5 }), true);
-  assert.equal(F.matches(row(2), { minBuyers: 5 }), false);
-  assert.equal(F.matches(row(null), { minBuyers: 5 }), false, '"unknown" is not "at least five"');
+test('tax>N reads the creator tax, which the launch transaction carries', () => {
+  const row = (bps) => ({ rowid: 1, token: A(1), pair_token: NATIVE, snipe_exemption_count: 1, creator_tax_bps: bps });
+  assert.equal(F.matches(row(500), { taxOver: 4 }), true, '5% is above 4');
+  assert.equal(F.matches(row(400), { taxOver: 4 }), false, 'above, not at');
+  assert.equal(F.matches(row(0), { taxOver: 4 }), false);
+  assert.equal(F.matches(row(null), { taxOver: 4 }), false,
+    'a tax that could not be decoded is not "above four percent"');
+  // This replaced min_buyers, which could not work: buyer counts arrive minutes
+  // after a launch and the feed carries launches seconds old.
+  assert.equal(F.parseFilters('min_buyers=5').ok, false);
 });
 
 test('pair filters on what the stored column can actually answer', () => {
-  const row = (pair) => ({ rowid: 1, token: A(1), pair_token: pair, snipe_exemption_count: 1, buyers: null });
+  const row = (pair) => ({ rowid: 1, token: A(1), pair_token: pair, snipe_exemption_count: 1, creator_tax_bps: 0 });
   assert.equal(F.matches(row(NATIVE), { pair: 'eth' }), true);
   assert.equal(F.matches(row(STOCK), { pair: 'eth' }), false);
   assert.equal(F.matches(row(STOCK), { pair: 'stock' }), true);
   assert.equal(F.matches(row(NATIVE), { pair: 'stock' }), false);
   assert.equal(F.matches(row(STOCK), { pair: STOCK }), true);
-  // This chain has no stablecoin pair, so a named one matches nothing rather
-  // than erroring.
+  // This chain pairs against native ETH or a tokenised equity and has no
+  // stablecoin pair, so no third option is offered.
   assert.equal(F.matches(row(NATIVE), { pair: 'usdg' }), false);
   assert.equal(F.matches(row(STOCK), { pair: 'usdg' }), false);
 });

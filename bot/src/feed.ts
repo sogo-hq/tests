@@ -44,9 +44,17 @@ export const FEED_BEHIND_MAX = envNumber('FEED_BEHIND_MAX', 20);
 export interface FeedFilters {
   /** Only launches with at least one wallet pre-exempted from the opening tax. */
   exempt?: boolean;
-  /** Only launches with at least this many buyers in the indexed opening window. */
-  minBuyers?: number;
-  /** 'eth', 'stock', or a specific pair token address. */
+  /**
+   * Only launches whose creator tax is above this, in whole percent.
+   *
+   * Replaces min_buyers, which could not work: buyer counts come from the
+   * opening-window indexer minutes after a launch, so on a feed carrying
+   * seconds-old launches the answer was always unknown and the filter always
+   * failed. Creator tax is in the launch transaction and is readable the
+   * instant the launch is indexed.
+   */
+  taxOver?: number;
+  /** 'eth' or 'stock'. This chain has no stablecoin pair. */
   pair?: string;
   /** Local hours to stay quiet, as [fromHour, toHour). */
   mute?: [number, number];
@@ -135,8 +143,8 @@ export function parseFilters(input: string): FilterParse {
   for (const clause of normalised.split(/\s+/).filter(Boolean)) {
     const lower = clause.toLowerCase();
     if (lower === 'exempt>0' || lower === 'exempt') { filters.exempt = true; continue; }
-    let m = /^min_buyers=(\d+)$/.exec(lower);
-    if (m) { filters.minBuyers = Number(m[1]); continue; }
+    let m = /^tax>(\d+(?:\.\d+)?)$/.exec(lower);
+    if (m) { filters.taxOver = Number(m[1]); continue; }
     m = /^pair=(.+)$/.exec(lower);
     if (m) { filters.pair = m[1]!; continue; }
     m = /^mute=(\d{1,2}):(\d{2})-(\d{1,2}):(\d{2})$/.exec(lower);
@@ -147,7 +155,7 @@ export function parseFilters(input: string): FilterParse {
       filters.mute = [from, to];
       continue;
     }
-    return { ok: false, reason: `could not read "${clause}". try: exempt>0 min_buyers=5 pair=eth mute 22:00-07:00` };
+    return { ok: false, reason: `could not read "${clause}". try: exempt>0 tax>4 pair=eth mute 22:00-07:00` };
   }
   return { ok: true, filters };
 }
@@ -155,7 +163,7 @@ export function parseFilters(input: string): FilterParse {
 export function describeFilters(f: FeedFilters): string {
   const parts: string[] = [];
   if (f.exempt) parts.push('exempt>0');
-  if (f.minBuyers !== undefined) parts.push(`min_buyers=${f.minBuyers}`);
+  if (f.taxOver !== undefined) parts.push(`tax>${f.taxOver}`);
   if (f.pair) parts.push(`pair=${f.pair}`);
   if (f.mute) parts.push(`mute ${String(f.mute[0]).padStart(2, '0')}:00-${String(f.mute[1]).padStart(2, '0')}:00`);
   return parts.length ? parts.join(' ') : 'none';
@@ -175,56 +183,41 @@ export interface LaunchRow {
   token: string;
   pair_token: string;
   snipe_exemption_count: number | null;
-  buyers: number | null;
+  creator_tax_bps: number | null;
 }
 
 /**
  * Does this launch pass the subscriber's filters?
  *
- * A filter is a positive claim, so anything undetermined fails it. min_buyers
- * on a launch seconds old is the common case: the opening window has not been
- * indexed, the buyer count is unknown, and "unknown" is not "at least five".
- * The filter help says so, because otherwise it reads as a broken feed.
+ * A filter is a positive claim, so anything undetermined fails it: a creator
+ * tax that could not be decoded is not "above four percent", and an undecoded
+ * creation transaction is not evidence of an exemption.
  */
 export function matches(row: LaunchRow, f: FeedFilters): boolean {
   if (f.exempt && !(row.snipe_exemption_count !== null && row.snipe_exemption_count > 0)) return false;
-  if (f.minBuyers !== undefined && !(row.buyers !== null && row.buyers >= f.minBuyers)) return false;
+  if (f.taxOver !== undefined
+    && !(row.creator_tax_bps !== null && row.creator_tax_bps / 100 > f.taxOver)) return false;
   if (f.pair) {
     const native = row.pair_token.toLowerCase() === NATIVE_PAIR;
     const want = f.pair.toLowerCase();
+    // Two kinds, because that is what this chain has: native ETH, and
+    // tokenised equities. There is no stablecoin pair, so there is no third
+    // option to offer and none is listed.
     if (want === 'eth') { if (!native) return false; }
     else if (want === 'stock') { if (native) return false; }
     else if (want.startsWith('0x')) { if (row.pair_token.toLowerCase() !== want) return false; }
-    else return false; // a named asset this chain does not have
+    else return false;
   }
   return true;
-}
-
-/**
- * Buyers in the opening window, or null when that has not been indexed.
- *
- * Null is the normal answer for a launch seconds old, which is every launch
- * this feed carries: the opening window is read by a background job minutes
- * later. So `min_buyers` filters out almost everything on a live feed, and the
- * filter help says exactly that rather than leaving it to be discovered as a
- * dead subscription. Zero rows is reported as unknown rather than as zero
- * buyers, because the two are not the same and only one of them is measured.
- */
-export function buyersOf(token: string): number | null {
-  const row = db
-    .prepare("SELECT COUNT(DISTINCT recipient) AS n FROM trades WHERE token = ? AND side = 'buy'")
-    .get(token.toLowerCase()) as { n: number } | undefined;
-  return row && row.n > 0 ? row.n : null;
 }
 
 function pendingFor(sub: FeedSub, limit: number): LaunchRow[] {
   return (db
     .prepare(
-      `SELECT rowid, token, pair_token, snipe_exemption_count
+      `SELECT rowid, token, pair_token, snipe_exemption_count, creator_tax_bps
          FROM launches WHERE rowid > ? ORDER BY rowid LIMIT ?`,
     )
-    .all(sub.lastSent, limit) as any[])
-    .map((r) => ({ ...r, buyers: buyersOf(r.token) }));
+    .all(sub.lastSent, limit) as LaunchRow[]);
 }
 
 export function behindCount(sub: FeedSub): number {

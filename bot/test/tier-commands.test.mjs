@@ -166,7 +166,7 @@ test('/feed filters refuses a clause it does not understand', async () => {
   assert.match(h.said(), /filters: exempt>0 pair=eth/);
 });
 
-test('the filter help warns that min_buyers matches almost nothing live', async () => {
+test('the filter help says what the pairs on this chain actually are', async () => {
   reset();
   await linkUser(5007);
   balances.set(WALLET, 2_000_000n);
@@ -174,7 +174,11 @@ test('the filter help warns that min_buyers matches almost nothing live', async 
   await h.bot.handleUpdate(h.msg('private', '/feed on', 5007, 5007));
   h.drain();
   await h.bot.handleUpdate(h.msg('private', '/feed filters', 5007, 5007));
-  assert.match(h.said(), /min_buyers=n only matches once the opening window has been indexed/);
+  const said = h.said();
+  assert.match(said, /pair is eth or stock/);
+  assert.match(said, /no stablecoin pair/);
+  assert.match(said, /exempt>0 tax>4 pair=eth/);
+  assert.ok(!/min_buyers/.test(said), 'a filter that matches almost nothing is worse than no filter');
 });
 
 test('/tiers shows the thresholds, and only an admin can move them', async () => {
