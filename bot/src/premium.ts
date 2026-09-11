@@ -3,11 +3,21 @@ import { client } from './chain.js';
 import { erc20Abi } from './abi.js';
 import { bulk } from './ratelimit.js';
 import { BURN_ADDRESS } from './config.js';
+import { db } from './db.js';
 
 /**
  * Who may use a paid feature, and where what they pay ends up.
  *
- * Two ways in, either one is enough: hold the token, or hold the ETH. No burn.
+ * Two ways in, either one is enough: HOLD 1,000,000 $VITALS, or PAY 0.05 ETH.
+ * The second is a payment, not a balance: holding 0.05 ETH is something almost
+ * every wallet on this chain does, and gating a paid feature on it would mean
+ * gating it on nothing.
+ *
+ * There is no bot-held wallet and no private key anywhere in this codebase, so
+ * payment is made directly to the treasury and proved with a transaction hash
+ * the bot verifies against chain. "Tokens paid to the bot go to
+ * TREASURY_ADDRESS" is satisfied by there being no intermediate step to go
+ * wrong. No burn.
  * Anything paid to the bot goes to the treasury -- which is why the treasury
  * address is refused rather than defaulted when it is not configured. A default
  * of the zero address is not a safe fallback here, it is a burn by another
@@ -57,7 +67,7 @@ export function treasuryAddress(): Address {
 }
 
 export type Entitlement =
-  | { state: 'premium'; via: 'vitals' | 'eth'; vitals: bigint | null; wei: bigint | null }
+  | { state: 'premium'; via: 'vitals' | 'payment'; vitals: bigint | null; wei: bigint | null }
   | { state: 'below'; vitals: bigint | null; wei: bigint }
   /**
    * The chain could not be read. NOT a refusal.
@@ -92,19 +102,17 @@ export async function entitlement(wallet: string): Promise<Entitlement> {
   }
   const addr = getAddress(wallet.toLowerCase());
 
-  let wei: bigint;
-  try {
-    wei = await bulk(() => client.getBalance({ address: addr }));
-  } catch (err) {
-    return { state: 'undetermined', reason: `balance unreadable: ${String((err as Error)?.message ?? err).slice(0, 80)}` };
-  }
-  if (wei >= PREMIUM_MIN_WEI) return { state: 'premium', via: 'eth', vitals: null, wei };
+  // A recorded payment was verified against chain when it was written, so this
+  // is a local read and cannot fail for a network reason.
+  const paid = paymentFor(addr);
+  if (paid !== null) return { state: 'premium', via: 'payment', vitals: null, wei: paid };
 
   const token = vitalsToken();
   if (!token) {
-    // No token configured: the ETH answer stands on its own and is a real
-    // measurement, so this is "below", not "undetermined".
-    return { state: 'below', vitals: null, wei };
+    // No token configured: the holding half of the test cannot run at all, and
+    // reporting "not premium" would deny a holder on a check that never
+    // happened. This is the operator's gap, not the user's.
+    return { state: 'undetermined', reason: '$VITALS is not configured on this bot yet' };
   }
   let vitals: bigint;
   try {
@@ -112,20 +120,81 @@ export async function entitlement(wallet: string): Promise<Entitlement> {
   } catch (err) {
     return { state: 'undetermined', reason: `$VITALS balance unreadable: ${String((err as Error)?.message ?? err).slice(0, 80)}` };
   }
-  if (vitals >= PREMIUM_MIN_VITALS) return { state: 'premium', via: 'vitals', vitals, wei };
-  return { state: 'below', vitals, wei };
+  if (vitals >= PREMIUM_MIN_VITALS) return { state: 'premium', via: 'vitals', vitals, wei: null };
+  return { state: 'below', vitals, wei: 0n };
+}
+
+/** Total verified payments from this wallet, or null when there are none. */
+export function paymentFor(wallet: string): bigint | null {
+  const row = db
+    .prepare('SELECT SUM(CAST(wei AS INTEGER)) AS total FROM premium_payments WHERE wallet = ?')
+    .get(wallet.toLowerCase()) as { total: number | null } | undefined;
+  if (!row?.total) return null;
+  const total = BigInt(row.total);
+  return total >= PREMIUM_MIN_WEI ? total : null;
+}
+
+export type PaymentResult =
+  | { ok: true; wei: bigint }
+  | { ok: false; reason: 'malformed' | 'not_found' | 'failed' | 'wrong_recipient' | 'wrong_sender' | 'too_little' | 'already_used' | 'unreadable'; detail?: string };
+
+/**
+ * Verify and record a payment, from its transaction hash.
+ *
+ * Every condition is checked against chain: that the transaction exists, that
+ * it succeeded, that it went to the treasury, that it came from the wallet
+ * claiming it, and that it is worth enough. A hash already recorded is refused
+ * rather than counted twice, which is what stops one payment entitling a queue
+ * of people who copied it out of the group.
+ */
+export async function recordPayment(
+  txHash: string, wallet: string, now = Date.now(),
+): Promise<PaymentResult> {
+  if (!/^0x[0-9a-fA-F]{64}$/.test(txHash.trim())) return { ok: false, reason: 'malformed' };
+  if (!isAddress(wallet.toLowerCase(), { strict: false })) return { ok: false, reason: 'malformed' };
+  const hash = txHash.trim().toLowerCase();
+  const addr = wallet.toLowerCase();
+
+  const existing = db.prepare('SELECT wallet FROM premium_payments WHERE tx_hash = ?').get(hash) as
+    | { wallet: string } | undefined;
+  if (existing) return { ok: false, reason: 'already_used' };
+
+  const treasury = treasuryAddress().toLowerCase();
+  let tx: any;
+  let receipt: any;
+  try {
+    [tx, receipt] = await Promise.all([
+      bulk(() => client.getTransaction({ hash: hash as `0x${string}` })),
+      bulk(() => client.getTransactionReceipt({ hash: hash as `0x${string}` })),
+    ]);
+  } catch (err) {
+    const msg = String((err as Error)?.message ?? err);
+    // A hash the node has never seen is a real answer; anything else is not.
+    return /not found|could not be found/i.test(msg)
+      ? { ok: false, reason: 'not_found' }
+      : { ok: false, reason: 'unreadable', detail: msg.slice(0, 100) };
+  }
+  if (!tx || !receipt) return { ok: false, reason: 'not_found' };
+  if (receipt.status !== 'success') return { ok: false, reason: 'failed' };
+  if (String(tx.to ?? '').toLowerCase() !== treasury) return { ok: false, reason: 'wrong_recipient' };
+  if (String(tx.from ?? '').toLowerCase() !== addr) return { ok: false, reason: 'wrong_sender' };
+  const wei = BigInt(tx.value ?? 0n);
+  if (wei < PREMIUM_MIN_WEI) return { ok: false, reason: 'too_little' };
+
+  db.prepare(
+    'INSERT OR IGNORE INTO premium_payments (tx_hash, wallet, wei, paid_at) VALUES (?,?,?,?)',
+  ).run(hash, addr, wei.toString(), Math.floor(now / 1000));
+  return { ok: true, wei };
 }
 
 /** What the holder is told. Facts and the thresholds, no upsell. */
 export function entitlementLine(e: Entitlement): string {
   if (e.state === 'undetermined') return `could not check your holdings: ${e.reason}. try again`;
   if (e.state === 'premium') {
-    return e.via === 'eth'
-      ? `premium · ${(Number(e.wei) / 1e18).toFixed(3)} ETH held`
+    return e.via === 'payment'
+      ? `premium · ${(Number(e.wei) / 1e18).toFixed(3)} ETH paid`
       : `premium · ${e.vitals!.toLocaleString()} $VITALS held`;
   }
-  const held = e.vitals === null
-    ? `${(Number(e.wei) / 1e18).toFixed(3)} ETH`
-    : `${e.vitals.toLocaleString()} $VITALS · ${(Number(e.wei) / 1e18).toFixed(3)} ETH`;
-  return `not premium · you hold ${held} · need ${PREMIUM_MIN_VITALS.toLocaleString()} $VITALS or ${PREMIUM_MIN_ETH} ETH`;
+  return `not premium · you hold ${(e.vitals ?? 0n).toLocaleString()} $VITALS · ` +
+    `need ${PREMIUM_MIN_VITALS.toLocaleString()} $VITALS held, or ${PREMIUM_MIN_ETH} ETH paid to the treasury`;
 }

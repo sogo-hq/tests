@@ -292,6 +292,20 @@ CREATE TABLE IF NOT EXISTS ready_snapshots (
   wei     TEXT NOT NULL
 );
 
+-- Premium paid for, not held.
+--
+-- Keyed on the transaction hash so one payment entitles one wallet once: a hash
+-- replayed by a second user, or by the same user twice, collides on the primary
+-- key rather than granting twice. Verified against chain before it is written,
+-- never on a user's say-so.
+CREATE TABLE IF NOT EXISTS premium_payments (
+  tx_hash TEXT PRIMARY KEY,
+  wallet  TEXT NOT NULL,
+  wei     TEXT NOT NULL,
+  paid_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_premium_wallet ON premium_payments(wallet);
+
 CREATE TABLE IF NOT EXISTS cursors (
   name         TEXT PRIMARY KEY,
   block_number INTEGER NOT NULL,
