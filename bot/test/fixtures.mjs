@@ -9,7 +9,7 @@ export function makeScan(over = {}) {
   return {
     scanId: 1,
     launchBlock: 100,
-    launchedAt: 1_700_000_000,
+    launchedAt: over.launchedAt ?? 1_700_000_000,
     ageSeconds,
     // derived exactly as production does, so a fixture cannot assert against an
     // age/mode pair the real code would never produce
@@ -55,9 +55,9 @@ export function makeScan(over = {}) {
               uniqueBuyers30m: over.buyers ?? 2,
               uniqueBuyers10m: over.buyers10m ?? 2,
               buyerGrowthRatio: 1,
-              buyTxCount: 2,
-              sellTxCount: 2,
-              buySellRatio: 1,
+              buyTxCount: over.buyTx ?? 2,
+              sellTxCount: over.sellTx ?? 2,
+              buySellRatio: (over.sellTx ?? 2) > 0 ? (over.buyTx ?? 2) / (over.sellTx ?? 2) : null,
               medianBuySize: over.medianBuySize ?? 0n,
               meanBuySize: 0n,
               progressAt10m: 0,

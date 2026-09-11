@@ -21,12 +21,15 @@ const {
 } = await import('../dist/image.js');
 const { measure } = await import('../dist/fontmetrics.js');
 const { makeScan } = await import('./fixtures.mjs');
+const { db } = await import('../dist/db.js');
 
 const AT = new Date(Date.UTC(2026, 7, 28, 14, 32));
 const f = (key, plain, severity, state = 'raised') =>
   ({ key, label: key, state, detail: `${key} technical`, compactDetail: key, plain, severity });
 
 const svg = (r, size) => cardSvg(r, AT, size);
+/** The height the card actually chose, which is content-dependent. */
+const svgHeight = (s) => Number(/<svg[^>]*height="(\d+)"/.exec(s)[1]);
 const png = (r, size) => renderCardPng(r, AT, size);
 
 /** Every <text> element as { x, size, anchor, body }. */
@@ -35,6 +38,7 @@ function texts(s) {
     const attr = (n) => (new RegExp(`${n}="([^"]*)"`).exec(m[1]) ?? [])[1];
     return {
       x: Number(attr('x')),
+      y: Number(attr('y')),
       size: Number(attr('font-size')),
       weight: Number(attr('font-weight') ?? 400),
       anchor: attr('text-anchor') ?? 'start',
@@ -59,17 +63,55 @@ const RICH = () => makeScan({
 
 // ------------------------------------------------------------------- shape
 
-test('both sizes render at the dimensions the spec names', () => {
+test('both sizes render at the width the spec names, up to its height', () => {
   resetSponsor();
   const r = RICH();
   const p = png(r);
   assert.equal(p.subarray(0, 8).toString('hex'), '89504e470d0a1a0a', 'not a PNG');
   assert.equal(p.readUInt32BE(16), 1080);
-  assert.equal(p.readUInt32BE(20), 1350);
+  assert.ok(p.readUInt32BE(20) <= 1350, 'past the ceiling');
+  assert.ok(p.readUInt32BE(20) >= SIZES.portrait.minH, 'below the floor');
 
   const w = png(r, 'wide');
   assert.equal(w.readUInt32BE(16), 1200);
-  assert.equal(w.readUInt32BE(20), 675);
+  assert.ok(w.readUInt32BE(20) <= 675);
+  assert.ok(w.readUInt32BE(20) >= SIZES.wide.minH);
+});
+
+test('a card with less to say is shorter, not padded', () => {
+  // The band of empty space between the traction block and the market strip
+  // grew with every check that came back undetermined: the more certain the
+  // card, the emptier it looked.
+  resetSponsor();
+  // Enough findings and traction to fill the card, against a single finding and
+  // nothing else known.
+  const full = svgHeight(svg(makeScan({
+    buyers: 412, buyTx: 980, sellTx: 410,
+    flags: [
+      f('a', 'a finding long enough that it wraps onto a second line of the card', 9),
+      f('b', 'creator opened with 4.9% of supply, index median 0.5% (n=1,837)', 8),
+      f('c', 'creator takes 8% per trade, index median 1% (n=1,837)', 7),
+      f('d', 'top 5 hold 61% of supply, largest 34%, 412 holders', 6),
+    ],
+    concentration: { top5Share: 61, top1Share: 34, holders: 412, excess: 0.4 },
+  })));
+  const thin = svgHeight(svg(makeScan({
+    flags: [f('tax', 'creator takes 8% per trade, index median 1%', 3)],
+    concentration: null,
+    windowIndexed: false,
+  })));
+  assert.ok(thin < full, `a one-finding card rendered ${thin}, a full one ${full}`);
+  assert.ok(thin >= SIZES.portrait.minH, `${thin} is past the floor a phone will crop`);
+  assert.ok(full > SIZES.portrait.minH, 'a full card should reach past the floor');
+  assert.ok(full <= SIZES.portrait.h, 'and never past the ceiling');
+});
+
+test('the wide card shrinks too, and never past its own floor', () => {
+  resetSponsor();
+  const rich = svgHeight(svg(RICH(), 'wide'));
+  const thin = svgHeight(svg(makeScan({ flags: [], concentration: null }), 'wide'));
+  assert.ok(thin <= rich);
+  assert.ok(thin >= SIZES.wide.minH && rich <= SIZES.wide.h);
 });
 
 test('the header names the chain, and the footer names the bot and the site', () => {
@@ -78,8 +120,27 @@ test('the header names the chain, and the footer names the bot and the site', ()
   assert.ok(bodies.includes('PONS V2, ROBINHOOD CHAIN'));
   assert.ok(bodies.includes('@vitalscheck_bot, paste any CA'));
   assert.ok(bodies.includes('checkvitals.xyz'));
-  assert.ok(bodies.some((b) => /launches indexed/.test(b)));
   assert.ok(bodies.some((b) => /2026-08-28 14:32 UTC/.test(b)));
+  // "0 launches indexed" under a card whose findings were measured against that
+  // index is a sentence that cannot be true. With nothing indexed it is not
+  // printed at all.
+  assert.ok(!bodies.some((b) => /launches indexed/.test(b)),
+    'an empty index must not be announced as a count');
+});
+
+test('the footer prints the real index size once there is one', () => {
+  resetSponsor();
+  for (let i = 0; i < 7; i++) {
+    db.prepare(
+      `INSERT OR IGNORE INTO launches (token, curve, deployer, pair_token, launch_config_id,
+         graduation_threshold, block_number, tx_hash, launched_at)
+       VALUES (?,?,?,?,1,'1',?,?,?)`,
+    ).run('0x' + i.toString(16).padStart(40, '0'), '0x' + 'c'.repeat(40), '0x' + 'd'.repeat(40),
+      '0x' + 'e'.repeat(40), i, '0x' + i.toString(16).padStart(64, '0'), 1);
+  }
+  const bodies = texts(svg(RICH())).map((t) => t.body);
+  assert.ok(bodies.some((b) => /\b7 launches indexed$/.test(b)),
+    `footer said: ${bodies.filter((b) => /UTC/.test(b)).join(' | ')}`);
 });
 
 // -------------------------------------------------------------- the hero
@@ -276,8 +337,12 @@ test('no em dash reaches the card', () => {
 test('nothing is drawn on top of anything else, at either size', () => {
   resetSponsor();
   for (const size of ['portrait', 'wide']) {
-    const { h: H, pad: PAD } = SIZES[size];
-    const rows = [...svg(RICH(), size).matchAll(/<text ([^>]*)>([^<]*)<\/text>/g)].map((m) => {
+    const { pad: PAD } = SIZES[size];
+    // The card's own height, not the ceiling: a card that shrank and then drew
+    // its footer past the new bottom would pass a check made against the old one.
+    const rendered = svg(RICH(), size);
+    const H = svgHeight(rendered);
+    const rows = [...rendered.matchAll(/<text ([^>]*)>([^<]*)<\/text>/g)].map((m) => {
       const attr = (n) => (new RegExp(`${n}="([^"]*)"`).exec(m[1]) ?? [])[1];
       return {
         y: Number(attr('y')),
@@ -319,5 +384,94 @@ test('a card that had to drop something always says so', () => {
     const drawnMeasures = bodies.includes('buyers') ? measuresOf(RICH()).length : 0;
     assert.equal(Number(note.slice(1).split(' ')[0]), total - shown - drawnMeasures,
       `${size}: the count must match what was actually left out`);
+  }
+});
+
+// ------------------------------------------------------- markers and wording
+
+test('a marker never touches the word it marks', () => {
+  resetSponsor();
+  // The offset was one constant for markers drawn at every size. At hero size
+  // the flag is 37px wide against a 40px offset: under 3px of air, and on the
+  // rendered card the pennant touched the first letter.
+  for (const size of ['portrait', 'wide']) {
+    const s = svg(RICH(), size);
+    // Each flag is a 2px pole plus a pennant 0.72 of its height wide. The pole
+    // rect carries the height, so the baseline and the right edge both come
+    // off it, and the line it marks is the one sharing that baseline.
+    const marks = [...s.matchAll(/<rect x="([\d.]+)" y="([\d.]+)" width="2" height="([\d.]+)"/g)]
+      .map((m) => ({
+        right: Number(m[1]) + 2 + Number(m[3]) * 0.72,
+        baseline: Number(m[2]) + Number(m[3]),
+      }));
+    assert.ok(marks.length, `${size}: no flag drawn`);
+    const rows = texts(s);
+    for (const mk of marks) {
+      const line = rows.find((t) => t.anchor === 'start' && Math.abs(t.y - mk.baseline) < 1);
+      assert.ok(line, `${size}: a flag at y=${mk.baseline} with nothing beside it`);
+      assert.ok(line.x - mk.right >= 8,
+        `${size}: only ${(line.x - mk.right).toFixed(1)}px between the flag and "${line.body.slice(0, 20)}"`);
+    }
+  }
+});
+
+test('the flow row states both counts, and only above a usable sample', () => {
+  resetSponsor();
+  // "buys per sell 1.0" is two buys and two sells, or two hundred and two
+  // hundred, and the card could not tell a reader which.
+  const busy = measuresOf(makeScan({ buyers: 40, buyTx: 120, sellTx: 44 }));
+  const flow = busy.find((m) => m.label === 'flow');
+  assert.equal(flow.value, '120 buys, 44 sells');
+  assert.ok(!busy.some((m) => /per sell/.test(m.label)), 'the ratio is jargon');
+
+  const quiet = measuresOf(makeScan({ buyers: 4, buyTx: 2, sellTx: 2 }));
+  assert.ok(!quiet.some((m) => m.label === 'flow'),
+    'four trades cannot support a statement about flow');
+});
+
+test('the state word carries its timing', () => {
+  resetSponsor();
+  const onCurve = texts(svg(makeScan({ phaseName: 'NotGraduated' }))).map((t) => t.body);
+  assert.ok(onCurve.some((b) => /on the curve/.test(b)));
+
+  // Launched, graduated an hour later, scanned three hours after that.
+  const grad = texts(svg(makeScan({
+    phaseName: 'Swept', launchedAt: 1_700_000_000, sweptAt: 1_700_003_600, ageSeconds: 14_400,
+  }))).map((t) => t.body);
+  assert.ok(grad.some((b) => /graduated 3h ago/.test(b)), grad.join(' | '));
+  assert.ok(!grad.some((b) => /·  graduated  ·/.test(b)), 'the bare word says nothing');
+
+  // And the age itself is untouched.
+  const young = texts(svg(makeScan({ ageSeconds: 1800 }))).map((t) => t.body);
+  assert.ok(young.some((b) => /\b30m\b/.test(b)), young.join(' | '));
+});
+
+test('the "+N more" line never runs into the market strip', () => {
+  resetSponsor();
+  // It is reserved a slot on a second layout pass, and the slot has to cover
+  // however far the body cursor had already advanced past its last baseline,
+  // which depends on which section ended the card.
+  const shapes = [
+    RICH(),
+    makeScan({ flags: Array.from({ length: 9 }, (_, i) => f(`k${i}`, `finding number ${i} of nine`, 9 - i)),
+      concentration: { top5Share: 61, top1Share: 34, holders: 412, excess: 0.4 } }),
+    makeScan({ flags: [f('a', 'a finding long enough to wrap onto a second line of the card', 9),
+      f('b', 'another finding that also wraps onto a second line right here', 8),
+      f('c', 'a third one', 7), f('d', 'a fourth one', 6), f('e', 'a fifth one', 5)],
+      concentration: { top5Share: 61, top1Share: 34, holders: 412, excess: 0.4 } }),
+  ];
+  for (const size of ['portrait', 'wide']) {
+    for (const [i, r] of shapes.entries()) {
+      const s = svg(r, size);
+      const note = texts(s).find((t) => /more on \/full/.test(t.body));
+      if (!note) continue;
+      // The strip rule is the full-width hairline nearest the bottom above the
+      // footer's own; both are CW wide, so take the higher of the two.
+      const rules = [...s.matchAll(/<rect x="[\d.]+" y="([\d.]+)" width="\d+" height="1"/g)]
+        .map((m) => Number(m[1])).sort((a, b) => a - b);
+      const stripRule = rules[rules.length - 2];
+      assert.ok(note.y + note.size * 0.25 < stripRule,
+        `${size} shape ${i}: "${note.body}" at y=${note.y} crosses the strip rule at ${stripRule}`);
+    }
   }
 });

@@ -7,6 +7,7 @@ import { measure, wrap, fitSize, hasGlyph } from './fontmetrics.js';
 import { sponsorLine } from './sponsor.js';
 import { isDeclared } from './declare.js';
 import { db } from './db.js';
+import { indexCoverage } from './coverage.js';
 
 /**
  * The card as an image.
@@ -23,10 +24,23 @@ import { db } from './db.js';
 
 export type CardSize = 'portrait' | 'wide';
 
-/** 1080x1350 is the shape a phone shows whole, which is where these are read. */
-const SIZES: Record<CardSize, { w: number; h: number; pad: number }> = {
-  portrait: { w: 1080, h: 1350, pad: 72 },
-  wide: { w: 1200, h: 675, pad: 64 },
+/**
+ * 1080x1350 is the shape a phone shows whole, which is where these are read.
+ *
+ * `h` is a ceiling, not a height. A launch with one finding and no traction
+ * window has perhaps a third of that to say, and the card used to pad the
+ * difference into one empty band between the traction block and the market
+ * strip: the more certain the card, the emptier it looked. It now ends where
+ * the content ends.
+ *
+ * `minH` stops that becoming a letterbox. Telegram crops a photo past about
+ * 2.5:1, so a card that shrank to fit two lines would arrive with its footer
+ * cut off, which is worse than the empty band it replaced. Both floors sit well
+ * inside that: 3:2 and 12:5.
+ */
+const SIZES: Record<CardSize, { w: number; h: number; pad: number; minH: number }> = {
+  portrait: { w: 1080, h: 1350, pad: 72, minH: 720 },
+  wide: { w: 1200, h: 675, pad: 64, minH: 500 },
 };
 
 const BG = '#080B09';
@@ -117,6 +131,24 @@ function undeterminedMark(x: number, y: number, h: number): string {
 
 export type Mark = 'finding' | 'undetermined' | 'none';
 
+/**
+ * Space between a marker and the word it marks.
+ *
+ * The offset used to be one constant, 40px, for markers drawn at every size.
+ * At hero size the flag is 37px wide and the gap came to under 3px: the flag
+ * touched the first letter. A marker is a piece of punctuation, so it is
+ * measured and spaced like one.
+ */
+const MARK_GAP = 14;
+
+function markWidth(kind: Mark, h: number): number {
+  // The flag is a 2px pole plus a pennant 0.72h wide.
+  if (kind === 'finding') return 2 + h * 0.72;
+  // The circle is 0.32h in radius, and the stroke straddles its edge.
+  if (kind === 'undetermined') return h * 0.64 + 2;
+  return 0;
+}
+
 function mark(kind: Mark, x: number, y: number, h: number): string {
   if (kind === 'finding') return flagMark(x, y, h);
   if (kind === 'undetermined') return undeterminedMark(x, y, h);
@@ -144,11 +176,23 @@ function shortAddress(addr: string): string {
   return `${addr.slice(0, 6)}…${addr.slice(-4)}`;
 }
 
+/**
+ * The state, said in a way that carries information.
+ *
+ * "graduated" on its own tells a reader nothing they can act on: a token that
+ * graduated forty seconds ago and one that graduated last Tuesday are different
+ * situations and the bare word rendered them identically. The header already
+ * carries the launch age beside it, so the two read together.
+ */
 function stateOf(r: ScanResult): string {
   const phase = r.reads.phaseName;
   if (phase === 'NotGraduated') return 'on the curve';
   if (phase === 'Rescued') return 'rescued';
-  return 'graduated';
+  const swept = r.reads.sweptAt;
+  // The scan's own clock, which is what ageSeconds was measured from.
+  const now = r.launchedAt + r.ageSeconds;
+  if (!swept || swept <= 0 || now <= swept) return 'graduated';
+  return `graduated ${age(now - swept)} ago`;
 }
 
 export interface HeroContent {
@@ -215,6 +259,9 @@ export function secondariesOf(r: ScanResult, limit = 3): { shown: Secondary[]; m
   return { shown: all.slice(0, limit), more: Math.max(0, all.length - limit) };
 }
 
+/** Below this many buyers, the buy/sell split is noise and is not shown. */
+export const MIN_BUYERS_FOR_FLOW = 10;
+
 export interface Measure { label: string; value: string; reference: string | null }
 
 /** The traction lines, each beside what it is measured against. */
@@ -229,8 +276,21 @@ export function measuresOf(r: ScanResult): Measure[] {
       ? null
       : `index median ${r.benchmark.median.toLocaleString()} (n=${r.benchmark.n.toLocaleString()})`,
   });
-  if (w.buySellRatio !== null) {
-    out.push({ label: 'buys per sell', value: w.buySellRatio.toFixed(1), reference: null });
+  /**
+   * The two counts, not their quotient.
+   *
+   * "buys per sell 1.0" is jargon, and at the sample sizes a young launch
+   * produces it is jargon that means nothing: two buys and two sells is the
+   * same 1.0 as two hundred and two hundred. Below ten buyers the row is
+   * dropped rather than printed, because there is no reading of four trades
+   * that tells anyone anything.
+   */
+  if (w.uniqueBuyers30m >= MIN_BUYERS_FOR_FLOW) {
+    out.push({
+      label: 'flow',
+      value: `${w.buyTxCount.toLocaleString()} buys, ${w.sellTxCount.toLocaleString()} sells`,
+      reference: null,
+    });
   }
   if (r.reads.phaseName === 'NotGraduated') {
     out.push({
@@ -279,10 +339,53 @@ function indexSize(): number {
 }
 
 export function cardSvg(r: ScanResult, renderedAt = new Date(), size: CardSize = 'portrait'): string {
-  const { w: W, h: H, pad: PAD } = SIZES[size];
+  const { w: W, h: MAX_H, pad: PAD, minH: MIN_H } = SIZES[size];
   const wide = size === 'wide';
   const CW = W - PAD * 2;
-  const p: string[] = [`<rect width="${W}" height="${H}" fill="${BG}"/>`];
+  // The ground is painted last and prepended, because its height is not known
+  // until the body has been laid out.
+  // -- what is below, reserved before anything above it is drawn ---------
+  //
+  // The footer and the market strip are anchored to the bottom, so the body has
+  // a budget rather than a hope. Written the other way first, and the wide card
+  // drew its findings straight through the strip and out the bottom: every line
+  // was inside the left and right margins, which is what the overflow test
+  // checked, and the card was still unreadable.
+  const cells = marketOf(r);
+  const ad = sponsorLine();
+  const adH = ad ? 44 : 0;
+  const stripH = cells.length ? 96 : 0;
+  // Everything below the body, measured once: the gap above the strip, the
+  // strip, the sponsor line, the footer rule and its two lines, and the bottom
+  // padding. The body's budget is the ceiling minus this, and the finished
+  // card's height is where the body actually ended plus this.
+  const TAIL = 100 + stripH + adH + PAD;
+
+  /**
+   * The omission note's own line, reserved only on the pass that needs it.
+   *
+   * Wider than the line itself: the body cursor already sits some way past its
+   * last baseline when the note is placed, and how far depends on which section
+   * ended the card. The slack is what keeps the note off the strip rule.
+   */
+  const NOTE_H = 44;
+
+  const sSize = wide ? 26 : 30;
+  // One indent for every secondary, taken from the widest marker any of them
+  // could carry, so their text lines up with each other whichever mark they got.
+  const secIndent = markWidth('finding', sSize * 0.72) + MARK_GAP;
+
+  /**
+   * The body, laid out against a budget.
+   *
+   * Run twice when anything is dropped: the "+N more" line is content too, and
+   * the first pass is what discovers whether there will be one. Anchoring it
+   * above the strip instead left it floating a section away from the content it
+   * refers to, now that the card no longer pads the gap.
+   */
+  const build = (noteH: number) => {
+  const p: string[] = [];
+  const limitY = MAX_H - TAIL - noteH;
 
   // -- header -----------------------------------------------------------
   let y = PAD + 22;
@@ -300,20 +403,6 @@ export function cardSvg(r: ScanResult, renderedAt = new Date(), size: CardSize =
   y += 26;
   p.push(`<rect x="${PAD}" y="${y}" width="${CW}" height="1" fill="${RULE}"/>`);
 
-  // -- what is below, reserved before anything above it is drawn ---------
-  //
-  // The footer and the market strip are anchored to the bottom, so the body has
-  // a budget rather than a hope. Written the other way first, and the wide card
-  // drew its findings straight through the strip and out the bottom: every line
-  // was inside the left and right margins, which is what the overflow test
-  // checked, and the card was still unreadable.
-  const cells = marketOf(r);
-  const ad = sponsorLine();
-  const footTop = H - PAD - 52 - 24;
-  const adH = ad ? 44 : 0;
-  const stripH = cells.length ? 96 : 0;
-  const limitY = footTop - adH - stripH - 24;
-
   // -- identity ---------------------------------------------------------
   y += wide ? 52 : 86;
   const ticker = drawable(r.reads.symbol ?? '?') || '?';
@@ -329,15 +418,23 @@ export function cardSvg(r: ScanResult, renderedAt = new Date(), size: CardSize =
   // -- hero -------------------------------------------------------------
   const hero = heroOf(r);
   y += wide ? 44 : 92;
-  const markW = 40;
-  const heroMax = CW - (hero.marked === 'none' ? 0 : markW);
-  const { size: heroSize, lines } = fitSize(hero.headline, wide ? 42 : 68, 30, heroMax, wide ? 2 : 3, SANS_BOLD_FILE);
-  const heroX = PAD + (hero.marked === 'none' ? 0 : markW);
-  if (hero.marked !== 'none') p.push(mark(hero.marked, PAD, y, heroSize * 0.72));
-  for (const line of lines) {
+  const heroTop = wide ? 42 : 68;
+  // Budgeted at the largest the hero could be, so the fit never assumes room a
+  // wider marker would take; drawn and offset at the size it actually got, so
+  // the gap is the same whatever that turns out to be.
+  const heroMax = CW - (markWidth(hero.marked, heroTop * 0.72) + (hero.marked === 'none' ? 0 : MARK_GAP));
+  const { size: heroSize, lines } = fitSize(hero.headline, heroTop, 30, heroMax, wide ? 2 : 3, SANS_BOLD_FILE);
+  const heroMarkH = heroSize * 0.72;
+  const heroX = PAD + markWidth(hero.marked, heroMarkH) + (hero.marked === 'none' ? 0 : MARK_GAP);
+  if (hero.marked !== 'none') p.push(mark(hero.marked, PAD, y, heroMarkH));
+  // Leading BETWEEN the hero's lines, not after the last one. Added after it
+  // too, a three-line hero left eighty points of empty card under the last
+  // descender before the next section had even started.
+  lines.forEach((line, i) => {
+    if (i > 0) y += heroSize * 1.18;
     p.push(text(heroX, y, line, { size: heroSize, weight: 700 }));
-    y += heroSize * 1.18;
-  }
+  });
+  y += heroSize * 0.38;
   if (hero.reference) {
     y += 6;
     p.push(text(heroX, y, hero.reference, { size: wide ? 23 : 26, fill: REF }));
@@ -349,16 +446,18 @@ export function cardSvg(r: ScanResult, renderedAt = new Date(), size: CardSize =
   const secondaries = secondariesOf(r, wide ? 2 : 3);
   omitted += secondaries.more;
 
-  const sSize = wide ? 26 : 30;
   let first = true;
   for (const sec of secondaries.shown) {
-    const sLines = wrap(sec.label, sSize, CW - markW, SANS_FILE).slice(0, 2);
-    const need = sLines.length * sSize * 1.3 + 8 + (first ? (wide ? 18 : 44) : 0);
+    const sLines = wrap(sec.label, sSize, CW - secIndent, SANS_FILE).slice(0, 2);
+    // Measured to the LAST BASELINE, not past the trailing gap: a finding was
+    // being dropped for eight points of air that nothing would have been drawn
+    // in. The budget already keeps twenty-four points clear above the strip.
+    const need = (sLines.length - 1) * sSize * 1.3 + (first ? (wide ? 18 : 44) : 0);
     if (y + need > limitY) { omitted++; continue; }
     if (first) { y += wide ? 26 : 44; first = false; }
     p.push(mark(sec.marked, PAD, y, sSize * 0.72));
     for (const line of sLines) {
-      p.push(text(PAD + markW, y, line, { size: sSize, fill: INK }));
+      p.push(text(PAD + secIndent, y, line, { size: sSize, fill: INK }));
       y += sSize * 1.3;
     }
     y += 8;
@@ -381,13 +480,33 @@ export function cardSvg(r: ScanResult, renderedAt = new Date(), size: CardSize =
     omitted += measures.length;
   }
 
-  // Anchored, not flowed. Flowed, it was the first thing to run out of room on
-  // the wide card, so the one line whose whole job is to say "there is more"
-  // disappeared exactly when there was more.
+  return { p, y, omitted };
+  };
+
+  // The second pass only ever drops more, never fewer, so its note is never
+  // too small for what it ends up counting.
+  let body = build(0);
+  if (body.omitted > 0) body = build(NOTE_H);
+  const p = body.p;
+  let omitted = body.omitted;
+  let y = body.y;
+
+  // Flowed with the content it refers to. The line whose whole job is to say
+  // "there is more" now has room reserved for it rather than borrowing it.
   if (omitted > 0) {
-    p.push(text(PAD + markW, footTop - adH - stripH - 12, `+${omitted} more on /full`,
-      { size: 24, fill: DIM }));
+    y += 10;
+    p.push(text(PAD + secIndent, y, `+${omitted} more on /full`, { size: 24, fill: DIM }));
+    y += 14;
   }
+
+  // -- the height, now that the body has been laid out -------------------
+  //
+  // Decided here rather than up front: the body was budgeted against the
+  // ceiling, so it either filled the card, in which case nothing shrinks, or it
+  // ended early and the card ends with it. Everything below is anchored to the
+  // bottom and so is positioned from this number.
+  const H = Math.max(MIN_H, Math.min(MAX_H, Math.round(y + TAIL)));
+  const footTop = H - PAD - 52 - 24;
 
   // -- market strip -------------------------------------------------------
   if (cells.length) {
@@ -411,10 +530,17 @@ export function cardSvg(r: ScanResult, renderedAt = new Date(), size: CardSize =
   p.push(`<rect x="${PAD}" y="${footY - 24}" width="${CW}" height="1" fill="${RULE}"/>`);
   p.push(text(PAD, footY + 16, '@vitalscheck_bot, paste any CA', { size: 26, fill: INK, weight: 600 }));
   p.push(text(W - PAD, footY + 16, 'checkvitals.xyz', { size: 26, fill: DIM, anchor: 'end' }));
-  p.push(text(PAD, footY + 46, `${utcStamp(renderedAt)}  ·  ${indexSize().toLocaleString()} launches indexed`,
+  const indexed = indexSize();
+  p.push(text(PAD, footY + 46,
+    indexed > 0
+      ? `${utcStamp(renderedAt)}  ·  ${indexed.toLocaleString()} launches indexed`
+      : utcStamp(renderedAt),
     { size: 19, fill: DIM }));
 
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">${p.join('')}</svg>`;
+  return (
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">` +
+    `<rect width="${W}" height="${H}" fill="${BG}"/>${p.join('')}</svg>`
+  );
 }
 
 export function renderCardPng(r: ScanResult, renderedAt = new Date(), size: CardSize = 'portrait'): Buffer {
