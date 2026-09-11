@@ -9,7 +9,8 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-process.env.DB_PATH = process.env.DB_PATH || `/tmp/filters-${process.pid}.db`;
+import { freshDb } from './tmpdb.mjs';
+process.env.DB_PATH = process.env.DB_PATH || freshDb('filters');
 const { db } = await import('../dist/db.js');
 const { matchingFilters, filterRates, rateLine, FILTERS, isFilterKey, MIN_RATE_SAMPLES } =
   await import('../dist/filters.js');

@@ -8,7 +8,8 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-process.env.DB_PATH = process.env.DB_PATH || `/tmp/legend-${process.pid}.db`;
+import { freshDb } from './tmpdb.mjs';
+process.env.DB_PATH = process.env.DB_PATH || freshDb('legend');
 const { LEGEND, claimLegend, resetLegend } = await import('../dist/legend.js');
 
 test('the legend is five lines and explains all three states', () => {

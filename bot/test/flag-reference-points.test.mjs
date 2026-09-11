@@ -12,7 +12,8 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-process.env.DB_PATH = process.env.DB_PATH || `/tmp/flagref-${process.pid}.db`;
+import { freshDb } from './tmpdb.mjs';
+process.env.DB_PATH = process.env.DB_PATH || freshDb('flagref');
 const { db } = await import('../dist/db.js');
 const { computeFlags } = await import('../dist/metrics/flags.js');
 const { recordIndexAdvance } = await import('../dist/indexer/health.js');

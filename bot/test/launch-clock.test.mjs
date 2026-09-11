@@ -8,7 +8,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-process.env.DB_PATH = process.env.DB_PATH || `/tmp/vitals-clock-${process.pid}.db`;
+import { freshDb } from './tmpdb.mjs';
+process.env.DB_PATH = process.env.DB_PATH || freshDb('clock');
 const L = await import('../dist/launch.js');
 
 const UTC = (s) => Date.parse(s);

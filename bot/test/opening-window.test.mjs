@@ -13,7 +13,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-process.env.DB_PATH = process.env.DB_PATH || `/tmp/vitals-opening-${process.pid}.db`;
+import { freshDb } from './tmpdb.mjs';
+process.env.DB_PATH = process.env.DB_PATH || freshDb('opening');
 const { client } = await import('../dist/chain.js');
 
 const CURVE = '0x88a06c9c7a610ebe15ade18a8287131613bc448a';

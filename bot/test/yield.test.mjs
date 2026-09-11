@@ -12,7 +12,8 @@ import assert from 'node:assert/strict';
  */
 const CWD = process.cwd();
 
-process.env.DB_PATH = `/tmp/yield-${process.pid}.db`;
+import { freshDb } from './tmpdb.mjs';
+process.env.DB_PATH = process.env.DB_PATH || freshDb('yield');
 process.env.RPC_RATE_PER_SEC = '10';
 process.env.RPC_BURST = '10';
 

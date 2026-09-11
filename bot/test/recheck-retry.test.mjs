@@ -10,7 +10,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-process.env.DB_PATH = `/tmp/recheck-retry-${process.pid}.db`;
+import { freshDb } from './tmpdb.mjs';
+process.env.DB_PATH = process.env.DB_PATH || freshDb('recheck-retry');
 // keep the 429 ladder short; the point here is the branch, not the backoff
 process.env.RPC_429_BUDGET_MS = '150';
 

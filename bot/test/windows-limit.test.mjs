@@ -11,7 +11,8 @@ import assert from 'node:assert/strict';
  */
 const CWD = process.cwd();
 
-process.env.DB_PATH = `/tmp/windows-limit-${process.pid}.db`;
+import { freshDb } from './tmpdb.mjs';
+process.env.DB_PATH = process.env.DB_PATH || freshDb('windows-limit');
 process.env.RPC_429_BUDGET_MS = '200';
 
 let mode = 'ok';

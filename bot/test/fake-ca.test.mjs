@@ -9,7 +9,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-process.env.DB_PATH = process.env.DB_PATH || `/tmp/vitals-fakeca-${process.pid}.db`;
+import { freshDb } from './tmpdb.mjs';
+process.env.DB_PATH = process.env.DB_PATH || freshDb('fakeca');
 const { db } = await import('../dist/db.js');
 const R = await import('../dist/ready.js');
 const L = await import('../dist/launch.js');

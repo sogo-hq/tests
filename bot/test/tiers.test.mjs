@@ -10,7 +10,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { privateKeyToAccount } from 'viem/accounts';
 
-process.env.DB_PATH = process.env.DB_PATH || `/tmp/vitals-tiers-${process.pid}.db`;
+import { freshDb } from './tmpdb.mjs';
+process.env.DB_PATH = process.env.DB_PATH || freshDb('tiers');
 const { db } = await import('../dist/db.js');
 const { client } = await import('../dist/chain.js');
 

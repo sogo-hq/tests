@@ -12,7 +12,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-process.env.DB_PATH = process.env.DB_PATH || `/tmp/vitals-ready-${process.pid}.db`;
+import { freshDb } from './tmpdb.mjs';
+process.env.DB_PATH = process.env.DB_PATH || freshDb('ready');
 process.env.ADMIN_IDS = '900001';
 process.env.READY_BLOCK_TTL_MS = '600000';
 

@@ -20,7 +20,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { encodeFunctionResult, encodeAbiParameters } from 'viem';
-process.env.DB_PATH = process.env.DB_PATH || `/tmp/resolve-${process.pid}.db`;
+import { freshDb } from './tmpdb.mjs';
+process.env.DB_PATH = process.env.DB_PATH || freshDb('resolve');
 const { db } = await import('../dist/db.js');
 const { resolveLaunch } = await import('../dist/resolve.js');
 const { factoryAbi, curveAbi } = await import('../dist/abi.js');

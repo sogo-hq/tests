@@ -21,7 +21,8 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-process.env.DB_PATH = process.env.DB_PATH || `/tmp/bun-addr-${process.pid}.db`;
+import { freshDb } from './tmpdb.mjs';
+process.env.DB_PATH = process.env.DB_PATH || freshDb('bun-addr');
 const { db } = await import('../dist/db.js');
 const { deployerSummary } = await import('../dist/deployerlookup.js');
 const { renderDefaultNotFound, NOT_A_PONS_LAUNCH } = await import('../dist/card.js');

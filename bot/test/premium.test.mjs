@@ -9,7 +9,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-process.env.DB_PATH = process.env.DB_PATH || `/tmp/vitals-premium-${process.pid}.db`;
+import { freshDb } from './tmpdb.mjs';
+process.env.DB_PATH = process.env.DB_PATH || freshDb('premium');
 const { client } = await import('../dist/chain.js');
 
 const WALLET = '0x1111111111111111111111111111111111111111';
