@@ -7,7 +7,7 @@
     "node": "22.x"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "npm rebuild better-sqlite3 && tsc -p tsconfig.json",
     "start": "node dist/index.js bot",
     "bot": "node dist/index.js bot",
     "backfill": "node dist/index.js backfill",
@@ -23,7 +23,7 @@
   },
   "dependencies": {
     "@resvg/resvg-js": "^2.6.2",
-    "better-sqlite3": "^11.7.0",
+    "better-sqlite3": "^12.11.1",
     "grammy": "^1.30.0",
     "viem": "^2.55.19"
   },

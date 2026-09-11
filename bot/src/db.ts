@@ -445,6 +445,15 @@ for (const [table, column, decl] of [
   // memory: this container has no volume, so an in-memory "seen" set would
   // re-send the legend to everyone after every deploy.
   ['dm_chats', 'legend_at', 'INTEGER'],
+  // Where this row's exemption count came from. NULL means the calldata-only
+  // decoder, which is measurably wrong: the curve auto-exempts the deployer and
+  // never says so in the calldata, so 61 of 64 cross-checked launches had one
+  // more tax-free wallet than the array the caller passed. Rows without a
+  // source are re-read from the curve's own events in the background; their
+  // existing answer stands until it is replaced, because withdrawing a figure
+  // that is merely one short and showing "undetermined" for a day would be a
+  // worse answer than the one it replaces.
+  ['launches', 'exemption_source', 'TEXT'],
 ] as const) {
   if (!columnsOf(table).includes(column)) {
     db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${decl}`);

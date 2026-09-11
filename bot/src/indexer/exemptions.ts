@@ -1,6 +1,6 @@
 import { decodeFunctionData, slice, type Hex } from 'viem';
 import { client } from '../chain.js';
-import { launchDecodeAbi, SELECTOR } from '../abi.js';
+import { launchDecodeAbi, SELECTOR, SnipeTaxExempted } from '../abi.js';
 
 export interface LaunchCalldata {
   /**
@@ -18,6 +18,8 @@ export interface LaunchCalldata {
   /** launchAndBuy only: the creator's opening buy, in the same transaction. */
   buyAmount: bigint | null;
   buyRecipient: string | null;
+  /** 'logs' once the count came from the curve's own events. */
+  source: 'logs' | 'calldata' | null;
 }
 
 /**
@@ -50,6 +52,7 @@ const UNKNOWN: LaunchCalldata = {
   buybackEnabled: null,
   buyAmount: null,
   buyRecipient: null,
+  source: null,
 };
 
 /**
@@ -97,6 +100,7 @@ export function decodeLaunchCalldata(input: Hex): LaunchCalldata {
         buybackEnabled: Boolean(p.buybackEnabled),
         buyAmount: null,
         buyRecipient: null,
+        source: 'calldata',
       };
     } catch (err) {
       reportUndecodable(selector, err);
@@ -139,6 +143,7 @@ export function decodeLaunchCalldata(input: Hex): LaunchCalldata {
       buybackEnabled: p?.buybackEnabled != null ? Boolean(p.buybackEnabled) : null,
       buyAmount,
       buyRecipient,
+      source: 'calldata',
     };
   } catch (err) {
     reportUndecodable(selector, err);
@@ -147,14 +152,82 @@ export function decodeLaunchCalldata(input: Hex): LaunchCalldata {
 }
 
 /** Fetch a launch transaction and decode it. */
-export async function fetchLaunchCalldata(txHash: Hex): Promise<LaunchCalldata> {
+/**
+ * The exemption list as the contract actually emitted it.
+ *
+ * The curve emits SnipeTaxExempted(address indexed wallet) once per
+ * pre-exempted wallet, inside the launch transaction. Verified on chain: the
+ * parameter IS indexed, so the address is topics[1] and the data field is
+ * empty, and a launch that exempted five wallets emitted six logs, so the list
+ * has to be de-duplicated.
+ *
+ * This is the PRIMARY source now, and calldata is the cross-check. Decoding
+ * calldata requires knowing the entry point's ABI, and 60,537 launches were
+ * stuck undetermined behind selectors this build has never seen: third-party
+ * routers, aggregators, and plain contract-creation transactions
+ * (0xf955751f, 0x34fcd5be, 0xe9ae5c53, 0x60806040 among them). The event does
+ * not care how the launch was called.
+ */
+export function exemptionsFromReceipt(logs: readonly any[], curve?: string): string[] {
+  const want = curve?.toLowerCase();
+  const out: string[] = [];
+  for (const log of logs) {
+    if (log?.topics?.[0] !== SnipeTaxExemptedTopic) continue;
+    // Scoped to the curve when we know it. Without that scope the filter is
+    // still safe -- only this launch's curve emits this event in this
+    // transaction -- but being explicit costs nothing.
+    if (want && String(log.address ?? '').toLowerCase() !== want) continue;
+    const topic = log.topics[1];
+    if (typeof topic !== 'string' || topic.length !== 66) continue;
+    const wallet = `0x${topic.slice(26)}`.toLowerCase();
+    if (!out.includes(wallet)) out.push(wallet);
+  }
+  return out;
+}
+
+/** keccak256("SnipeTaxExempted(address)"), confirmed against live logs. */
+export const SnipeTaxExemptedTopic =
+  '0xe4b7e48fbd47c2f602bacadee76ad33b16542ddb4997cfc0de04c311adcfa8c7';
+
+let mismatchReported = 0;
+
+export async function fetchLaunchCalldata(txHash: Hex, curve?: string): Promise<LaunchCalldata> {
+  let tx: any = null;
+  let receipt: any = null;
   try {
-    const tx = await client.getTransaction({ hash: txHash });
-    return decodeLaunchCalldata(tx.input);
+    [tx, receipt] = await Promise.all([
+      client.getTransaction({ hash: txHash }),
+      client.getTransactionReceipt({ hash: txHash }),
+    ]);
   } catch (err) {
-    // The transaction could not be fetched at all. Recorded as undetermined,
-    // which the card reports as such -- never as a clean zero.
+    // Neither could be fetched. Recorded as undetermined, which the card
+    // reports as such -- never as a clean zero.
     console.warn(`[exemptions] could not fetch launch tx ${txHash}:`, String((err as Error)?.message ?? err).slice(0, 160));
     return UNKNOWN;
   }
+
+  const fromCalldata = tx?.input ? decodeLaunchCalldata(tx.input) : UNKNOWN;
+  if (!receipt?.logs) return fromCalldata;
+
+  const fromLogs = exemptionsFromReceipt(receipt.logs, curve);
+
+  // The logs are what the contract did; the calldata is what it was asked to
+  // do. When both are readable and they disagree, the logs win and the
+  // disagreement is worth one line, because it would mean an entry point that
+  // rewrites the list between the call and the constructor.
+  if (fromCalldata.exemptionCount !== null && fromCalldata.exemptionCount !== fromLogs.length && mismatchReported < 5) {
+    mismatchReported++;
+    console.warn(
+      `[exemptions] ${txHash} calldata says ${fromCalldata.exemptionCount} exemptions, ` +
+      `the curve emitted ${fromLogs.length}. using the logs.`,
+    );
+  }
+
+  return {
+    ...fromCalldata,
+    exemptionCount: fromLogs.length,
+    exemptions: fromLogs,
+    entryPoint: fromCalldata.entryPoint === 'unknown' ? 'logs' : fromCalldata.entryPoint,
+    source: 'logs',
+  };
 }

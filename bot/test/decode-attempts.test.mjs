@@ -46,10 +46,12 @@ function inTempDb(body, env = {}) {
       const A = (n) => '0x' + String(n).padStart(40, '0');
       const launch = (n, opts = {}) => db.prepare(
         \`INSERT INTO launches (token, curve, deployer, pair_token, launch_config_id,
-            graduation_threshold, block_number, tx_hash, launched_at, snipe_exemption_count)
-          VALUES (?,?,?,?,0,'0',?,?,?,?)\`
+            graduation_threshold, block_number, tx_hash, launched_at, snipe_exemption_count,
+            exemption_source)
+          VALUES (?,?,?,?,0,'0',?,?,?,?,?)\`
       ).run(A(n), A(900000 + n), A(98), A(0), 1000 + n, '0x' + String(n).padStart(64, '0'),
-            1_000_000 - n, opts.count ?? null);
+            1_000_000 - n, opts.count ?? null,
+            'source' in opts ? opts.source : (opts.count == null ? null : 'logs'));
       ${body}
     `], {
       cwd: CWD,
@@ -121,14 +123,26 @@ test('exhausted rows never unlock an index-derived negative', async () => {
 
 test('a row that decodes leaves the queue without needing the cap', async () => {
   const out = inTempDb(`
-    for (let i = 1; i <= 3; i++) launch(i, { count: 0 });   // already decoded
-    launch(9);                                              // not
+    for (let i = 1; i <= 3; i++) launch(i, { count: 0 });   // decoded, from the events
+    launch(9);                                              // not decoded
     const r = await L.decodePending(10);
     console.log(JSON.stringify({ attempted: r.failed + r.decoded, backlog: L.decodeBacklog() }));
   `);
   const r = JSON.parse(out);
   assert.equal(r.attempted, 1, 'only the undecoded row is attempted');
   assert.equal(r.backlog.pending, 1, 'it has one attempt left');
+});
+
+test('a count that came from calldata alone is re-read from the events', async () => {
+  const out = inTempDb(`
+    for (let i = 1; i <= 3; i++) launch(i, { count: 0, source: null });  // the old decoder
+    launch(7, { count: 2, source: 'logs' });                             // already re-read
+    console.log(JSON.stringify({ backlog: L.decodeBacklog() }));
+  `);
+  const r = JSON.parse(out);
+  // The curve auto-exempts the deployer and never says so in the calldata, so
+  // every one of these counts is one short until it is re-read.
+  assert.equal(r.backlog.pending, 3, 'the calldata-sourced rows are queued again');
 });
 
 test('the cap is configurable, and at least one', async () => {

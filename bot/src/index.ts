@@ -1,13 +1,13 @@
 import { getAddress, isAddress } from 'viem';
 import { printVerify } from './verify.js';
-import { backfill, indexNew, decodePending, decodeBacklog, startDecodeLoop, startIndexLoop, MAX_DECODE_ATTEMPTS_LABEL } from './indexer/launches.js';
+import { backfill, indexNew, decodePending, decodeBacklog, startDecodeLoop, startIndexLoop, retryUndeterminedOnce, MAX_DECODE_ATTEMPTS_LABEL } from './indexer/launches.js';
 import { startRecovery } from './recovery.js';
 import { scanToken } from './scan.js';
 import { renderCardText, renderDefaultCard } from './card.js';
 import { runDueRechecks, startRecheckLoop } from './recheck.js';
 import { startWindowLoop, windowBacklog, indexWindows } from './indexer/windows.js';
 import { deliverAlerts, deliverLaunch } from './bot.js';
-import { startBot } from './bot.js';
+import { initBot, startBot } from './bot.js';
 import { db } from './db.js';
 import { BACKFILL_DAYS, BLOCKS_PER_DAY } from './config.js';
 
@@ -195,6 +195,12 @@ async function main(): Promise<void> {
       // Rebuild the index if the container came up without one. Returns
       // immediately; the bot answers scans throughout, and any check that
       // depends on the index reports undetermined until it can be trusted.
+      // The bot is built and INITED first. Everything below reaches for its
+      // identity the moment a launch lands, and starting the loops before it
+      // existed is what produced "Bot information unavailable" from [launch]
+      // and [alerts] in production: the first launches after every boot were
+      // detected and then dropped.
+      const bot = await initBot();
       startRecovery();
       // Alerts ride the index loop rather than polling: it already sees every
       // launch within three seconds, and a second poller would compete for the
@@ -212,6 +218,7 @@ async function main(): Promise<void> {
       // thousand undecoded rows -- so the snipe-exemption flag, the highest
       // value check here, would have stayed undetermined forever. The loop
       // no-ops when there is nothing pending.
+      retryUndeterminedOnce();
       const pending = (db.prepare('SELECT COUNT(*) n FROM launches WHERE snipe_exemption_count IS NULL').get() as any).n;
       if (pending) {
         console.log(`[decode] ${pending.toLocaleString()} launches pending decode; draining in the background at low priority.`);
@@ -230,7 +237,7 @@ async function main(): Promise<void> {
         );
       }
       startWindowLoop();
-      await startBot();
+      await startBot(bot);
       return;
     }
 

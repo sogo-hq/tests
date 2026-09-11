@@ -2008,9 +2008,28 @@ export function statsText(): string {
   ].join('\n');
 }
 
-export async function startBot(): Promise<void> {
-  const bot = createBot();
-  const me = await bot.api.getMe();
+/**
+ * Build the bot and fetch its identity, before anything can need it.
+ *
+ * Split out because the index tail, the launch detector and the alert handlers
+ * all reach for liveBot.botInfo, and they were started BEFORE startBot ever ran
+ * createBot. Production logged "Bot information unavailable, call await
+ * bot.init()" from [launch] and [alerts] for exactly that reason: a launch
+ * landing in the first seconds after boot was detected and then dropped.
+ *
+ * bot.init() is what populates botInfo. bot.start() also calls it, but that is
+ * far too late for anything already running.
+ */
+export async function initBot(token = TELEGRAM_BOT_TOKEN): Promise<Bot> {
+  const bot = createBot(token);
+  await bot.init();
+  return bot;
+}
+
+export async function startBot(existing?: Bot): Promise<void> {
+  const bot = existing ?? await initBot();
+  if (!bot.isInited()) await bot.init();
+  const me = bot.botInfo;
 
   await bot.api.setMyCommands([
     { command: 'scan', description: 'What the chain shows about a pons v2 launch' },

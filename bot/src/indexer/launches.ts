@@ -37,17 +37,18 @@ const insertLaunch = db.prepare(`
     token, curve, deployer, pair_token, launch_config_id, graduation_threshold,
     block_number, tx_hash, launched_at, name, symbol, name_key, symbol_key,
     snipe_exemption_count, snipe_exemptions, entry_point, creator_tax_bps,
-    buyback_enabled, launch_buy_amount, launch_buy_recipient
+    buyback_enabled, launch_buy_amount, launch_buy_recipient, exemption_source
   ) VALUES (
     @token, @curve, @deployer, @pair_token, @launch_config_id, @graduation_threshold,
     @block_number, @tx_hash, @launched_at, @name, @symbol, @name_key, @symbol_key,
     @snipe_exemption_count, @snipe_exemptions, @entry_point, @creator_tax_bps,
-    @buyback_enabled, @launch_buy_amount, @launch_buy_recipient
+    @buyback_enabled, @launch_buy_amount, @launch_buy_recipient, @exemption_source
   )
   ON CONFLICT(token) DO UPDATE SET
     snipe_exemption_count = COALESCE(excluded.snipe_exemption_count, launches.snipe_exemption_count),
     snipe_exemptions      = COALESCE(excluded.snipe_exemptions, launches.snipe_exemptions),
     entry_point           = excluded.entry_point,
+    exemption_source      = COALESCE(excluded.exemption_source, launches.exemption_source),
     launch_buy_amount     = excluded.launch_buy_amount,
     launch_buy_recipient  = excluded.launch_buy_recipient,
     name                  = COALESCE(excluded.name, launches.name),
@@ -123,7 +124,7 @@ export async function indexLaunches(
       // scan never waits on the backfill.
       const rows = await pooled(logs, 8, async (log) => {
         const calldata = decode
-          ? await fetchLaunchCalldata(log.transactionHash as Hex)
+          ? await fetchLaunchCalldata(log.transactionHash as Hex, log.args.curve as string)
           : null;
         const ts = times.at(Number(log.blockNumber)) ?? 0;
         if (calldata && calldata.exemptionCount === null) undecodable++;
@@ -150,6 +151,7 @@ export async function indexLaunches(
           buyback_enabled: calldata?.buybackEnabled == null ? null : calldata.buybackEnabled ? 1 : 0,
           launch_buy_amount: calldata?.buyAmount == null ? null : String(calldata.buyAmount),
           launch_buy_recipient: calldata?.buyRecipient ?? null,
+          exemption_source: calldata?.source ?? null,
         };
       });
       insertMany(rows);
@@ -178,19 +180,22 @@ export async function decodePending(
 ): Promise<{ decoded: number; failed: number; remaining: number; exhausted: number }> {
   const rows = db
     .prepare(
-      `SELECT token, tx_hash FROM launches
+      `SELECT token, tx_hash, curve FROM launches
        WHERE decode_attempts < ?
          AND (snipe_exemption_count IS NULL
            -- also repair rows whose exemption count was decoded while the
            -- creator's opening buy was dropped by the old upsert
-           OR (entry_point = 'launchAndBuy' AND launch_buy_amount IS NULL))
+           OR (entry_point = 'launchAndBuy' AND launch_buy_amount IS NULL)
+           -- and rows counted from calldata alone, which omits the deployer the
+           -- curve exempts automatically: measured one short on 61 of 64
+           OR exemption_source IS NULL)
        ORDER BY launched_at DESC LIMIT ?`,
     )
-    .all(MAX_DECODE_ATTEMPTS, Number.isFinite(limit) ? limit : -1) as { token: string; tx_hash: string }[];
+    .all(MAX_DECODE_ATTEMPTS, Number.isFinite(limit) ? limit : -1) as { token: string; tx_hash: string; curve: string }[];
 
   const update = db.prepare(`
     UPDATE launches SET
-      snipe_exemption_count = ?, snipe_exemptions = ?, entry_point = ?,
+      snipe_exemption_count = ?, snipe_exemptions = ?, entry_point = ?, exemption_source = ?,
       creator_tax_bps = COALESCE(?, creator_tax_bps),
       buyback_enabled = COALESCE(?, buyback_enabled),
       launch_buy_amount = ?, launch_buy_recipient = ?,
@@ -205,7 +210,7 @@ export async function decodePending(
   let failed = 0;
   let done = 0;
   await pooled(rows, 8, async (row) => {
-    const cd = await bulk(() => fetchLaunchCalldata(row.tx_hash as Hex));
+    const cd = await bulk(() => fetchLaunchCalldata(row.tx_hash as Hex, row.curve as string));
     // Counted whether it worked or not. A row that decodes leaves the queue by
     // having its exemption count filled in; a row that does not is on its way
     // to being resolved as undetermined.
@@ -216,6 +221,7 @@ export async function decodePending(
       cd.exemptionCount,
       cd.exemptions.length ? JSON.stringify(cd.exemptions) : null,
       cd.entryPoint,
+      cd.source,
       cd.creatorTaxBps,
       cd.buybackEnabled == null ? null : cd.buybackEnabled ? 1 : 0,
       cd.buyAmount == null ? null : String(cd.buyAmount),
@@ -242,8 +248,12 @@ export async function decodePending(
  * not the same as being answered, and nothing here lets one become the other.
  */
 export function decodeBacklog(): { pending: number; exhausted: number } {
+  // Kept in step with the selection in decodePending: a backlog that does not
+  // count what the decoder will pick up reports "nothing pending" and then
+  // quietly works for an hour.
   const unresolved = `(snipe_exemption_count IS NULL
-      OR (entry_point = 'launchAndBuy' AND launch_buy_amount IS NULL))`;
+      OR (entry_point = 'launchAndBuy' AND launch_buy_amount IS NULL)
+      OR exemption_source IS NULL)`;
   const q = (where: string, ...params: unknown[]) =>
     (db.prepare(`SELECT COUNT(*) AS n FROM launches WHERE ${where}`).get(...params) as { n: number }).n;
   return {
@@ -354,6 +364,31 @@ export async function indexNew(opts: { lifecycle?: boolean } = {}) {
  * is marked bulk and interactive scans preempt it (measured: 79ms mean scan
  * latency against 264 concurrent bulk requests).
  */
+/**
+ * Give the rows that were given up on one more chance, once.
+ *
+ * decode_attempts exists so a row that cannot be decoded stops costing
+ * requests, and that was right while calldata was the only source. Reading the
+ * exemption list from the curve's own events instead makes those rows
+ * decodable for the first time, so the counters are cleared exactly once, keyed
+ * on a stored marker rather than on a version number nobody will remember to
+ * bump.
+ */
+export function retryUndeterminedOnce(): number {
+  const KEY = 'decode_retry_receipt_logs';
+  const done = db.prepare('SELECT value FROM ready_settings WHERE key = ?').get(KEY) as { value: string } | undefined;
+  if (done?.value) return 0;
+  const n = db
+    .prepare('UPDATE launches SET decode_attempts = 0 WHERE decode_attempts > 0 AND snipe_exemption_count IS NULL')
+    .run().changes;
+  db.prepare('INSERT INTO ready_settings (key, value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value = excluded.value')
+    .run(KEY, String(Math.floor(Date.now() / 1000)));
+  if (n) {
+    console.log(`[decode] ${n.toLocaleString()} launches were given up on under the calldata-only decoder; retrying them against the curve's own events.`);
+  }
+  return n;
+}
+
 export function startDecodeLoop(batch = 200, intervalMs = 15_000): NodeJS.Timeout {
   let running = false;
   // The terminal line is printed once, not every fifteen seconds forever. It is
