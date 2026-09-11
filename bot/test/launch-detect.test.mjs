@@ -224,10 +224,13 @@ test('no registered wallet reaches the group on any launch-day surface', async (
       `"${secret}" reached the group:\n${said}`);
   }
 
-  // Exactly one address is allowed in the group, and it is the CA the bot
-  // itself posted. Anything else would be the thing the guard exists to delete.
+  // What must never appear is a REGISTERED wallet. A deployer address is
+  // published before launch by design, so it is a fact about the launch rather
+  // than somebody's private holding, and the CA is posted by the bot itself.
   const addresses = [...new Set([...said.matchAll(/0x[0-9a-fA-F]{40}/g)].map((m) => m[0].toLowerCase()))];
-  assert.deepEqual(addresses, [TOKEN], `only the CA may appear, saw ${addresses.join(', ')}`);
+  const allowed = new Set([TOKEN.toLowerCase(), DEPLOYER.toLowerCase()]);
+  const stray = addresses.filter((a) => !allowed.has(a));
+  assert.deepEqual(stray, [], `an address that is neither the CA nor the deployer reached the group: ${stray.join(', ')}`);
 });
 
 // ------------------------------------------- defects found by the 2.5 audit
@@ -354,22 +357,6 @@ test('scheduling a new launch retires the one that already landed', async () => 
   R.setSetting('launch_at', String(Math.floor((LAUNCH + 7 * 86_400_000) / 1000)));
   insertLaunch(NEXT, DEPLOYER, 60900000, Math.floor((LAUNCH + 7 * 86_400_000) / 1000));
   assert.equal(await D.launchDetected(s.api, [NEXT], { now: LAUNCH + 7 * 86_400_000 }), NEXT);
-});
-
-test('the full card posted to the group names no address but the CA', () => {
-  const card = [
-    '<b>$VITALS</b>: Vitals',
-    'deployer launched 3 tokens in 7d',
-    `<a href="https://x/address/${TOKEN}">token</a> · ` +
-      `<a href="https://x/address/0xcccccccccccccccccccccccccccccccccccccccc">curve</a> · ` +
-      `<a href="https://x/address/${DEPLOYER}">deployer</a>`,
-  ].join('\n');
-  const out = D.redactAddresses(card, TOKEN);
-  assert.ok(out.includes(TOKEN), 'the CA stays, link and all');
-  assert.ok(!out.includes(DEPLOYER), 'the deployer wallet does not');
-  assert.ok(!out.includes('0xcccccccccccccccccccccccccccccccccccccccc'));
-  assert.ok(out.includes('>curve</a>') === false && out.includes('curve'), 'the label survives, the link does not');
-  assert.equal([...out.matchAll(/0x[0-9a-fA-F]{40}/g)].length, 1, 'exactly one address reaches the group');
 });
 
 test('an unrelated deploy days early does not hijack the whole launch', async () => {

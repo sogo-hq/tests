@@ -566,33 +566,18 @@ export async function selfScanTick(api: Api, opts: TickOpts = {}): Promise<'quic
       token: plan.ca, source: 'cli', unlimited: true, botUsername: opts.botUsername,
     });
     if (out.kind !== 'ok') return null;
-    // The /full card is HTML, unlike the default one. Its footer links the
-    // token, the curve AND the deployer, and the deployer is a wallet: exactly
-    // one address may appear in a group message and it is the CA the bot
-    // posted. A user asking for /full is one thing; the bot volunteering a
-    // deployer wallet into the group is another.
-    await api.sendMessage(chatId, redactAddresses(out.fullCard, plan.ca), {
+    // The /full card is HTML, unlike the default one, and it goes out whole.
+    // Its footer links the token, the curve and the deployer, and that is
+    // deliberate: a deployer address is published before launch by design, so
+    // it is a fact about the launch rather than somebody's private wallet. The
+    // privacy rule covers REGISTERED wallets, which never appear here.
+    await api.sendMessage(chatId, out.fullCard, {
       parse_mode: 'HTML', link_preview_options: { is_disabled: true },
     });
     setSetting('launch_fulled', String(Math.floor(now / 1000)));
     return 'full';
   }
   return null;
-}
-
-/**
- * Strip every address but the one allowed, links and all.
- *
- * Applied to a rendered card rather than to its source because the card is
- * shared with the DM and inline surfaces, where the links belong.
- */
-export function redactAddresses(html: string, keep: string | null): string {
-  const allowed = keep?.toLowerCase() ?? null;
-  // Whole anchors first, so a redacted link does not leave dangling markup.
-  return html
-    .replace(/<a href="[^"]*\/address\/(0x[0-9a-fA-F]{40})"[^>]*>([^<]*)<\/a>/g,
-      (whole, addr: string, label: string) => (addr.toLowerCase() === allowed ? whole : label))
-    .replace(/0[xX][0-9a-fA-F]{40}/g, (a) => (a.toLowerCase() === allowed ? a : '[address]'));
 }
 
 /**
