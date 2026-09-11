@@ -15,12 +15,12 @@ import { LEGEND, claimLegend } from './legend.js';
 import { age } from './card.js';
 import {
   registerMember, addExternal, removeExternal, statusOf, allRows, refreshBalances,
-  totals, snapshot, selfRegistrationOpen, setSetting, getSetting, normaliseWallet,
+  totals, snapshot, selfRegistrationOpen, setSetting, getSetting, getNumber, normaliseWallet,
   rememberJoin, inviteOf, joinedTooRecently,
   READY_MIN_ETH, REGISTER_COOLDOWN_MS,
 } from './ready.js';
 import {
-  totalsBlock, isAdmin, gateHit, countdownLine, dueAutoPost, markAutoPost,
+  totalsBlock, isAdmin, gateHit, countdownLine, dueAutoPost, markAutoPost, dailyDue,
 } from './tge.js';
 import { parseLaunchTime, launchTimeLine, getLaunchPlan, clearLaunchPlan } from './launch.js';
 import {
@@ -582,6 +582,29 @@ async function handleInline(ctx: Context): Promise<void> {
   }
 }
 
+/**
+ * Anything shaped like an address, wherever it sits in the text.
+ *
+ * For DETECTION only. Case-insensitive on the prefix and the body, and happy
+ * with punctuation on either side, because a reader can copy an address out of
+ * backticks or a trailing comma just as easily.
+ */
+const LOOSE_ADDRESS = /0[xX][0-9a-fA-F]{40}/;
+
+/** Split on line boundaries so a CSV row is never cut in half. */
+function chunkText(text: string, limit: number): string[] {
+  const out: string[] = [];
+  let cur = '';
+  for (const line of text.split('\n')) {
+    if (cur && cur.length + line.length + 1 > limit) { out.push(cur); cur = ''; }
+    cur = cur ? `${cur}\n${line}` : line;
+    // A single line longer than the limit still has to go somewhere.
+    while (cur.length > limit) { out.push(cur.slice(0, limit)); cur = cur.slice(limit); }
+  }
+  if (cur) out.push(cur);
+  return out;
+}
+
 // ---------------------------------------------------------------- ready / tge
 
 /**
@@ -594,13 +617,21 @@ async function handleInline(ctx: Context): Promise<void> {
  * 300-member group from turning one command into a wall.
  */
 const BLOCK_TTL_MS = Number(process.env.READY_BLOCK_TTL_MS || 600_000) || 600_000;
-let posted: { chatId: number; messageId: number; at: number } | null = null;
-let blockAt = 0;
+
+/**
+ * Per chat, not one global slot.
+ *
+ * Held as a single slot first, which meant a second chat defeated the whole
+ * ten-minute cache: a group post, a DM /tge a minute later, and the group's
+ * next /ready all posted fresh blocks, because each one found the slot pointing
+ * at somebody else's chat. The documented flow is a group plus DMs, so that was
+ * the normal case rather than an edge.
+ */
+const blocks = new Map<number, { messageId: number; readAt: number }>();
 
 /** For tests, and for a restart to behave like a cold one. */
 export function resetReadyBlockCache(): void {
-  posted = null;
-  blockAt = 0;
+  blocks.clear();
 }
 
 async function memberCount(api: Api, chatId: number): Promise<number | null> {
@@ -642,28 +673,32 @@ export async function postTotals(
   opts: PostTotalsOpts = {},
 ): Promise<'posted' | 'edited'> {
   const now = opts.now ?? Date.now();
-  const fresh = opts.force || now - blockAt >= BLOCK_TTL_MS;
+  const cached = blocks.get(chatId);
+  const fresh = opts.force || !cached || now - cached.readAt >= BLOCK_TTL_MS;
   if (fresh && !opts.force) {
     await refreshBalances(now);
     snapshot(now);
   }
-  const readAt = fresh ? now : blockAt;
-  if (fresh) blockAt = now;
+  const readAt = fresh ? now : cached!.readAt;
   const members = await memberCount(api, chatId);
   const t = totals();
   const body = totalsBlock({
     members,
     now,
+    name: getSetting('launch_name'),
     botUsername: opts.botUsername,
     updatedMinutesAgo: fresh ? undefined : Math.round((now - readAt) / 60_000),
   }, t);
-  const countdown = opts.withCountdown ? countdownLine(now) : null;
+  // The countdown rides on whether a launch time EXISTS, not on which command
+  // asked. Keyed to the command, a /ready inside the window would edit the block
+  // /tge had just posted and silently strip its countdown line.
+  const countdown = countdownLine(now);
   const text = countdown ? `${body}\n${countdown}` : body;
 
-  // Inside the window, edit the last block in this chat instead of adding one.
-  if (!fresh && posted && posted.chatId === chatId) {
+  // Inside the window, edit this chat's last block instead of adding one.
+  if (!fresh && cached) {
     try {
-      await api.editMessageText(posted.chatId, posted.messageId, text);
+      await api.editMessageText(chatId, cached.messageId, text);
       return 'edited';
     } catch (err) {
       // Edited too late, deleted, or unchanged. Falling through to a new post is
@@ -672,11 +707,18 @@ export async function postTotals(
     }
   }
   const sent = await api.sendMessage(chatId, text, { link_preview_options: { is_disabled: true } });
-  posted = { chatId, messageId: sent.message_id, at: now };
+  blocks.set(chatId, { messageId: sent.message_id, readAt });
   // Remember where the block lives so the daily and threshold posts have a
-  // group to go to without an admin configuring a chat id by hand.
+  // group to go to without an admin configuring a chat id by hand. Only a real
+  // group: a channel post carries no sender and would otherwise redirect every
+  // scheduled post into the channel.
   if (opts.isGroup) setSetting('ready_chat', String(chatId));
-  if (gateHit(t, members) && !getSetting('gate_announced')) {
+
+  // The gate is announced in the group and nowhere else. Announced from any
+  // chat, one member's DM /tge burned the global flag and the group never heard
+  // it at all.
+  const readyChat = Number(getSetting('ready_chat') || 0);
+  if (opts.isGroup && chatId === readyChat && gateHit(t, members) && !getSetting('gate_announced')) {
     setSetting('gate_announced', String(Math.floor(now / 1000)));
     await api.sendMessage(chatId, 'GATE HIT');
   }
@@ -695,18 +737,25 @@ export async function readyAutoPostTick(api: Api, opts: { now?: number; botUsern
   const chat = getSetting('ready_chat');
   if (!chat) return false;
   const now = opts.now ?? Date.now();
-  // Read before deciding: the threshold trigger is a question about the current
-  // number of ready wallets, and deciding it from ten-minute-old figures would
-  // announce a count the bot no longer believes.
+
+  // Decide what can be decided for free FIRST. Refreshing every registered
+  // balance before asking whether anything is due cost a full re-read of the
+  // register once a minute -- 288,000 chain reads a day at 200 wallets, to
+  // publish two posts -- and made a tick routinely outlast its own interval.
+  const daily = dailyDue(now);
+  const pollDue = now - getNumber('autopost_polled_at', 0) >= THRESHOLD_POLL_MS;
+  if (!daily && !pollDue) return false;
+
   await refreshBalances(now);
-  snapshot(now);
-  blockAt = now;
+  setSetting('autopost_polled_at', String(now));
   const t = totals();
-  const reason = dueAutoPost(now, t.wallets);
+  const reason = daily ? 'daily' as const : dueAutoPost(now, t.wallets);
   if (!reason) return false;
   const chatId = Number(chat);
   try {
-    posted = null;
+    // A scheduled post is always a new message: editing a block from hours ago
+    // would make the daily post invisible to everyone who has scrolled past.
+    blocks.delete(chatId);
     await postTotals(api, chatId, { botUsername: opts.botUsername, isGroup: true, now, force: true });
   } catch (err) {
     console.warn('[ready] auto-post failed:', String((err as Error)?.message ?? err).slice(0, 160));
@@ -717,9 +766,20 @@ export async function readyAutoPostTick(api: Api, opts: { now?: number; botUsern
   return true;
 }
 
+/** How often the threshold trigger is allowed to cost a full balance refresh. */
+const THRESHOLD_POLL_MS = Number(process.env.READY_POLL_MS || 300_000) || 300_000;
+
 export function startReadyAutoPost(api: Api, botUsername?: string, intervalMs = 60_000): NodeJS.Timeout {
+  // A tick that refreshes balances and posts can outlast its interval, and two
+  // overlapping ticks both saw the mark unset and both posted the daily block.
+  // Single process, so an in-flight flag is the whole fix.
+  let running = false;
   const t = setInterval(() => {
-    void readyAutoPostTick(api, { botUsername }).catch(() => {});
+    if (running) return;
+    running = true;
+    void readyAutoPostTick(api, { botUsername })
+      .catch(() => {})
+      .finally(() => { running = false; });
   }, intervalMs);
   t.unref?.();
   return t;
@@ -1024,19 +1084,28 @@ export function createBot(token = TELEGRAM_BOT_TOKEN): Bot {
   // ------------------------------------------------------------ ready / tge
   bot.command('ready', async (ctx) => {
     const userId = ctx.from?.id;
-    // Bots and minutes-old accounts are ignored in silence. Answering either
-    // one turns the group into a place where saying /ready gets a reaction,
-    // which is the whole payoff for spamming it.
-    if (userId === undefined || ctx.from?.is_bot || joinedTooRecently(userId)) return;
+    if (userId === undefined) return;
     const raw = (ctx.match ?? '').toString().trim();
     const inGroup = ctx.chat?.type !== 'private';
+    // Telegram attributes an anonymous admin's message to GroupAnonymousBot, and
+    // posting anonymously is the default for admins in most crypto groups. An
+    // is_bot early return therefore exempted precisely the people most likely to
+    // type `/ready add 0x… label` in the wrong window.
+    const anonAdmin = userId === GROUP_ANONYMOUS_BOT_ID;
+    if (ctx.from?.is_bot && !anonAdmin) return;
 
     // A wallet pasted in a group is deleted before anyone reads it, and nothing
     // is posted in its place: an address in the channel is exactly what
-    // registering privately exists to avoid. Every word is checked, not just
-    // the first -- `/ready add 0x… label` typed in the group leaks the same
-    // address as `/ready 0x…` does.
-    if (inGroup && raw.split(/\s+/).some((w) => normaliseWallet(w))) {
+    // registering privately exists to avoid.
+    //
+    // Detection is deliberately looser than registration. normaliseWallet is a
+    // REGISTRATION validator: it rejects a 0X prefix, a flipped letter that
+    // breaks EIP-55, and anything with punctuation around it. Used as the
+    // detector it let all of those through, and the miss then fell into the
+    // totals branch so the bot replied in the group directly beneath the
+    // surviving address. A wrong checksum is still a perfectly readable
+    // address. Anything shaped like one goes.
+    if (inGroup && LOOSE_ADDRESS.test(raw)) {
       try {
         await ctx.api.deleteMessage(ctx.chat!.id, ctx.message!.message_id);
       } catch (err) {
@@ -1053,6 +1122,11 @@ export function createBot(token = TELEGRAM_BOT_TOKEN): Bot {
     }
 
     if (inGroup) {
+      // Minutes-old accounts are ignored in silence HERE, where answering makes
+      // the group a place where saying /ready gets a reaction. In a DM it only
+      // made the bot look dead to somebody who joined from a campaign link and
+      // registered straight away.
+      if (joinedTooRecently(userId) || anonAdmin) return;
       await postTotals(ctx.api, ctx.chat!.id, { botUsername: usernameOf(ctx), isGroup: true });
       return;
     }
@@ -1073,7 +1147,11 @@ export function createBot(token = TELEGRAM_BOT_TOKEN): Bot {
             r.firstSeen, r.lastChecked,
           ].join(',')),
         ].join('\n');
-        await ctx.reply(rows.length ? csv : 'no wallets registered');
+        if (!rows.length) { await ctx.reply('no wallets registered'); return; }
+        // Telegram rejects anything over 4096 characters, and the rejection was
+        // swallowed by bot.catch -- so the register stopped being readable at
+        // around forty wallets, silently, right as it started to matter.
+        for (const chunk of chunkText(csv, 3900)) await ctx.reply(chunk);
         return;
       }
       if (sub === 'open') {
@@ -1118,7 +1196,8 @@ export function createBot(token = TELEGRAM_BOT_TOKEN): Bot {
     const res = await registerMember(userId, parts[0]!, { inviteLink: inviteOf(userId) });
     if (!res.ok) {
       await ctx.reply(
-        res.reason === 'malformed' ? 'that is not an address'
+        res.reason === 'claimed' ? 'a member already registered that wallet'
+        : res.reason === 'malformed' ? 'that is not an address'
         : res.reason === 'contract' ? 'that is a contract, not a wallet'
         : res.reason === 'cooldown' ? `one registration per ${Math.round(REGISTER_COOLDOWN_MS / 60_000)} min. try again shortly`
         : res.reason === 'closed' ? 'registration is closed'
@@ -1143,7 +1222,10 @@ export function createBot(token = TELEGRAM_BOT_TOKEN): Bot {
   });
 
   bot.command('tge', async (ctx) => {
-    if (ctx.from?.is_bot) return;
+    // A channel post carries no sender at all. Acted on, it would write the
+    // channel's id into ready_chat and redirect every scheduled post there.
+    if (!ctx.from || ctx.from.is_bot) return;
+    if (ctx.chat?.type === 'channel') return;
     await postTotals(ctx.api, ctx.chat!.id, {
       withCountdown: true,
       botUsername: usernameOf(ctx),

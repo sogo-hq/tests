@@ -214,3 +214,27 @@ test('a rights check that could not be made is undetermined, never ready', async
   assert.equal(p.ok, false, 'a check that did not run is not a check that passed');
   assert.match(D.preflightLine(p), /could not check the bot's rights/);
 });
+
+test('cancelling leaves nothing behind that a later launch would trip over', async () => {
+  reset();
+  const s = stubApi();
+  await D.countdownTick(s.api, { now: LAUNCH - 5 * 86_400_000 + 1000 });
+  R.setSetting('launch_ca', '0x' + '1'.repeat(40));
+  R.setSetting('launch_detected_at', '12345');
+  R.setSetting('launch_scanned', '12345');
+  s.drain();
+
+  L.clearLaunchPlan();
+  for (const k of [
+    'launch_at', 'launch_name', 'launch_deployer', 'launch_ca', 'launch_pinned',
+    'launch_scanned', 'launch_fulled', 'launch_detected_at', 'countdown_pinned',
+    'countdown:T-5d',
+  ]) {
+    assert.ok(!R.getSetting(k), `${k} survived the cancel`);
+  }
+
+  // A fresh launch must not unpin a message from the cancelled one.
+  R.setSetting('launch_at', String(Math.floor(LAUNCH / 1000)));
+  await D.countdownTick(s.api, { now: LAUNCH - 5 * 86_400_000 + 1000 });
+  assert.equal(s.drain().filter((x) => x.method === 'unpin').length, 0);
+});

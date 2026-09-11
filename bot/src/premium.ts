@@ -4,6 +4,7 @@ import { erc20Abi } from './abi.js';
 import { bulk } from './ratelimit.js';
 import { BURN_ADDRESS } from './config.js';
 import { db } from './db.js';
+import { normaliseWallet } from './ready.js';
 
 /**
  * Who may use a paid feature, and where what they pay ends up.
@@ -66,6 +67,17 @@ export function treasuryAddress(): Address {
   return addr;
 }
 
+/**
+ * CALLER'S OBLIGATION: bind the address to the person before trusting this.
+ *
+ * entitlement() answers a question about an ADDRESS, and an address is public.
+ * Nothing here proves the caller controls it, so a call site that takes an
+ * address from a chat message and grants on the answer grants to anyone who can
+ * name a wallet holding enough, which is public information. The payment route
+ * closes this on its own -- a payment has to come FROM the wallet -- but the
+ * holding route does not, and needs a signed message or an already-bound
+ * registration behind it.
+ */
 export type Entitlement =
   | { state: 'premium'; via: 'vitals' | 'payment'; vitals: bigint | null; wei: bigint | null }
   | { state: 'below'; vitals: bigint | null; wei: bigint }
@@ -97,17 +109,28 @@ async function tokenBalance(token: Address, wallet: Address): Promise<bigint> {
  * because the operator has not set VITALS_TOKEN_ADDRESS yet.
  */
 export async function entitlement(wallet: string): Promise<Entitlement> {
-  if (!isAddress(wallet.toLowerCase(), { strict: false })) {
-    return { state: 'undetermined', reason: 'that is not an address' };
-  }
-  const addr = getAddress(wallet.toLowerCase());
+  // The same validator registration uses, so a mixed-case address with a broken
+  // checksum is refused here too. Accepting it silently measured a stranger's
+  // wallet and reported the answer as though it were the caller's.
+  const norm = normaliseWallet(wallet);
+  if (!norm) return { state: 'undetermined', reason: 'that is not an address' };
+  const addr = getAddress(norm);
 
   // A recorded payment was verified against chain when it was written, so this
   // is a local read and cannot fail for a network reason.
   const paid = paymentFor(addr);
   if (paid !== null) return { state: 'premium', via: 'payment', vitals: null, wei: paid };
 
-  const token = vitalsToken();
+  let token: Address | null;
+  try {
+    token = vitalsToken();
+  } catch (err) {
+    // A malformed VITALS_TOKEN_ADDRESS is the operator's mistake. Thrown from
+    // here it crashed the caller, or -- worse, if the caller guarded -- denied a
+    // legitimate 1,000,000 token holder. Both are the failure this file exists
+    // to prevent.
+    return { state: 'undetermined', reason: String((err as Error)?.message ?? err).slice(0, 100) };
+  }
   if (!token) {
     // No token configured: the holding half of the test cannot run at all, and
     // reporting "not premium" would deny a holder on a check that never

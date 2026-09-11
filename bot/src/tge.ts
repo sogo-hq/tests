@@ -156,6 +156,29 @@ export function localDayHour(now: number, tz = DAILY_TZ): { day: string; hour: n
 }
 
 /**
+ * Is the daily post due?
+ *
+ * Split out because it is the only trigger that can be decided without reading
+ * a single balance from chain, and the tick is otherwise paying for a full
+ * refresh of every registered wallet once a minute to answer "no".
+ *
+ * First run adopts today rather than announcing, matching the threshold branch
+ * below. Without it, a group set up at 16:00 gets the block it just asked for
+ * and then an identical daily block a minute later.
+ */
+export function dailyDue(now: number): boolean {
+  const { day, hour } = localDayHour(now);
+  if (hour < DAILY_HOUR) return false;
+  const mark = getSetting('autopost_day');
+  if (mark === day) return false;
+  if (!mark) {
+    setSetting('autopost_day', day);
+    return false;
+  }
+  return true;
+}
+
+/**
  * Should the bot post now, and why?
  *
  * Idempotent by construction: the answer is derived from stored marks, so a
@@ -165,8 +188,7 @@ export function localDayHour(now: number, tz = DAILY_TZ): { day: string; hour: n
  * due.
  */
 export function dueAutoPost(now: number, wallets: number): AutoPostReason | null {
-  const { day, hour } = localDayHour(now);
-  if (hour >= DAILY_HOUR && getSetting('autopost_day') !== day) return 'daily';
+  if (dailyDue(now)) return 'daily';
 
   const bucket = Math.floor(wallets / THRESHOLD_STEP);
   const mark = getNumber('autopost_bucket', -1);

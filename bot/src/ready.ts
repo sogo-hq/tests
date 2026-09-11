@@ -122,6 +122,7 @@ export type RegisterResult =
   | { ok: false; reason: 'contract' }
   | { ok: false; reason: 'low'; balanceWei: bigint }
   | { ok: false; reason: 'cooldown'; retryInMs: number }
+  | { ok: false; reason: 'claimed' }
   | { ok: false; reason: 'closed' };
 
 const lastRegistration = new Map<number, number>();
@@ -143,9 +144,27 @@ export async function registerMember(
   if (last !== undefined && now - last < REGISTER_COOLDOWN_MS) {
     return { ok: false, reason: 'cooldown', retryInMs: REGISTER_COOLDOWN_MS - (now - last) };
   }
+  // Stamped BEFORE the two chain reads, not after them. Stamping afterwards
+  // let five concurrent messages all pass the check and all pay for an
+  // eth_getCode plus an eth_getBalance, and let an endless stream of
+  // below-minimum attempts do the same, since a failure never started the
+  // clock at all. Registration is unauthenticated once it is open.
+  lastRegistration.set(userId, now);
 
   const wallet = normaliseWallet(input);
   if (!wallet) return { ok: false, reason: 'malformed' };
+
+  // A wallet another member has already claimed is refused rather than taken.
+  // Addresses are public and get pasted in group chats constantly, so without
+  // this anyone can knock any member out of the register by registering their
+  // address, and neither party is told.
+  const held = db
+    .prepare('SELECT user_id, source FROM ready_wallets WHERE wallet = ?')
+    .get(wallet) as { user_id: number | null; source: ReadySource } | undefined;
+  if (held?.source === 'member' && held.user_id !== null && held.user_id !== userId) {
+    return { ok: false, reason: 'claimed' };
+  }
+
   if (await isContract(wallet)) return { ok: false, reason: 'contract' };
 
   const balanceWei = await balanceOf(wallet);
@@ -153,7 +172,6 @@ export async function registerMember(
 
   const seconds = Math.floor(now / 1000);
   const replaced = claimWallet(wallet, userId, opts.inviteLink ?? null, balanceWei, seconds);
-  lastRegistration.set(userId, now);
   return { ok: true, wallet, balanceWei, replaced };
 }
 
@@ -349,6 +367,11 @@ export function inviteOf(userId: number): string | null {
 
 /**
  * Has this user been in the group long enough to be taken seriously?
+ *
+ * A GROUP rule only. Applied to DMs it silently discards the registration of
+ * somebody who joined from a campaign link and registered straight away, which
+ * is the highest-intent user in the funnel and the one who most looks like a
+ * dead bot when nothing answers.
  *
  * A join we never saw is treated as long-standing rather than brand new: the
  * bot joins a group that already has members, and refusing every one of them

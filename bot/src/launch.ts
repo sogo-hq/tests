@@ -266,7 +266,10 @@ export function getLaunchPlan(): LaunchPlan | null {
 export function clearLaunchPlan(): void {
   for (const k of [
     'launch_at', 'launch_name', 'launch_deployer', 'launch_ca', 'launch_pinned',
-    'launch_scanned', 'launch_fulled',
+    'launch_scanned', 'launch_fulled', 'launch_detected_at',
+    // The pin slots too. Left behind, countdown_pinned would make the first
+    // post of the NEXT launch unpin a message from the cancelled one.
+    'countdown_pinned',
     ...COUNTDOWN_OFFSETS.map((o) => `countdown:${o.key}`),
   ]) {
     setSetting(k, '');

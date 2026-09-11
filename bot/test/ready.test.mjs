@@ -22,8 +22,15 @@ const { client } = await import('../dist/chain.js');
 // ---- chain stubs. Registration reads two things and nothing else. ----------
 const balances = new Map();   // lowercase address -> wei
 const contracts = new Set();  // lowercase addresses that answer with code
-client.getBalance = async ({ address }) => balances.get(String(address).toLowerCase()) ?? 0n;
-client.getCode = async ({ address }) => (contracts.has(String(address).toLowerCase()) ? '0xfe' : '0x');
+const reads = { count: 0 };
+client.getBalance = async ({ address }) => {
+  reads.count++;
+  return balances.get(String(address).toLowerCase()) ?? 0n;
+};
+client.getCode = async ({ address }) => {
+  reads.count++;
+  return contracts.has(String(address).toLowerCase()) ? '0xfe' : '0x';
+};
 
 const R = await import('../dist/ready.js');
 const T = await import('../dist/tge.js');
@@ -267,8 +274,20 @@ test('the countdown appears only once a launch time is set', () => {
 
 // ------------------------------------------------------------- the auto-posts
 
+test('the first run adopts the day rather than announcing one it never watched', () => {
+  reset();
+  // A group set up at 16:00 asked for a block and got one. A daily block a
+  // minute later is the same numbers twice, on the worst day for it.
+  const afternoon = Date.parse('2026-07-01T14:00:00Z');
+  assert.equal(T.dueAutoPost(afternoon, 0), null, 'nothing is announced on the first tick');
+  assert.equal(R.getSetting('autopost_day'), '2026-07-01', 'today is adopted instead');
+  assert.equal(T.dueAutoPost(afternoon + 3600_000, 0), null, 'and stays adopted');
+});
+
 test('the daily post fires once at 15:00 local and not again that day', () => {
   reset();
+  // A bot that has been running since yesterday.
+  R.setSetting('autopost_day', '2026-06-30');
   // 13:00Z is 15:00 in Bratislava under CEST.
   const summerAfternoon = Date.parse('2026-07-01T13:00:00Z');
   assert.equal(T.localDayHour(summerAfternoon).hour, 15);
@@ -307,6 +326,7 @@ test('a fall below a step is silent, and climbing back over it counts again', ()
 
 test('a post that failed to send stays due', () => {
   reset();
+  R.setSetting('autopost_day', '2026-06-30');
   const at = Date.parse('2026-07-01T13:00:00Z');
   assert.equal(T.dueAutoPost(at, 0), 'daily');
   // markAutoPost is deliberately not called: the send threw.
@@ -472,6 +492,7 @@ test('a scheduled post is a new message, not an edit of an old block', async () 
   const { bot, msg, drain } = harness();
   await bot.handleUpdate(msg('supergroup', '/ready', GROUP, 5005));
   drain();
+  R.setSetting('autopost_day', '2026-06-30');
   const at = Date.parse('2026-07-01T13:00:00Z');
   const posted = await readyAutoPostTick(bot.api, { now: at, botUsername: 'vitalscheck_bot' });
   assert.equal(posted, true);
@@ -619,4 +640,223 @@ test('no wallet, label or user id ever appears in a group message', async () => 
       `"${secret}" reached the group:\n${said}`);
   }
   assert.ok(!/0x[0-9a-f]{40}/i.test(said), `an address reached the group:\n${said}`);
+});
+
+// ------------------------------------------------- defects found by audit
+
+test('every realistic paste form of an address is deleted from the group', async () => {
+  reset();
+  const A1 = '0x147bbaa458ab7cd11e1e478b87f08fe5a42a9e67';
+  const forms = [
+    A1,                                                   // plain lowercase
+    '0X147Bbaa458Ab7Cd11E1E478B87f08FE5A42A9E67',          // 0X prefix
+    '0x147Bbaa458Ab7Cd11E1E478B87f08FE5A42A9E68'.slice(0, 41) + '7', // flipped case, bad checksum
+    `${A1}.`, `${A1},`, `(${A1})`, '`' + A1 + '`',         // punctuation around it
+    `my wallet is ${A1} btw`,                              // mid-sentence
+  ];
+  for (const form of forms) {
+    const { bot, msg, drain } = harness();
+    await bot.handleUpdate(msg('supergroup', `/ready ${form}`, GROUP, 5200));
+    const c = drain();
+    assert.equal(c.filter((x) => x.method === 'deleteMessage').length, 1, `not deleted: ${form}`);
+    assert.equal(c.filter((x) => x.method === 'sendMessage' && x.payload.chat_id === GROUP).length, 0,
+      `the bot answered in the group under a surviving address: ${form}`);
+  }
+});
+
+test('an anonymous admin pasting an address is not exempt from deletion', async () => {
+  reset();
+  const { bot, drain } = harness();
+  // Telegram attributes anonymous admin messages to GroupAnonymousBot.
+  await bot.handleUpdate({
+    update_id: 5001,
+    message: {
+      message_id: 4242, date: 0,
+      chat: { id: GROUP, type: 'supergroup', title: 'g' },
+      from: { id: 1087968824, is_bot: true, first_name: 'GroupAnonymousBot' },
+      text: `/ready ${WALLET}`,
+      entities: [{ type: 'bot_command', offset: 0, length: 6 }],
+    },
+  });
+  assert.equal(drain().filter((x) => x.method === 'deleteMessage').length, 1,
+    'posting anonymously is the default for admins in most crypto groups');
+});
+
+test('/ready keeps working in the group hour after hour', async () => {
+  reset();
+  balances.set(WALLET, eth(0.31));
+  await R.registerMember(7, WALLET);
+  R.setSetting('ready_chat', String(GROUP));
+  const { bot, drain } = harness();
+  const t0 = Date.parse('2026-07-01T09:00:00Z');
+  R.setSetting('autopost_day', '2026-07-01');
+  await postTotals(bot.api, GROUP, { now: t0, isGroup: true });
+  drain();
+
+  // The scheduler ticks every 60s. Bumping the cache stamp on each tick kept it
+  // permanently warm, so every later /ready edited a block that had scrolled
+  // away an hour ago and the group saw nothing at all.
+  for (let i = 1; i <= 40; i++) await readyAutoPostTick(bot.api, { now: t0 + i * 60_000 });
+  drain();
+  await postTotals(bot.api, GROUP, { now: t0 + 41 * 60_000, isGroup: true });
+  const c = drain();
+  assert.equal(c.filter((x) => x.method === 'sendMessage' && x.payload.chat_id === GROUP).length, 1,
+    'past the window /ready posts a visible block, it does not edit an hour-old one');
+});
+
+test('a scheduler tick that has nothing to do reads no balances', async () => {
+  reset();
+  balances.set(WALLET, eth(0.31));
+  await R.registerMember(7, WALLET);
+  R.setSetting('ready_chat', String(GROUP));
+  const { bot } = harness();
+  const t0 = Date.parse('2026-07-01T09:00:00Z');
+  R.setSetting('autopost_day', '2026-07-01');
+  R.setSetting('autopost_polled_at', String(t0));
+  const before = reads.count;
+  for (let i = 1; i <= 10; i++) await readyAutoPostTick(bot.api, { now: t0 + i * 60_000 });
+  // Ten minutes of ticks. The threshold trigger is allowed to look every five,
+  // so this is two refreshes of one wallet, not ten -- the old shape refreshed
+  // every registered balance on every tick, 288,000 chain reads a day at two
+  // hundred wallets to publish two posts.
+  assert.ok(reads.count - before <= 2, `${reads.count - before} reads over ten idle minutes`);
+});
+
+test('GATE HIT is announced in the group and cannot be burned in a DM', async () => {
+  reset();
+  balances.set(WALLET, eth(0.31));
+  await R.registerMember(7, WALLET);
+  R.setSetting('gate_wallets', '1');
+  const { bot, msg, drain } = harness();
+
+  // A member DMs /tge first. That must not consume the announcement.
+  await bot.handleUpdate(msg('private', '/tge', 5203, 5203));
+  let c = drain();
+  assert.equal(c.filter((x) => x.payload?.text === 'GATE HIT').length, 0, 'not in a DM');
+  assert.ok(!R.getSetting('gate_announced'), 'and the flag is not burned');
+
+  await bot.handleUpdate(msg('supergroup', '/ready', GROUP, 5204));
+  c = drain();
+  const hit = c.filter((x) => x.payload?.text === 'GATE HIT');
+  assert.equal(hit.length, 1, 'the group gets it');
+  assert.equal(hit[0].payload.chat_id, GROUP);
+});
+
+test('two chats do not defeat the ten-minute cache', async () => {
+  reset();
+  balances.set(WALLET, eth(0.31));
+  await R.registerMember(7, WALLET);
+  const { bot, msg, drain } = harness();
+  await bot.handleUpdate(msg('supergroup', '/ready', GROUP, 5205));
+  drain();
+  // A DM in between must not evict the group's cached block.
+  await bot.handleUpdate(msg('private', '/tge', 5206, 5206));
+  drain();
+  await bot.handleUpdate(msg('supergroup', '/ready', GROUP, 5207));
+  const c = drain();
+  assert.equal(c.filter((x) => x.method === 'sendMessage' && x.payload.chat_id === GROUP).length, 0);
+  assert.equal(c.filter((x) => x.method === 'editMessageText').length, 1, 'still an edit, as promised');
+});
+
+test('a /ready inside the window does not strip the countdown /tge posted', async () => {
+  reset();
+  R.setSetting('launch_at', String(Math.floor(Date.now() / 1000) + 7200));
+  const { bot, msg, drain } = harness();
+  await bot.handleUpdate(msg('supergroup', '/tge', GROUP, 5208));
+  assert.match(drain().find((x) => x.method === 'sendMessage').payload.text, /launch in /);
+  await bot.handleUpdate(msg('supergroup', '/ready', GROUP, 5209));
+  const edit = drain().find((x) => x.method === 'editMessageText');
+  assert.match(edit.payload.text, /launch in /, 'the countdown belongs to the launch, not to the command');
+});
+
+test('the register stays readable past forty wallets', async () => {
+  reset();
+  for (let i = 0; i < 60; i++) {
+    const w = '0x' + String(i).padStart(40, 'e');
+    balances.set(w, eth(1));
+    await R.addExternal(w, `rh trader #${i}`);
+  }
+  const { bot, msg, drain } = harness();
+  await bot.handleUpdate(msg('private', '/ready list', ADMIN, ADMIN));
+  const sends = drain().filter((x) => x.method === 'sendMessage');
+  assert.ok(sends.length > 1, 'chunked rather than rejected by Telegram and swallowed');
+  for (const s of sends) {
+    assert.ok(s.payload.text.length <= 4096, `chunk of ${s.payload.text.length} exceeds the limit`);
+  }
+  const all = sends.map((s) => s.payload.text).join('\n');
+  assert.equal(all.split('\n').filter((l) => l.startsWith('0x')).length, 60, 'every row survives');
+});
+
+test('a member cannot be silently evicted by someone registering their address', async () => {
+  reset();
+  R.setSetting('ready_open', 'on');
+  balances.set(WALLET, eth(0.31));
+  await R.registerMember(111, WALLET);
+  assert.equal(R.statusOf(111).wallet, WALLET);
+
+  // Addresses are public and get pasted in group chats constantly.
+  const res = await R.registerMember(222, WALLET);
+  assert.equal(res.ok, false);
+  assert.equal(res.reason, 'claimed');
+  assert.ok(R.statusOf(111), 'the original registrant is still registered');
+  assert.equal(R.statusOf(222), null);
+});
+
+test('re-registering your own wallet is still allowed', async () => {
+  reset();
+  balances.set(WALLET, eth(0.31));
+  await R.registerMember(111, WALLET);
+  R.resetReadyCooldowns();
+  assert.equal((await R.registerMember(111, WALLET)).ok, true);
+});
+
+test('the cooldown starts before the chain reads, and a failure starts it too', async () => {
+  reset();
+  balances.set(WALLET, eth(0.31));
+  const before = reads.count;
+  const results = await Promise.all(Array.from({ length: 5 }, () => R.registerMember(77, WALLET)));
+  assert.equal(results.filter((r) => r.ok).length, 1, 'one registration per ten minutes, not five');
+  assert.ok(reads.count - before <= 2, `a burst must not amplify into chain reads, made ${reads.count - before}`);
+
+  R.resetReadyCooldowns();
+  balances.set(A(9), eth(0.001));
+  assert.equal((await R.registerMember(78, A(9))).reason, 'low');
+  assert.equal((await R.registerMember(78, A(9))).reason, 'cooldown', 'a failed attempt starts the clock too');
+});
+
+test('a member who just joined can still register in a DM', async () => {
+  reset();
+  R.setSetting('ready_open', 'on');
+  balances.set(WALLET, eth(0.31));
+  R.rememberJoin(5210, 'twitter', Date.now());
+  const { bot, msg, drain } = harness();
+  await bot.handleUpdate(msg('private', `/ready ${WALLET}`, 5210, 5210));
+  assert.match(drain().find((x) => x.method === 'sendMessage')?.payload.text ?? '', /READY/,
+    'joining from a campaign link and registering straight away is the funnel, not abuse');
+  assert.ok(R.statusOf(5210), 'and is registered');
+});
+
+test('a member who just joined is still ignored in the group', async () => {
+  reset();
+  R.rememberJoin(5211, null, Date.now());
+  const { bot, msg, drain } = harness();
+  await bot.handleUpdate(msg('supergroup', '/ready', GROUP, 5211));
+  assert.equal(drain().length, 0);
+});
+
+test('a channel post cannot hijack where the scheduled posts go', async () => {
+  reset();
+  R.setSetting('ready_chat', String(GROUP));
+  const { bot, drain } = harness();
+  await bot.handleUpdate({
+    update_id: 6001,
+    channel_post: {
+      message_id: 1, date: 0,
+      chat: { id: -1009999, type: 'channel', title: 'c' },
+      text: '/tge',
+      entities: [{ type: 'bot_command', offset: 0, length: 4 }],
+    },
+  });
+  assert.equal(drain().length, 0, 'a post with no sender is not a command');
+  assert.equal(R.getSetting('ready_chat'), String(GROUP), 'and never redirects the auto-posts');
 });
