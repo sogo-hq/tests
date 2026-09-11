@@ -218,3 +218,22 @@ test('"0 of 32" can never be produced', () => {
     }
   }
 });
+
+test('/full says where the supply share was read from', () => {
+  // The obvious place to look is the launch receipt, and it is the wrong one:
+  // measured on four launches it reported 1.0% where the opening window
+  // reported 17.4%. A reader checking the figure needs to know which blocks.
+  const f = flagsFor().flags.find((f) => f.key === 'snipe_exemptions');
+  assert.ok(f.note, 'a measured share with no account of where it came from');
+  assert.match(f.note, /do not buy in the launch transaction/);
+  assert.match(f.note, /tax-free seconds after it/);
+  assert.match(f.note, /opening window \(40 blocks from the launch block\)/);
+
+  // Only where there is a share to explain, and never on the quick card or the
+  // picture: both have a line budget, and neither is the place for it.
+  assert.equal(flagsFor({ exemptPct: null }).flags
+    .find((f) => f.key === 'snipe_exemptions').note, null);
+  for (const fl of flagsFor().flags) {
+    if (fl.note) assert.ok(!fl.plain.includes(fl.note) && !fl.compactDetail.includes(fl.note));
+  }
+});

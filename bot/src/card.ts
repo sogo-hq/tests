@@ -225,6 +225,8 @@ function renderEarlyCard(r: ScanResult): string {
     // Under the finding, never instead of it. A declaration is a claim about
     // the launch; the line above it is what the launch did.
     if (fl.declared) L.push(`      ${esc(fl.declared)}`);
+    // /full only: where a figure was read from, so it can be checked.
+    if (fl.note) L.push(`      <i>${esc(fl.note)}</i>`);
   }
   // No marker either way. A green tick on "buyback enabled" renders a fact as
   // an endorsement -- it is a property of the launch, not a finding in its
@@ -363,6 +365,8 @@ export function renderCard(r: ScanResult): string {
     // Under the finding, never instead of it. A declaration is a claim about
     // the launch; the line above it is what the launch did.
     if (fl.declared) L.push(`      ${esc(fl.declared)}`);
+    // /full only: where a figure was read from, so it can be checked.
+    if (fl.note) L.push(`      <i>${esc(fl.note)}</i>`);
   }
   // No marker either way. A green tick on "buyback enabled" renders a fact as
   // an endorsement -- it is a property of the launch, not a finding in its

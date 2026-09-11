@@ -11,6 +11,7 @@ import {
   type Concentration,
 } from './concentration.js';
 import { MIN_BENCHMARK_SAMPLES } from './benchmark.js';
+import { OPENING_BUY_BLOCKS } from './opening.js';
 import { declarationFor, MAX_DECLARED_LINE, type Declaration } from '../declare.js';
 
 export type FlagState = 'clean' | 'raised' | 'unknown';
@@ -44,6 +45,15 @@ export interface Flag {
    * not becomes its own finding, and the check it contradicts still stands.
    */
   declared?: string | null;
+  /**
+   * Where a number in this finding comes from, for /full only.
+   *
+   * Not on the quick card and not on the picture: both have a line budget and
+   * neither is the place to explain a measurement. /full is, and a reader who
+   * wants to check a figure against the chain themselves needs to know which
+   * blocks it was read over.
+   */
+  note?: string | null;
 }
 
 export interface FlagResult {
@@ -283,6 +293,13 @@ export function computeFlags(opts: {
       // before anyone else could bid. The count alone does not separate five
       // wallets that took 0.2% from five that took 40%.
       plain: `${exCount} wallets tax-free at launch, 1 of them the deployer${shareClause}`,
+      // Where the share comes from, because the obvious place to look for it is
+      // the wrong one. Measured on four launches, the launch receipt alone
+      // reported 1.0% where the opening window reported 17.4%.
+      note: exShare === null ? null
+        : 'the exempted wallets do not buy in the launch transaction, they buy in the '
+          + 'tax-free seconds after it, so this share is read from the opening window '
+          + `(${Number(OPENING_BUY_BLOCKS)} blocks from the launch block) and not from the receipt`,
       // Ordered by the share of supply they took, which is the size of the
       // claim. A launch whose window was never measured falls back to its
       // count, which cannot overtake a measured share: an unmeasured 32 ranks

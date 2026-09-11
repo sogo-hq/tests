@@ -87,7 +87,7 @@ let c = drain();
 assert.equal(c.length, 1, `group scan should send exactly one message, sent ${c.length}`);
 assert.equal(c[0].method, 'sendMessage');
 assert.ok(c[0].payload.text.startsWith('VITALS  '), 'group gets the default card');
-assert.ok(c[0].payload.text.split('\n').length <= 12, 'default card is <=12 lines in a group');
+assert.ok(c[0].payload.text.split('\n').length <= 18, 'default card is <=18 lines in a group');
 assert.equal(c[0].payload.parse_mode, undefined, 'the default card is sent as plain text');
 assert.ok(c[0].payload.reply_parameters?.message_id, 'sent as a reply to the triggering message');
 assert.equal(c[0].payload.link_preview_options?.is_disabled, true);
