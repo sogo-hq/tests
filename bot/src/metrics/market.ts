@@ -58,6 +58,16 @@ export function resetMarketCache(): void {
   cache.clear();
 }
 
+/**
+ * Drop one token's cached block, after its trade log has been extended.
+ *
+ * The whole cache would do, but a group scanning one address should not cost
+ * every other token in it a recomputation.
+ */
+export function resetMarketFor(token: string): void {
+  cache.delete(token.toLowerCase());
+}
+
 interface TradeRow { q: string; t: string; bt: number; side: string }
 
 /**

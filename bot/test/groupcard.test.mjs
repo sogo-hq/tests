@@ -220,3 +220,61 @@ test('four buttons, refresh first', () => {
   assert.deepEqual(b.map((x) => x.text), ['Refresh', 'Holders', 'Full', 'Image']);
   for (const x of b) assert.ok(x.callback_data.endsWith(TOKEN));
 });
+
+// ---------------------------------------------------- the market on a budget
+
+test('the market block is what waits, never the findings', () => {
+  // The edit-in path renders the same card twice: once without the block and
+  // once with it. Both are cards, both carry the findings, and the second is
+  // what the first is edited into.
+  const without = card({}, { market: null });
+  const with_ = card();
+
+  for (const c of [without, with_]) {
+    assert.ok(c.text.includes('🚩'), 'a card went out without its findings');
+    assert.ok(c.text.split('\n').length <= G.MAX_GROUP_LINES);
+  }
+  assert.equal(without.hasMarket, false);
+  assert.equal(with_.hasMarket, true);
+
+  // The findings are identical between the two: the edit adds lines, it never
+  // rewrites what was already read.
+  const findings = (t) => t.split('\n').filter((l) => l.includes('🚩'));
+  assert.deepEqual(findings(without.text), findings(with_.text));
+
+  // And the block that arrives is additive.
+  assert.ok(with_.text.split('\n').length > without.text.split('\n').length);
+});
+
+test('the budget is a clock, not a data check', () => {
+  // Stated as a constant so it cannot quietly become "however long the read
+  // takes": past this, the card goes out without the block.
+  assert.equal(M.MARKET_BUDGET_MS, 1500);
+  assert.equal(M.MARKET_CACHE_MS, 30_000);
+});
+
+test('holder math leaves out the protocol, the curve and the token', async () => {
+  const { holderBreakdown } = await import('../dist/metrics/concentration.js');
+  const { NON_HOLDER_ADDRESSES } = await import('../dist/config.js');
+  const whale = '0x' + 'a'.repeat(40);
+  const small = '0x' + 'b'.repeat(40);
+  const balances = {
+    // Every protocol address holding more than either real holder. Counted,
+    // each of these would be the largest wallet on every graduated launch.
+    ...Object.fromEntries(NON_HOLDER_ADDRESSES.map((a) => [a, '900000'])),
+    [CURVE]: '900000',
+    [TOKEN]: '900000',
+    [whale]: '600',
+    [small]: '400',
+  };
+  db.prepare(
+    `INSERT OR REPLACE INTO holder_snapshots (token, top5_share, holders, excess, measured_at, balances, read_to_block)
+     VALUES (?, 0, 0, 0, 1, ?, 100)`,
+  ).run(TOKEN, JSON.stringify(balances));
+
+  const hb = holderBreakdown(TOKEN, CURVE);
+  assert.equal(hb.holders, 2, 'a protocol contract was counted as a holder');
+  assert.deepEqual(hb.top, [60, 40]);
+  assert.equal(hb.top5, 100);
+  assert.equal(hb.top10, 100);
+});

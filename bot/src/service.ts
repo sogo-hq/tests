@@ -72,6 +72,14 @@ export type ScanOutcome =
       meta: CompactMeta;
       cacheHit: boolean;
       durationMs: number;
+      /**
+       * The scan itself, for renderers that cannot be cached per token.
+       *
+       * The group card carries who called the address FIRST IN THIS CHAT, so
+       * one cached string cannot serve two groups. Absent only on a cache entry
+       * written before this field existed.
+       */
+      result?: ScanResult;
       /** Per-phase milliseconds. Absent on a cache hit, which had no phases. */
       phases?: string;
     }
@@ -294,8 +302,8 @@ export function looksLikeTxHash(raw: string): boolean {
   return TX_HASH_RE.test(raw);
 }
 
-function fromCache(hit: CachedScan): { defaultCard: string; fullCard: string; meta: CompactMeta } {
-  return { defaultCard: hit.defaultCard, fullCard: hit.fullCard, meta: hit.meta };
+function fromCache(hit: CachedScan): { defaultCard: string; fullCard: string; meta: CompactMeta; result?: ScanResult } {
+  return { defaultCard: hit.defaultCard, fullCard: hit.fullCard, meta: hit.meta, result: hit.result };
 }
 
 interface RenderedScan {
@@ -561,6 +569,7 @@ export async function performScan(req: ScanRequest): Promise<ScanOutcome> {
       defaultCard: rendered.defaultCard,
       fullCard: rendered.fullCard,
       meta: rendered.meta,
+      result: rendered.result,
       cacheHit: false,
       durationMs: d,
     } as ScanOutcome;

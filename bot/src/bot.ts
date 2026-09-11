@@ -59,6 +59,11 @@ import {
   everAnswered, AUTOSCAN_DEDUPE_MS,
 } from './autoscan.js';
 import { recordFirstCall, firstCallOf } from './firstcall.js';
+import { renderGroupCard } from './groupcard.js';
+import { holderBreakdown } from './metrics/concentration.js';
+import type { ScanResult } from './scan.js';
+import { marketSnapshot, resetMarketFor, MARKET_BUDGET_MS, type MarketSnapshot } from './metrics/market.js';
+import { indexOneCurve } from './indexer/trades.js';
 import {
   startDraft, answerDraft, draftOpen, clearDraft, signDraft, recentDeclarations,
   STEPS, DECLARE_PRICE, DECLARE_FREE_UNTIL, declarationCount,
@@ -359,6 +364,20 @@ async function handleScan(ctx: Context, raw: string, full = false): Promise<void
 
   // The image is opt-in and lives behind this button. It is never rendered
   // automatically: it is slower than the text and most people do not want it.
+  /**
+   * In a group, and not /full, the card is the group card.
+   *
+   * Rendered here rather than in the service because it names who called this
+   * address FIRST IN THIS CHAT: one cached string cannot serve two groups. The
+   * findings go out on the scan's own timing, and the market block joins them
+   * only if it is ready inside its budget; otherwise the message is sent
+   * without it and edited once the read lands. A finding never waits on a price.
+   */
+  if (isGroup && !full && outcome.kind === 'ok' && outcome.result) {
+    await deliverGroupCard(ctx, outcome.result, token, replyOpts);
+    return;
+  }
+
   const withImage =
     outcome.kind === 'ok'
       ? { reply_markup: { inline_keyboard: [[{ text: 'Image', callback_data: `img:${token}` }]] } }
@@ -445,6 +464,98 @@ async function handleImageButton(ctx: Context): Promise<void> {
  * Editing rather than sending matters: a fresh message would leave the notice
  * sitting above it, which reads as though the scan is still running.
  */
+/**
+ * The group card, with the market block on a budget.
+ *
+ * Two paths, and which one runs is decided by a clock rather than by whether
+ * the data is available: the findings are what the card is for and they never
+ * wait on a market read. Inside the budget the card goes out whole; past it the
+ * card goes out without the market block and is edited when the read lands.
+ *
+ * A failed or late read is not an error anybody needs to see. The card was
+ * already correct without it.
+ */
+async function deliverGroupCard(
+  ctx: Context,
+  result: ScanResult,
+  token: string,
+  replyOpts: Record<string, unknown>,
+): Promise<void> {
+  const chatId = ctx.chat?.id;
+  const opts = {
+    parse_mode: 'HTML' as const,
+    link_preview_options: { is_disabled: true },
+    ...replyOpts,
+  };
+
+  const pending = freshMarket(result);
+  const market = await Promise.race([
+    pending,
+    new Promise<null>((resolve) => setTimeout(() => resolve(null), MARKET_BUDGET_MS)),
+  ]);
+
+  const render = (m: MarketSnapshot | null) =>
+    renderGroupCard(result, { chatId, botUsername: usernameOf(ctx), market: m });
+
+  const first = render(market);
+  const sent = await ctx.reply(first.text, {
+    ...opts,
+    reply_markup: { inline_keyboard: first.buttons },
+  });
+  if (market) return;
+
+  // The read is still running. When it lands the same card is rendered again,
+  // with the block, and edited over the one already on screen.
+  try {
+    const late = await pending;
+    if (!late) return;
+    const second = render(late);
+    if (second.text === first.text) return;
+    await ctx.api.editMessageText(sent.chat.id, sent.message_id, second.text, {
+      parse_mode: 'HTML',
+      link_preview_options: { is_disabled: true },
+      reply_markup: { inline_keyboard: second.buttons },
+    });
+  } catch (err) {
+    // The card on screen is already right. A market block that never arrives is
+    // a missing line, not a wrong one.
+    console.warn('[market] could not edit the block in:', String((err as Error)?.message ?? err).slice(0, 140));
+  }
+}
+
+/**
+ * Bring the trade log up to the head, then read the block off it.
+ *
+ * The slow part is the indexing, not the arithmetic: the snapshot itself is a
+ * query against a local table. A token whose log is already current comes back
+ * immediately, which is the common case in a group where the same addresses
+ * are pasted repeatedly.
+ */
+async function freshMarket(r: ScanResult): Promise<MarketSnapshot | null> {
+  const input = {
+    token: r.reads.token,
+    mcapQuote: r.reads.mcapInQuote,
+    liquidityQuote: Number(r.reads.realQuoteReserve) / 10 ** r.reads.pairDecimals,
+    pairDecimals: r.reads.pairDecimals,
+    currentBlock: r.currentBlock,
+  };
+  const have = marketSnapshot(input);
+  if (have.complete) return have;
+  try {
+    await indexOneCurve(
+      r.reads.curve, r.reads.token,
+      BigInt(Math.max(0, r.launchBlock)), BigInt(r.currentBlock),
+    );
+  } catch (err) {
+    console.warn('[market] trade read failed:', String((err as Error)?.message ?? err).slice(0, 140));
+    // What is already in the log is still real, and less of a window than it
+    // names is what `complete: false` on the card says.
+    return have;
+  }
+  resetMarketFor(r.reads.token);
+  return marketSnapshot(input);
+}
+
 async function deliver(
   ctx: Context,
   notice: { chat: { id: number }; message_id: number } | null,
@@ -2146,6 +2257,51 @@ export function createBot(token = TELEGRAM_BOT_TOKEN): Bot {
    * wants the current numbers presses this and gets them, which is the whole
    * reason a repeat is answered at all rather than ignored.
    */
+  /** The full card, from the button on a group card. */
+  bot.callbackQuery(/^fl:/, async (ctx) => {
+    const token = normaliseToken((ctx.callbackQuery?.data ?? '').slice(3));
+    if (!token) {
+      await ctx.answerCallbackQuery({ text: 'unrecognised token', show_alert: false });
+      return;
+    }
+    await ctx.answerCallbackQuery({ text: 'reading…' });
+    await handleScan(ctx, token, true);
+  });
+
+  /**
+   * The holder breakdown, as an alert rather than a message.
+   *
+   * A group does not need another message for a number one person wanted, and
+   * an alert is read by the person who pressed and nobody else. Free: it is the
+   * balances the concentration reader already stores.
+   */
+  bot.callbackQuery(/^hd:/, async (ctx) => {
+    const token = normaliseToken((ctx.callbackQuery?.data ?? '').slice(3));
+    if (!token) {
+      await ctx.answerCallbackQuery({ text: 'unrecognised token', show_alert: false });
+      return;
+    }
+    const row = db.prepare('SELECT curve FROM launches WHERE token = ?').get(token.toLowerCase()) as
+      | { curve: string } | undefined;
+    const hb = row ? holderBreakdown(token, row.curve) : null;
+    if (!hb) {
+      await ctx.answerCallbackQuery({
+        text: 'holder balances have not been read for this token yet',
+        show_alert: true,
+      });
+      return;
+    }
+    await ctx.answerCallbackQuery({
+      text: [
+        `${hb.holders.toLocaleString()} holders`,
+        `top 5: ${hb.top.map((v) => `${v.toFixed(1)}%`).join(', ')}`,
+        `top 5 together ${hb.top5.toFixed(1)}%, top 10 ${hb.top10.toFixed(1)}%`,
+        'the curve and the protocol contracts are not counted as holders',
+      ].join('\n'),
+      show_alert: true,
+    });
+  });
+
   bot.callbackQuery(/^rf:/, async (ctx) => {
     const token = normaliseToken((ctx.callbackQuery?.data ?? '').slice(3));
     if (!token) {
