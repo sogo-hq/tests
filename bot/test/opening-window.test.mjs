@@ -93,14 +93,18 @@ test('the lines name the pair asset and report the count as measured', async () 
   assert.match(lines[2], /^snipers paid 0\.183 ETH in tax, across 16 wallets$/);
 });
 
-test('a single exemption reads as the dev wallet', () => {
-  const lines = O.openingLines(
-    { exemptWallets: ['0x1'], creatorTokens: 0n, creatorSharePct: 1, exemptTokens: 0n, exemptSharePct: 1,
+test('a single exemption says WHICH wallet, checked against the deployer', () => {
+  const one = (wallet, deployer) => O.openingLines(
+    { exemptWallets: [wallet], creatorTokens: 0n, creatorSharePct: 1, exemptTokens: 0n, exemptSharePct: 1.5,
       taxWei: 0n, taxPayers: 0, complete: true },
-    { pairSymbol: 'ETH', pairDecimals: 18 },
+    { pairSymbol: 'ETH', pairDecimals: 18, deployer },
   );
-  assert.equal(lines[0], 'wallets exempt from the opening tax: 1, the dev wallet');
-  assert.equal(lines[2], 'snipers paid nothing: no taxed buys in the opening window');
+  // "the dev wallet" was a claim about who held the exemption that nothing had
+  // measured, on a function holding both the list and the deployer.
+  assert.equal(one(DEPLOYER, DEPLOYER)[0], 'wallets exempt from the opening tax: 1, the deployer, 1.50% of supply');
+  assert.equal(one('0x9999999999999999999999999999999999999999', DEPLOYER)[0],
+    'wallets exempt from the opening tax: 1, not the deployer, 1.50% of supply');
+  assert.equal(one(DEPLOYER, DEPLOYER)[2], 'snipers paid nothing: no taxed buys in the opening window');
 });
 
 test('a non-ETH pair is named rather than implied', async () => {
@@ -150,6 +154,34 @@ test('the log query is bounded to the opening window, not left at latest', async
   await O.readOpeningWindow({ curve: CURVE, deployer: DEPLOYER, totalSupply: SUPPLY, fromBlock: 60081281n });
   client.getLogs = real;
   assert.equal(typeof seen.toBlock, 'bigint', "'latest' grows by 600 blocks a minute on a 0.1s chain");
-  assert.equal(seen.toBlock - seen.fromBlock, O.OPENING_WINDOW_BLOCKS);
   assert.ok(O.OPENING_WINDOW_BLOCKS <= 20000n, 'and stays inside the node log-query limit forever');
+});
+
+test('the creator opening buy is read over the tax window, not a minute of trading', async () => {
+  logMode = 'full';
+  const seen = [];
+  const real = client.getLogs;
+  client.getLogs = async (args) => { seen.push(args); return real(args); };
+  await O.readOpeningWindow({ curve: CURVE, deployer: DEPLOYER, totalSupply: SUPPLY, fromBlock: 60081281n });
+  client.getLogs = real;
+  const span = (name) => {
+    const a = seen.find((x) => x.event?.name === name);
+    return a.toBlock - a.fromBlock;
+  };
+  // CurveBuy is the one event that is not self-terminating: the curve emits one
+  // on every buy for the rest of its life.
+  assert.equal(span('CurveBuy'), O.OPENING_BUY_BLOCKS);
+  assert.ok(O.OPENING_BUY_BLOCKS < O.OPENING_WINDOW_BLOCKS, 'a tighter window than the tax events need');
+  assert.equal(span('SnipeTaxCharged'), O.OPENING_WINDOW_BLOCKS);
+});
+
+test('the launch-day read does not queue behind background work', async () => {
+  logMode = 'full';
+  const { bulkDepth } = await import('../dist/ratelimit.js').then((m) => ({ bulkDepth: m.bulk })).catch(() => ({}));
+  // The post it backs is made five minutes after a launch, when every member is
+  // scanning. At bulk priority the limiter refuses a token while any
+  // interactive request is in flight, so it would render undetermined exactly
+  // when it matters and never when it is tested.
+  const w = await O.readOpeningWindow({ curve: CURVE, deployer: DEPLOYER, totalSupply: SUPPLY, fromBlock: 60081281n });
+  assert.ok(w.complete, 'default priority is interactive');
 });

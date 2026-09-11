@@ -568,7 +568,9 @@ async function openingBlock(token: string): Promise<string[]> {
     fromBlock: BigInt(row.block_number),
   });
   const policy = await snipeTaxPolicy();
-  const lines = ['', ...openingLines(w, { pairSymbol: reads.pairSymbol, pairDecimals: reads.pairDecimals })];
+  const lines = ['', ...openingLines(w, {
+    pairSymbol: reads.pairSymbol, pairDecimals: reads.pairDecimals, deployer: row.deployer,
+  })];
   lines.push(
     policy
       ? `opening tax policy: ${(policy.startBps / 100).toFixed(0)}% for the first ${policy.seconds} s, read from the factory`

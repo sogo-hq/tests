@@ -48,6 +48,17 @@ export interface OpeningInput {
   totalSupply: bigint;
   fromBlock: bigint;
   toBlock?: bigint;
+  /**
+   * Queue behind background work.
+   *
+   * Off by default, and that is the point: this read backs a post with a
+   * deadline, made five minutes after a launch, which is the exact moment group
+   * scan traffic peaks. At bulk priority the limiter refuses a token while any
+   * interactive request is queued or was served in the last second, so the
+   * flagship post would render "undetermined" precisely when it matters and
+   * never when it is being tested.
+   */
+  background?: boolean;
 }
 
 /**
@@ -63,16 +74,31 @@ export interface OpeningInput {
  */
 export const OPENING_WINDOW_BLOCKS = 600n;
 
+/**
+ * How far the CREATOR'S OPENING BUY is read, which is not the same window.
+ *
+ * SnipeTaxCharged is self-terminating and SnipeTaxExempted is emitted in the
+ * launch transaction, so any window at least as wide as the real one gives the
+ * same answer for those. CurveBuy is not bounded at all: the curve emits one on
+ * every buy for the rest of its life, so reading it over sixty seconds summed a
+ * minute of ordinary trading into a number labelled "opening buy". Forty blocks
+ * is four seconds, a second of margin past the three the factory charges tax
+ * for, which is the window in which being pre-exempted means anything.
+ */
+export const OPENING_BUY_BLOCKS = 40n;
+
 export async function readOpeningWindow(input: OpeningInput): Promise<OpeningWindow | null> {
   const address = input.curve as Address;
   const fromBlock = input.fromBlock;
   const toBlock = input.toBlock ?? fromBlock + OPENING_WINDOW_BLOCKS;
+  const buyTo = input.toBlock ?? fromBlock + OPENING_BUY_BLOCKS;
+  const q = <T>(fn: () => Promise<T>): Promise<T> => (input.background ? bulk(fn) : fn());
 
   try {
     const [exempt, taxes, buys] = await Promise.all([
-      bulk(() => client.getLogs({ address, event: SnipeTaxExempted, fromBlock, toBlock })),
-      bulk(() => client.getLogs({ address, event: SnipeTaxCharged, fromBlock, toBlock })),
-      bulk(() => client.getLogs({ address, event: CurveBuy, fromBlock, toBlock })),
+      q(() => client.getLogs({ address, event: SnipeTaxExempted, fromBlock, toBlock })),
+      q(() => client.getLogs({ address, event: SnipeTaxCharged, fromBlock, toBlock })),
+      q(() => client.getLogs({ address, event: CurveBuy, fromBlock, toBlock: buyTo })),
     ]);
 
     const exemptWallets: string[] = [];
@@ -131,19 +157,25 @@ function amount(wei: bigint, decimals: number, dp = 3): string {
  */
 export function openingLines(
   w: OpeningWindow | null,
-  opts: { pairSymbol: string | null; pairDecimals: number },
+  opts: { pairSymbol: string | null; pairDecimals: number; deployer?: string },
 ): string[] {
   if (!w) return ['opening window: could not be read, undetermined'];
   const sym = opts.pairSymbol ?? 'the pair asset';
   const lines: string[] = [];
 
   const n = w.exemptWallets.length;
+  const share = w.exemptSharePct === null ? '' : `, ${n === 1 ? '' : 'together '}${w.exemptSharePct.toFixed(2)}% of supply`;
   if (n === 0) {
     lines.push('wallets exempt from the opening tax: none');
   } else if (n === 1) {
-    lines.push('wallets exempt from the opening tax: 1, the dev wallet');
+    // WHICH wallet, checked rather than assumed. "1, the dev wallet" was a
+    // claim about who held the exemption that nothing had measured, on a
+    // function holding both the list and the deployer. One exemption that is
+    // not the deployer's is a more interesting fact than one that is, and it
+    // was the only branch that printed no share at all.
+    const who = w.exemptWallets[0] === opts.deployer?.toLowerCase() ? 'the deployer' : 'not the deployer';
+    lines.push(`wallets exempt from the opening tax: 1, ${who}${share}`);
   } else {
-    const share = w.exemptSharePct === null ? '' : `, together ${w.exemptSharePct.toFixed(2)}% of supply`;
     lines.push(`wallets exempt from the opening tax: ${n}${share}`);
   }
 
@@ -177,9 +209,11 @@ export async function snipeTaxPolicy(now = Date.now()): Promise<{ startBps: numb
   try {
     const { FACTORY } = await import('../config.js');
     const { factoryAbi } = await import('../abi.js');
+    // Not bulk, for the same reason as the window read: this backs the launch
+    // post, five minutes after a launch, with every member scanning at once.
     const [startBps, seconds] = await Promise.all([
-      bulk(() => client.readContract({ address: FACTORY, abi: factoryAbi, functionName: 'snipeTaxStartBps' })),
-      bulk(() => client.readContract({ address: FACTORY, abi: factoryAbi, functionName: 'snipeTaxSeconds' })),
+      client.readContract({ address: FACTORY, abi: factoryAbi, functionName: 'snipeTaxStartBps' }),
+      client.readContract({ address: FACTORY, abi: factoryAbi, functionName: 'snipeTaxSeconds' }),
     ]);
     const value = { startBps: Number(startBps), seconds: Number(seconds) };
     policyCache = { at: now, value };
