@@ -238,3 +238,19 @@ test('cancelling leaves nothing behind that a later launch would trip over', asy
   await D.countdownTick(s.api, { now: LAUNCH - 5 * 86_400_000 + 1000 });
   assert.equal(s.drain().filter((x) => x.method === 'unpin').length, 0);
 });
+
+test('moving the launch takes down the pin that no longer tells the truth', async () => {
+  reset();
+  const s = stubApi();
+  await D.countdownTick(s.api, { now: LAUNCH - 5 * 86_400_000 + 1000 });
+  const pinned = s.drain().find((x) => x.method === 'pin').message_id;
+
+  // The team slips the launch by more than the first offset, so nothing is due
+  // for days. Without this, the group's one pinned message counts down to an
+  // instant that has already passed.
+  await D.retirePin(s.api, GROUP, 'countdown_pinned');
+  const c = s.drain();
+  assert.equal(c.filter((x) => x.method === 'unpin').length, 1);
+  assert.equal(c.find((x) => x.method === 'unpin').message_id, pinned);
+  assert.equal(R.getSetting('countdown_pinned'), '');
+});

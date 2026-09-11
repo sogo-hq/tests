@@ -1,4 +1,5 @@
 import { totals, yesterday, getNumber, getSetting, setSetting, READY_MIN_ETH, type Totals } from './ready.js';
+import { envNumber } from './launch.js';
 
 /**
  * The public number, and the only thing about registration a group ever sees.
@@ -130,10 +131,10 @@ export function countdownLine(now = Date.now()): string | null {
  */
 export type AutoPostReason = 'daily' | 'threshold';
 
-export const DAILY_HOUR = Number(process.env.READY_DAILY_HOUR || 15) || 15;
+export const DAILY_HOUR = envNumber('READY_DAILY_HOUR', 15);
 export const DAILY_TZ = process.env.READY_TZ || 'Europe/Bratislava';
-export const THRESHOLD_STEP = Number(process.env.READY_THRESHOLD_STEP || 10) || 10;
-export const THRESHOLD_DEBOUNCE_MS = Number(process.env.READY_THRESHOLD_DEBOUNCE_MS || 3_600_000) || 3_600_000;
+export const THRESHOLD_STEP = Math.max(1, envNumber('READY_THRESHOLD_STEP', 10));
+export const THRESHOLD_DEBOUNCE_MS = envNumber('READY_THRESHOLD_DEBOUNCE_MS', 3_600_000);
 
 /**
  * Local calendar day and hour in DAILY_TZ.

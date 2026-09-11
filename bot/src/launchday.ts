@@ -1,6 +1,7 @@
 import type { Api } from 'grammy';
 import {
   getLaunchPlan, dueCountdown, countdownPost, COUNTDOWN_OFFSETS, launchTimeLine, LAUNCH_TZ,
+  envNumber,
 } from './launch.js';
 import { getSetting, setSetting, refreshBalances, totals, normaliseWallet } from './ready.js';
 import { db } from './db.js';
@@ -167,6 +168,25 @@ export async function repin(api: Api, chatId: number, messageId: number, slot: s
   setSetting(`${slot}_stale`, unresolved ? String(unresolved) : '');
 }
 
+/**
+ * Take down whatever this slot has pinned, and forget it.
+ *
+ * Used when a pinned post stops being true rather than being replaced: a
+ * countdown to a time the launch no longer happens at is worse than no pin.
+ */
+export async function retirePin(api: Api, chatId: number, slot: string): Promise<void> {
+  for (const key of [slot, `${slot}_stale`]) {
+    const id = Number(getSetting(key) || 0);
+    if (!id) continue;
+    try {
+      await api.unpinChatMessage(chatId, id);
+    } catch (err) {
+      console.warn(`[launch] retire unpin failed: ${String((err as Error)?.message ?? err).slice(0, 120)}`);
+    }
+    setSetting(key, '');
+  }
+}
+
 async function memberCount(api: Api, chatId: number): Promise<number | null> {
   try {
     return await api.getChatMemberCount(chatId);
@@ -220,7 +240,7 @@ export function guardVerdict(
 }
 
 /** 24 hours, as Telegram wants it: an absolute unix second. */
-export const MUTE_SECONDS = Number(process.env.FAKE_CA_MUTE_SECONDS || 86_400) || 86_400;
+export const MUTE_SECONDS = envNumber('FAKE_CA_MUTE_SECONDS', 86_400);
 
 /**
  * Every send permission ChatPermissions has, all off.
@@ -463,8 +483,8 @@ async function announceLaunch(
 
 /** The bot scanning its own launch, and the two posts that come out of it. */
 export const SELF_SCAN_HEADER = 'the launch, scanned by its own tool';
-export const SELF_SCAN_DELAY_MS = Number(process.env.SELF_SCAN_DELAY_MS || 300_000) || 300_000;
-export const SELF_FULL_DELAY_MS = Number(process.env.SELF_FULL_DELAY_MS || 900_000) || 900_000;
+export const SELF_SCAN_DELAY_MS = envNumber('SELF_SCAN_DELAY_MS', 300_000);
+export const SELF_FULL_DELAY_MS = envNumber('SELF_FULL_DELAY_MS', 900_000);
 
 /**
  * The scan of the launch, five minutes in, and its /full ten minutes after

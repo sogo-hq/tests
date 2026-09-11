@@ -11,9 +11,28 @@ import { getSetting, setSetting, clearSettingPrefix } from './ready.js';
  */
 export const LAUNCH_TZ = process.env.LAUNCH_TZ || 'Europe/Bratislava';
 
+/**
+ * A number from the environment, where zero is a real value.
+ *
+ * `Number(env || 15) || 15` reads naturally and is wrong: zero is falsy, so
+ * LAUNCH_WINDOW_START=0 became 15 and, with END=12, produced a window that
+ * refused every hour of the day while the refusal text cheerfully quoted
+ * "15:00 to 12:00 local only". Every launch time an admin proposed was
+ * rejected, with nothing pointing at the setting that did it.
+ */
+export function envNumber(name: string, fallback: number): number {
+  const raw = (process.env[name] ?? '').trim();
+  if (!raw) return fallback;
+  const n = Number(raw);
+  if (!Number.isFinite(n)) {
+    throw new Error(`${name} is not a number: ${JSON.stringify(raw.slice(0, 40))}`);
+  }
+  return n;
+}
+
 /** Local hours a launch may start in, inclusive of the first, exclusive of the last. */
-export const LAUNCH_WINDOW_START_HOUR = Number(process.env.LAUNCH_WINDOW_START || 15) || 15;
-export const LAUNCH_WINDOW_END_HOUR = Number(process.env.LAUNCH_WINDOW_END || 18) || 18;
+export const LAUNCH_WINDOW_START_HOUR = envNumber('LAUNCH_WINDOW_START', 15);
+export const LAUNCH_WINDOW_END_HOUR = envNumber('LAUNCH_WINDOW_END', 18);
 
 /** Monday through Thursday. Intl weekdays, where 1 is Monday. */
 export const LAUNCH_DAYS = [1, 2, 3, 4];
@@ -53,6 +72,10 @@ export function zonedToUtcMs(
   y: number, month: number, d: number, hh: number, mm: number, tz = LAUNCH_TZ,
 ): number {
   const naive = Date.UTC(y, month - 1, d, hh, mm);
+  // Intl throws RangeError on an invalid instant, and that escaped through
+  // parseLaunchTime and grammY's error boundary, so /launch set answered a
+  // misconfigured LAUNCH_DEADLINE with total silence.
+  if (!Number.isFinite(naive)) return NaN;
   const first = naive - offsetMinutes(naive, tz) * 60_000;
   return naive - offsetMinutes(first, tz) * 60_000;
 }
@@ -127,11 +150,17 @@ export function parseLaunchTime(input: string, now = Date.now(), tz = LAUNCH_TZ)
   }
 
   const at = zonedToUtcMs(y, mo, d, hh, mm, tz);
+  if (!Number.isFinite(at)) return { ok: false, reason: `${input.trim()} is not a real date` };
   const p = zonedParts(at, tz);
   // A date like 2026-09-31 rolls over silently, so it is caught by reading the
   // instant back rather than by counting days per month here.
   if (p.year !== y || p.month !== mo || p.day !== d) {
     return { ok: false, reason: `${input.trim()} is not a real date` };
+  }
+  // An ICU build whose short weekday names do not match the lookup table would
+  // give weekday 0, which is in no list and would read as a nameless refusal.
+  if (p.weekday < 1 || p.weekday > 7) {
+    return { ok: false, reason: 'could not read the day of the week for that date' };
   }
   if (at <= now) return { ok: false, reason: 'that time has already passed' };
 
@@ -150,6 +179,10 @@ export function parseLaunchTime(input: string, now = Date.now(), tz = LAUNCH_TZ)
   }
 
   const [dy, dm, dd] = LAUNCH_DEADLINE.split('-').map(Number) as [number, number, number];
+  if (![dy, dm, dd].every(Number.isFinite)) {
+    // The operator's mistake, said out loud rather than thrown into silence.
+    return { ok: false, reason: `LAUNCH_DEADLINE is not a date: ${LAUNCH_DEADLINE}. expected YYYY-MM-DD` };
+  }
   // The deadline is a whole local day, so the cutoff is the start of the day
   // after it. 2026-09-25 at 17:00 is allowed; 2026-09-26 at any hour is not.
   // Note the two rules are independent and the weekday one usually bites first:
@@ -157,6 +190,9 @@ export function parseLaunchTime(input: string, now = Date.now(), tz = LAUNCH_TZ)
   // Thursday the 24th. The refusal says which rule was broken rather than
   // implying the cutoff date is bookable.
   const cutoff = zonedToUtcMs(dy, dm, dd + 1, 0, 0, tz);
+  if (!Number.isFinite(cutoff)) {
+    return { ok: false, reason: `LAUNCH_DEADLINE is not a date: ${LAUNCH_DEADLINE}. expected YYYY-MM-DD` };
+  }
   if (at >= cutoff) {
     return { ok: false, reason: `${input.trim()} is past the ${LAUNCH_DEADLINE} cutoff` };
   }

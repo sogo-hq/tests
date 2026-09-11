@@ -172,3 +172,41 @@ test('a deadline on the last day of a month does not roll into the wrong one', (
   const dec = L.zonedToUtcMs(2026, 12, 32, 0, 0);
   assert.equal(new Date(dec).toISOString(), '2026-12-31T23:00:00.000Z', '00:00 on 1 Jan, CET');
 });
+
+test('zero is a real value for a window hour, not a missing one', async () => {
+  // `Number(env || 15) || 15` reads naturally and is wrong: zero is falsy, so
+  // START=0 became 15 and, with END=12, refused every hour of the day while
+  // the refusal quoted "15:00 to 12:00 local only".
+  const out = await import('node:child_process').then(({ execFileSync }) =>
+    execFileSync(process.execPath, ['--input-type=module', '-e', `
+      const L = await import('${process.cwd()}/dist/launch.js');
+      console.log(JSON.stringify([L.LAUNCH_WINDOW_START_HOUR, L.LAUNCH_WINDOW_END_HOUR,
+        L.parseLaunchTime('2026-09-22 09:00', Date.parse('2026-01-05T09:00:00Z')).ok]));
+    `], { env: { ...process.env, LAUNCH_WINDOW_START: '0', LAUNCH_WINDOW_END: '12', DB_PATH: '/tmp/win-test.db' }, encoding: 'utf8' }));
+  assert.deepEqual(JSON.parse(out), [0, 12, true], '09:00 is inside a 00:00 to 12:00 window');
+});
+
+test('a malformed LAUNCH_DEADLINE is reported, not thrown into silence', async () => {
+  const { execFileSync } = await import('node:child_process');
+  for (const bad of ['2026/09/25', '2026-09-25T23:59', 'soon']) {
+    const out = execFileSync(process.execPath, ['--input-type=module', '-e', `
+      const L = await import('${process.cwd()}/dist/launch.js');
+      try {
+        const r = L.parseLaunchTime('2026-09-22 16:00', Date.parse('2026-01-05T09:00:00Z'));
+        console.log(JSON.stringify(r.ok ? 'OK' : r.reason));
+      } catch (e) { console.log(JSON.stringify('THREW ' + e.message)); }
+    `], { env: { ...process.env, LAUNCH_DEADLINE: bad, DB_PATH: '/tmp/dl-test.db' }, encoding: 'utf8' });
+    const got = JSON.parse(out);
+    assert.ok(!got.startsWith('THREW'), `${bad} threw: a RangeError escapes /launch set and the admin gets silence`);
+    assert.match(got, /LAUNCH_DEADLINE is not a date/, `${bad} -> ${got}`);
+  }
+});
+
+test('a non-numeric window hour is refused at load rather than silently defaulted', async () => {
+  const { execFileSync } = await import('node:child_process');
+  const out = execFileSync(process.execPath, ['--input-type=module', '-e', `
+    try { await import('${process.cwd()}/dist/launch.js'); console.log('LOADED'); }
+    catch (e) { console.log('REFUSED: ' + e.message); }
+  `], { env: { ...process.env, LAUNCH_WINDOW_START: 'noon', DB_PATH: '/tmp/win2-test.db' }, encoding: 'utf8' });
+  assert.match(out, /REFUSED: LAUNCH_WINDOW_START is not a number/);
+});

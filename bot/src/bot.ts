@@ -24,7 +24,7 @@ import {
 } from './tge.js';
 import { parseLaunchTime, launchTimeLine, getLaunchPlan, clearLaunchPlan, resetCountdownMarks } from './launch.js';
 import {
-  launchChat, preflight, preflightLine, startLaunchLoop,
+  launchChat, preflight, preflightLine, startLaunchLoop, retirePin,
   guardVerdict, guardActive, pinnedCa, offencesOf, recordOffence,
   alreadyHandled, markHandled, muteFor24h, GUARD_WARNING, GUARD_MUTED,
   launchDetected, ADDRESS_ANYWHERE,
@@ -1301,13 +1301,30 @@ export function createBot(token = TELEGRAM_BOT_TOKEN): Bot {
     if (sub === 'set') {
       const res = parseLaunchTime(rest, Date.now());
       if (!res.ok) { await ctx.reply(res.reason); return; }
+      const previous = getLaunchPlan();
       setSetting('launch_at', String(Math.floor(res.at / 1000)));
       // A moved launch starts its countdown over. Keeping the ledger meant
       // every offset already consumed against the old time was dead for the
       // new one, so postponing by a day silently cancelled T-2d through
-      // T-10min and left a pin showing the time it no longer launches at.
+      // T-10min.
       resetCountdownMarks();
       const lines = [launchTimeLine(res.at)];
+
+      // And the pinned post still showed the old time. If the new time is
+      // further out than the first countdown offset, nothing is due for days,
+      // so the group's one pinned message would sit there counting down to an
+      // instant that has already passed. Take it down and say so, once.
+      if (previous && previous.at !== res.at) {
+        const chat = launchChat();
+        if (chat !== null) {
+          await retirePin(ctx.api, chat, 'countdown_pinned');
+          try {
+            await ctx.api.sendMessage(chat, `the launch has moved. ${launchTimeLine(res.at)}`);
+          } catch (err) {
+            console.warn('[launch] could not announce the new time:', String((err as Error)?.message ?? err).slice(0, 120));
+          }
+        }
+      }
 
       // Everything promised from here on needs rights an admin grants by hand.
       // Reported now rather than discovered at T-0.
