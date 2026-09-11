@@ -22,6 +22,8 @@ import {
 import {
   totalsBlock, isAdmin, gateHit, countdownLine, dueAutoPost, markAutoPost,
 } from './tge.js';
+import { parseLaunchTime, launchTimeLine, getLaunchPlan, clearLaunchPlan } from './launch.js';
+import { launchChat, preflight, preflightLine, startLaunchLoop } from './launchday.js';
 import { ALERTS_PER_HOUR } from './alerts.js';
 import { buildAlerts } from './alerts.js';
 import { exemptedHoldTime, holdTimeLine, MIN_HOLD_SAMPLES, type HoldTime } from './holdtime.js';
@@ -1061,22 +1063,69 @@ export function createBot(token = TELEGRAM_BOT_TOKEN): Bot {
   bot.command('launch', async (ctx) => {
     if (!isAdmin(ctx.from?.id)) return;
     const parts = (ctx.match ?? '').toString().trim().split(/\s+/).filter(Boolean);
-    if (parts[0]?.toLowerCase() === 'clear') {
-      setSetting('launch_at', '');
-      await ctx.reply('launch time cleared');
+    const sub = parts[0]?.toLowerCase();
+    const rest = parts.slice(1).join(' ');
+
+    if (sub === 'cancel' || sub === 'clear') {
+      const had = getLaunchPlan();
+      clearLaunchPlan();
+      await ctx.reply(had ? 'launch cancelled' : 'no launch was set');
+      const chat = launchChat();
+      if (had && chat !== null) {
+        // One line, in the group, so the countdown does not simply stop with no
+        // explanation for everyone who has been watching it.
+        await ctx.api.sendMessage(chat, 'the launch has been cancelled.');
+      }
       return;
     }
-    if (parts[0]?.toLowerCase() !== 'set' || !parts[1]) {
-      await ctx.reply('/launch set 2026-10-01T15:00Z   ·   /launch clear');
+
+    if (sub === 'name') {
+      if (!rest) { await ctx.reply('/launch name $VITALS'); return; }
+      setSetting('launch_name', rest.slice(0, 32));
+      await ctx.reply(`launch name: ${rest.slice(0, 32)}`);
       return;
     }
-    const arg = parts.slice(1).join(' ');
-    // Accept a unix timestamp or anything Date can parse. Anything else is
-    // refused rather than stored as NaN and rendered as a countdown to nowhere.
-    const ts = /^\d+$/.test(arg) ? Number(arg) : Math.floor(Date.parse(arg) / 1000);
-    if (!Number.isFinite(ts) || ts <= 0) { await ctx.reply('could not read that time'); return; }
-    setSetting('launch_at', String(ts));
-    await ctx.reply(`launch set · ${new Date(ts * 1000).toISOString()} · ${countdownLine() ?? ''}`.trim());
+
+    if (sub === 'watch') {
+      const addr = normaliseWallet(parts[1] ?? '');
+      if (!addr) { await ctx.reply('/launch watch 0xDEPLOYER'); return; }
+      setSetting('launch_deployer', addr);
+      await ctx.reply(`watching ${addr.slice(0, 10)}… for its next launch. the CA will be posted and pinned here.`);
+      return;
+    }
+
+    if (sub === 'set') {
+      const res = parseLaunchTime(rest, Date.now());
+      if (!res.ok) { await ctx.reply(res.reason); return; }
+      setSetting('launch_at', String(Math.floor(res.at / 1000)));
+      const lines = [launchTimeLine(res.at)];
+
+      // Everything promised from here on needs rights an admin grants by hand.
+      // Reported now rather than discovered at T-0.
+      const chat = launchChat();
+      if (chat === null) {
+        lines.push('no group yet: run /ready in the group once so the bot knows where to post.');
+      } else {
+        lines.push(preflightLine(await preflight(ctx.api, chat, ctx.me.id)));
+      }
+      if (!getSetting('launch_deployer')) {
+        lines.push('no deployer watched yet: /launch watch 0xDEPLOYER so the CA can be posted automatically.');
+      }
+      await ctx.reply(lines.join('\n'));
+      return;
+    }
+
+    const plan = getLaunchPlan();
+    await ctx.reply([
+      plan ? launchTimeLine(plan.at) : 'no launch set',
+      plan?.name ? `name: ${plan.name}` : '',
+      plan?.deployer ? `watching: ${plan.deployer.slice(0, 10)}…` : '',
+      '',
+      '/launch set 2026-09-22 16:00',
+      '/launch name $VITALS',
+      '/launch watch 0xDEPLOYER',
+      '/launch cancel',
+    ].filter(Boolean).join('\n'));
   });
 
   bot.command('kols', async (ctx) => {
@@ -1369,6 +1418,7 @@ export async function startBot(): Promise<void> {
   startQuotaSweeper();
 
   startReadyAutoPost(bot.api, me.username);
+  startLaunchLoop(bot.api, me.username);
 
   // chat_member has to be asked for explicitly -- it is excluded from the
   // default update set, and without it the invite-link attribution records

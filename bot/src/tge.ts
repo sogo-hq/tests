@@ -30,6 +30,8 @@ function eth(wei: bigint, dp = 1): string {
 
 export interface BlockInput {
   members: number | null;
+  /** The token this group is getting ready for, once an admin has named it. */
+  name?: string | null;
   now?: number;
   /** Minutes since the figures were read, when serving a cached block. */
   updatedMinutesAgo?: number;
@@ -50,7 +52,7 @@ export function totalsBlock(input: BlockInput, t: Totals = totals()): string {
     return v > 0 ? ` / ${v.toLocaleString()}` : '';
   };
 
-  const lines = ['READY FOR LAUNCH'];
+  const lines = [input.name ? `READY FOR LAUNCH: ${input.name}` : 'READY FOR LAUNCH'];
   if (input.members !== null) {
     lines.push(`members       ${String(input.members).padStart(5)}${target('gate_members')}`);
   }
