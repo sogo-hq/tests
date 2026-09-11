@@ -44,6 +44,15 @@ export interface CreationFacts {
   launchBuyAmount: bigint | null;
   launchBuyRecipient: string | null;
   snipeExemptionCount: number | null;
+  /**
+   * Where that count came from.
+   *
+   * 'logs' means it was read from the curve's SnipeTaxExempted events and
+   * therefore INCLUDES the deployer, which the protocol exempts automatically.
+   * Anything else came from calldata, which never mentions the deployer, so the
+   * two are different quantities and must not be printed under one sentence.
+   */
+  exemptionSource: string | null;
 }
 
 export interface ScanResult {
@@ -519,15 +528,16 @@ async function scanTokenInner(token: string, requestedBy?: number): Promise<Scan
   });
 
   const creationRow = db
-    .prepare('SELECT entry_point, launch_buy_amount, launch_buy_recipient, snipe_exemption_count FROM launches WHERE token = ?')
+    .prepare('SELECT entry_point, launch_buy_amount, launch_buy_recipient, snipe_exemption_count, exemption_source FROM launches WHERE token = ?')
     .get(reads.token.toLowerCase()) as
-    | { entry_point: string | null; launch_buy_amount: string | null; launch_buy_recipient: string | null; snipe_exemption_count: number | null }
+    | { entry_point: string | null; launch_buy_amount: string | null; launch_buy_recipient: string | null; snipe_exemption_count: number | null; exemption_source: string | null }
     | undefined;
   const creation: CreationFacts = {
     entryPoint: creationRow?.entry_point ?? null,
     launchBuyAmount: creationRow?.launch_buy_amount ? BigInt(creationRow.launch_buy_amount) : null,
     launchBuyRecipient: creationRow?.launch_buy_recipient ?? null,
     snipeExemptionCount: creationRow?.snipe_exemption_count ?? null,
+    exemptionSource: creationRow?.exemption_source ?? null,
   };
 
   /**

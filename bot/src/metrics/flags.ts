@@ -93,48 +93,85 @@ export function computeFlags(opts: {
   // anywhere in the protocol exposes this -- the creation transaction is the
   // only source, across four different entry points.
   const launchRow = db
-    .prepare('SELECT snipe_exemption_count, snipe_exemptions, entry_point, launch_buy_amount FROM launches WHERE token = ?')
+    .prepare('SELECT snipe_exemption_count, snipe_exemptions, entry_point, launch_buy_amount, exemption_source FROM launches WHERE token = ?')
     .get(token) as
-    | { snipe_exemption_count: number | null; snipe_exemptions: string | null; entry_point: string; launch_buy_amount: string | null }
+    | { snipe_exemption_count: number | null; snipe_exemptions: string | null; entry_point: string; launch_buy_amount: string | null; exemption_source: string | null }
     | undefined;
 
   const exCount = launchRow?.snipe_exemption_count ?? null;
-  if (exCount === null) {
+  const exFromLogs = launchRow?.exemption_source === 'logs';
+
+  /**
+   * How many wallets skipped the opening tax, said in one quantity.
+   *
+   * The curve exempts the DEPLOYER automatically and never mentions it in the
+   * calldata, so a count decoded from calldata and a count read from the
+   * curve's own events are different numbers. Measured: they disagreed on 61 of
+   * 64 launches where both were readable, the events always one higher, and in
+   * 19 of 19 inspected the extra wallet was the deployer.
+   *
+   * So a count whose source is not the events is reported as undetermined
+   * rather than printed. It is a real number of something, just not of the
+   * thing this sentence names, and two meanings under one name is worse than
+   * waiting for the re-read.
+   */
+  if (exCount === null || !exFromLogs) {
     flags.push({
       key: 'snipe_exemptions',
       label: 'Snipe-tax exemptions',
       state: 'unknown',
-      detail: 'creation transaction could not be decoded, not confirmed clean',
-      compactDetail: 'creation tx not decoded, exemptions unconfirmed',
-      plain: "couldn't read the launch, tax-free wallets unknown",
+      detail: exCount === null
+        ? 'creation transaction could not be decoded, not confirmed clean'
+        : 'counted before the deployer\'s automatic exemption was known, being re-read from the curve\'s events',
+      compactDetail: exCount === null ? 'creation tx not decoded, exemptions unconfirmed' : 'exemption count being re-read',
+      plain: exCount === null
+        ? "couldn't read the launch, tax-free wallets unknown"
+        : 'tax-free wallets: being re-counted from the launch itself',
       severity: 60,
     });
-  } else if (exCount > 0) {
+  } else if (exCount === 0) {
+    // A real and common zero, not an anomaly: measured across 420 launches, 139
+    // of them (33%) exempted nobody at all. An earlier reading of this said the
+    // protocol always exempts its deployer, which came from a sample drawn only
+    // from launches that had exemptions, and was wrong.
+    flags.push({
+      key: 'snipe_exemptions',
+      label: 'Snipe-tax exemptions',
+      state: 'clean',
+      detail: 'none, the curve exempted no wallet from the opening tax',
+      compactDetail: 'no pre-exempted wallets',
+      plain: 'nobody got in tax-free at launch',
+      severity: 0,
+    });
+  } else if (exCount === 1) {
+    // When a launch exempts anyone at all, the deployer is among them: measured
+    // 116 of 116 at exactly one and 81 of 81 above one, with no counterexample.
+    // It is NOT true that every launch exempts its deployer, so the line says
+    // what this wallet is rather than what the protocol always does.
+    flags.push({
+      key: 'snipe_exemptions',
+      label: 'Snipe-tax exemptions',
+      state: 'clean',
+      detail: 'the deployer only, and no other wallet',
+      compactDetail: 'the deployer only',
+      plain: 'tax-free at launch: the deployer only (the wallet that launched it)',
+      severity: 0,
+    });
+  } else {
     const viaBuy = launchRow?.entry_point === 'launchAndBuy' && launchRow.launch_buy_amount;
+    const others = exCount - 1;
     flags.push({
       key: 'snipe_exemptions',
       label: 'Snipe-tax exemptions',
       state: 'raised',
       detail:
-        `${exCount} wallet${exCount === 1 ? '' : 's'} pre-exempted from the opening tax` +
+        `${exCount} wallets skipped the opening tax, ${others} of them besides the deployer` +
         (viaBuy ? ', alongside a creator buy in the same transaction' : ''),
       compactDetail:
-        `${exCount} wallet${exCount === 1 ? '' : 's'} pre-exempted from the opening tax` +
+        `${exCount} tax-free at launch, ${others} beyond the deployer` +
         (viaBuy ? ' + creator buy same tx' : ''),
-      // 32 is the protocol's cap on pre-exempted wallets, so it is the
-      // denominator a reader needs to size the count against.
-      plain: `${exCount} of 32 exempt slots used, tax-free at launch`,
+      plain: `${exCount} wallets tax-free at launch, 1 of them the deployer`,
       severity: 100 + exCount,
-    });
-  } else {
-    flags.push({
-      key: 'snipe_exemptions',
-      label: 'Snipe-tax exemptions',
-      state: 'clean',
-      detail: 'none, no wallets pre-exempted at creation',
-      compactDetail: 'no pre-exempted wallets',
-      plain: 'nobody got in tax-free at launch',
-      severity: 0,
     });
   }
 

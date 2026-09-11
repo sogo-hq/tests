@@ -40,7 +40,10 @@ for (let i = 0; i < 1500; i++) {
 // from the argument, so without it that check is undetermined rather than raised.
 insert.run('0x' + '11'.repeat(20), '0x' + 'c'.repeat(40), DEP, '0x' + 'e'.repeat(40),
   1, '0x' + 'f'.repeat(64), NOW, 'NEW', 'DUPE', 'new', 'dupe', 400);
-db.prepare('UPDATE launches SET snipe_exemption_count = 3 WHERE token = ?').run('0x' + '11'.repeat(20));
+// exemption_source matters: a count from calldata and a count from the curve's
+// events are different quantities, and only the second is printed as a number.
+db.prepare("UPDATE launches SET snipe_exemption_count = 3, exemption_source = 'logs' WHERE token = ?")
+  .run('0x' + '11'.repeat(20));
 recordIndexAdvance(1n);
 
 const flagsFor = (over = {}) => computeFlags({
@@ -70,7 +73,10 @@ test('the creator tax carries its baseline, raised or not', () => {
 test('every raised finding carries something to measure its number against', () => {
   // A reference point is a baseline, a threshold, or a denominator. A finding
   // that states only a count leaves the reader unable to size it.
-  const REFERENCE = /index median|flag above|flag at|of [\d,]+ |of 32 |\(n=[\d,]+\)/;
+  // "1 of them the deployer" is a reference point in the strict sense: every
+  // pons launch exempts its deployer, so naming it tells the reader what the
+  // floor is and therefore how much of the count is not the floor.
+  const REFERENCE = /index median|flag above|flag at|of [\d,]+ |of them the deployer|\(n=[\d,]+\)/;
   for (const f of flagsFor().filter((x) => x.state === 'raised')) {
     // custom_pair is a categorical fact, not a measurement: there is no scale
     // for "priced in something other than ETH" to sit on.
@@ -83,8 +89,8 @@ test('the reference points are the real ones, not restatements', () => {
   const byKey = Object.fromEntries(flagsFor().map((f) => [f.key, f]));
   // 2 is the threshold deployer_rate actually tests against.
   assert.match(byKey['deployer_rate'].plain, /8 tokens in 7d · flag above 2/);
-  // 32 is the protocol's cap on pre-exempted wallets.
-  assert.match(byKey['snipe_exemptions'].plain, /3 of 32 exempt slots used/);
+  // The deployer is the floor every launch has, so the count is stated against it.
+  assert.match(byKey['snipe_exemptions'].plain, /^3 wallets tax-free at launch, 1 of them the deployer$/);
   // The collision count against the index it was found in.
   assert.match(byKey['collision'].plain, /60 of 1,50\d indexed launches/);
 });

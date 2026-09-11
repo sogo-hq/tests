@@ -11,6 +11,25 @@ import { initBot, startBot } from './bot.js';
 import { db } from './db.js';
 import { BACKFILL_DAYS, BLOCKS_PER_DAY } from './config.js';
 
+/**
+ * Medians over the measured set.
+ *
+ * Taken by ordering rather than by averaging: an exemption count is a small
+ * integer with a long tail, and a mean of 1.4 describes no launch that exists.
+ */
+function medianExemptions(hasBeyond: boolean): { all: number | null; beyond: number | null } {
+  const pick = (where: string): number | null => {
+    const rows = db.prepare(
+      `SELECT snipe_exemption_count AS c FROM launches
+        WHERE exemption_source = 'logs' AND snipe_exemption_count IS NOT NULL ${where}
+        ORDER BY c`,
+    ).all() as { c: number }[];
+    if (!rows.length) return null;
+    return rows[Math.floor((rows.length - 1) / 2)]!.c;
+  };
+  return { all: pick(''), beyond: hasBeyond ? pick('AND snipe_exemption_count > 1') : null };
+}
+
 function bar(done: number, total: number, width = 28): string {
   const pct = total > 0 ? Math.min(1, done / total) : 0;
   const filled = Math.round(pct * width);
@@ -180,7 +199,42 @@ async function main(): Promise<void> {
         console.log('\nscan outcomes:');
         for (const o of oc) console.log(`  ${String(o.outcome).padEnd(22)} ${o.n}`);
       }
-      const hist = db.prepare('SELECT snipe_exemption_count c, COUNT(*) n FROM launches WHERE snipe_exemption_count IS NOT NULL GROUP BY c ORDER BY c').all() as any[];
+      // Exemptions, counted only over rows read from the curve's own events.
+      //
+      // A count decoded from calldata omits the deployer, which the protocol
+      // exempts automatically, so mixing the two would average two different
+      // quantities. The pending figure is printed beside the answer rather than
+      // left out, because a share computed over part of the index is only worth
+      // as much as the reader knows the part to be.
+      const ex = db.prepare(
+        `SELECT COUNT(*) AS measured,
+                SUM(CASE WHEN snipe_exemption_count > 1 THEN 1 ELSE 0 END) AS beyond
+           FROM launches WHERE exemption_source = 'logs' AND snipe_exemption_count IS NOT NULL`,
+      ).get() as { measured: number; beyond: number | null };
+      const pendingEx = (db.prepare(
+        "SELECT COUNT(*) AS n FROM launches WHERE exemption_source IS NULL OR exemption_source <> 'logs'",
+      ).get() as any).n;
+
+      console.log('\nsnipe-tax exemptions (from the curve\'s own events):');
+      if (!ex.measured) {
+        console.log('  none read from events yet; the re-read is still running');
+      } else {
+        const beyond = ex.beyond ?? 0;
+        const pct = (beyond / ex.measured) * 100;
+        console.log(`  launches measured            ${ex.measured.toLocaleString()}`);
+        console.log(`  with wallets beyond the dev  ${beyond.toLocaleString()} (${pct.toFixed(1)}%)`);
+        const med = medianExemptions(beyond > 0);
+        console.log(`  median count, all launches   ${med.all ?? 'n/a'}`);
+        console.log(`  median count where beyond>0  ${med.beyond ?? 'n/a'}`);
+        console.log('  every launch exempts its deployer, so 1 is the floor, not a finding');
+      }
+      if (pendingEx) {
+        console.log(`  ${pendingEx.toLocaleString()} launches not yet re-read from events, and excluded above`);
+      }
+
+      const hist = db.prepare(
+        "SELECT snipe_exemption_count c, COUNT(*) n FROM launches WHERE exemption_source = 'logs' AND snipe_exemption_count IS NOT NULL GROUP BY c ORDER BY c",
+      ).all() as any[];
       if (hist.length) {
         console.log('\nsnipe-tax exemption counts:');
         for (const h of hist) console.log(`  ${String(h.c).padStart(3)} exemptions  ${h.n}`);
