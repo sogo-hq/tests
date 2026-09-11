@@ -60,11 +60,11 @@ export function startRecovery(): void {
   const decision = assessIndex();
 
   if (!decision.needed) {
-    console.log(`[boot] index has ${decision.decoded.toLocaleString()} decoded launches — skipping recovery`);
+    console.log(`[boot] index has ${decision.decoded.toLocaleString()} decoded launches, skipping recovery`);
     return;
   }
 
-  console.log(`[boot] ${decision.reason} — backfilling, then decoding in background`);
+  console.log(`[boot] ${decision.reason}, backfilling, then decoding in background`);
   markRecovering(true);
 
   void (async () => {
@@ -74,7 +74,7 @@ export function startRecovery(): void {
       const secs = ((Date.now() - started) / 1000).toFixed(1);
       console.log(`[boot] backfill complete: ${res.launches.toLocaleString()} launches in ${secs}s`);
       if (res.pendingDecode) {
-        console.log(`[boot] ${res.pendingDecode.toLocaleString()} launches pending decode — draining in background`);
+        console.log(`[boot] ${res.pendingDecode.toLocaleString()} launches pending decode, draining in background`);
       }
     } catch (err) {
       console.error('[boot] backfill failed:', String((err as Error)?.message ?? err).slice(0, 200));
@@ -85,7 +85,7 @@ export function startRecovery(): void {
       markRecovering(false);
       const c = indexCoverage();
       console.log(
-        `[boot] recovery finished — ${c.indexed.toLocaleString()} indexed, ${c.decoded.toLocaleString()} decoded; ` +
+        `[boot] recovery finished, ${c.indexed.toLocaleString()} indexed, ${c.decoded.toLocaleString()} decoded; ` +
         `index-derived negatives ${c.trustNegatives.collision ? 'enabled' : 'still withheld until decode catches up'}`,
       );
     }

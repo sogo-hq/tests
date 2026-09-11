@@ -444,11 +444,11 @@ test('the largest single holder is stated beside the aggregate', () => {
   // the same situation.
   assert.equal(
     conc({ concentration: { top5Share: 21, top1Share: 17, holders: 40, circulating: 1n } }),
-    'top 5 hold 21% — largest 17% · 40 holders',
+    'top 5 hold 21%, largest 17% · 40 holders',
   );
   assert.equal(
     conc({ concentration: { top5Share: 21, top1Share: 4.4, holders: 40, circulating: 1n } }),
-    'top 5 hold 21% — largest 4% · 40 holders',
+    'top 5 hold 21%, largest 4% · 40 holders',
   );
 });
 

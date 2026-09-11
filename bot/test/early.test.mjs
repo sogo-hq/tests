@@ -23,7 +23,7 @@ test('the 179s/181s boundary flips exactly once', () => {
 test('early full card: header, replacement line, no traction block', () => {
   const r = makeScan({ ageSeconds: 12, snipeExemptionCount: 8, launchBuyAmount: 10n ** 17n });
   const text = renderCardText(r);
-  assert.match(text, /launched 12s ago — too early for traction/);
+  assert.match(text, /launched 12s ago, too early for traction/);
   assert.ok(text.includes(EARLY_TRACTION_LINE), `missing the replacement line:\n${text}`);
   assert.match(text, /re-scan in 2 minutes/);
   assert.doesNotMatch(text, /^TRACTION/m);
@@ -72,7 +72,7 @@ test('early full card shows what IS fixed at creation', () => {
 test('early full card reports an undecoded creation tx as undetermined, never clean', () => {
   const r = makeScan({ ageSeconds: 9, snipeExemptionCount: null });
   const text = renderCardText(r);
-  assert.match(text, /not decoded — not confirmed clean/);
+  assert.match(text, /not decoded, not confirmed clean/);
   assert.doesNotMatch(text, /none — no wallets pre-exempted/);
 });
 
@@ -241,8 +241,8 @@ test('the early full card says nothing about traction beyond the two specified l
   // draft also appended "Traction: not yet measurable." to the summary, which
   // restated the replacement line the spec says is the only one
   assert.deepEqual(mentions, [
-    'launched 12s ago — too early for traction',
-    'traction unavailable — the snipe tax window is still open. re-scan in 2 minutes.',
+    'launched 12s ago, too early for traction',
+    'traction unavailable: the snipe tax window is still open. re-scan in 2 minutes.',
   ]);
 });
 

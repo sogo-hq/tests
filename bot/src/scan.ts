@@ -332,7 +332,7 @@ async function scanTokenInner(token: string, requestedBy?: number): Promise<Scan
   if (launch.source !== 'index') {
     console.log(
       `[scan] launch for ${reads.token} placed from ${launch.source} in ${timer.lastMs('findLaunch')}ms` +
-        `${launch.source === 'curve' ? ' — the factory knows it but its logs do not yet' : ''}`,
+        `${launch.source === 'curve' ? ', the factory knows it but its logs do not yet' : ''}`,
     );
   }
 
@@ -495,7 +495,7 @@ async function scanTokenInner(token: string, requestedBy?: number): Promise<Scan
   if (clockSuspect) {
     console.warn(
       `[scan] host clock disagrees with the chain for ${reads.token}: ` +
-      `wall age ${wallAgeSeconds}s vs block-derived ${Math.round(chainAgeSeconds)}s — using the chain`,
+      `wall age ${wallAgeSeconds}s vs block-derived ${Math.round(chainAgeSeconds)}s, using the chain`,
     );
   }
   const ageSeconds = Math.max(0, Math.round(clockSuspect ? chainAgeSeconds : wallAgeSeconds));

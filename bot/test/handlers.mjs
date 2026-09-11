@@ -987,7 +987,7 @@ await bot.handleUpdate(inline(SOL, 9500));
     assert.equal(mine.length, 1, `expected one alert, got ${mine.length}`);
     assert.equal(mine[0].chatId, 7777, 'delivered to the DM chat, never to a group');
     const [why, blank, ...card] = mine[0].text.split('\n');
-    assert.match(why, /launched .* — you watch this deployer$/);
+    assert.match(why, /launched .*, you watch this deployer$/);
     assert.equal(blank, '');
     assert.match(card[0], /^VITALS  /, 'the card follows, unchanged');
     ok(`an alert is the reason then the card: "${why}"`);

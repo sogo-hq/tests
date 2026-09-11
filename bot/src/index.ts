@@ -79,7 +79,7 @@ async function main(): Promise<void> {
         // saying they were would turn "we stopped asking" into an answer.
         console.log(
           backlog.exhausted
-            ? `Nothing left to attempt. ${backlog.exhausted.toLocaleString()} launches remain undetermined — ` +
+            ? `Nothing left to attempt. ${backlog.exhausted.toLocaleString()} launches remain undetermined: ` +
               'their creation transactions use entry points this build has no ABI for. ' +
               'Add one and run `decode retry` to attempt them again.'
             : 'Every indexed launch already has its creation transaction decoded.',
@@ -100,11 +100,11 @@ async function main(): Promise<void> {
       });
       process.stdout.write('\r' + ' '.repeat(78) + '\r');
       console.log(`Decoded ${res.decoded} launches in ${((Date.now() - t0) / 1000).toFixed(1)}s.`);
-      if (res.failed) console.log(`${res.failed} could not be decoded — recorded as undetermined, never as clean.`);
+      if (res.failed) console.log(`${res.failed} could not be decoded, recorded as undetermined, never as clean.`);
       if (res.remaining) console.log(`${res.remaining.toLocaleString()} still pending.`);
       if (res.exhausted) {
         console.log(
-          `${res.exhausted.toLocaleString()} left as undetermined after ${MAX_DECODE_ATTEMPTS_LABEL} attempts — ` +
+          `${res.exhausted.toLocaleString()} left as undetermined after ${MAX_DECODE_ATTEMPTS_LABEL} attempts, ` +
           'not retried again, and never reported as clean.',
         );
       }
@@ -126,7 +126,7 @@ async function main(): Promise<void> {
       const t0 = Date.now();
       const result = await scanToken(getAddress(addr));
       if (!result) {
-        console.error(`${addr} is not a pons v2 launch — the factory has no record of it.`);
+        console.error(`${addr} is not a pons v2 launch: the factory has no record of it.`);
         process.exit(1);
       }
       // Same split as the bot: the default card unless --full is asked for.

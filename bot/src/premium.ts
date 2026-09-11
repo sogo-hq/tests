@@ -44,14 +44,14 @@ export function vitalsToken(): Address | null {
 export function treasuryAddress(): Address {
   const raw = (process.env.TREASURY_ADDRESS ?? '').trim();
   if (!raw) {
-    throw new Error('TREASURY_ADDRESS is not set — payments have nowhere to go, and must not be burned');
+    throw new Error('TREASURY_ADDRESS is not set: payments have nowhere to go, and must not be burned');
   }
   if (!isAddress(raw.toLowerCase(), { strict: false })) {
     throw new Error(`TREASURY_ADDRESS is not an address: ${JSON.stringify(raw.slice(0, 60))}`);
   }
   const addr = getAddress(raw.toLowerCase());
   if (addr.toLowerCase() === BURN_ADDRESS.toLowerCase() || /^0x0{40}$/i.test(addr)) {
-    throw new Error('TREASURY_ADDRESS is a burn address — this feature does not burn');
+    throw new Error('TREASURY_ADDRESS is a burn address: this feature does not burn');
   }
   return addr;
 }
@@ -118,7 +118,7 @@ export async function entitlement(wallet: string): Promise<Entitlement> {
 
 /** What the holder is told. Facts and the thresholds, no upsell. */
 export function entitlementLine(e: Entitlement): string {
-  if (e.state === 'undetermined') return `could not check your holdings — ${e.reason}. try again`;
+  if (e.state === 'undetermined') return `could not check your holdings: ${e.reason}. try again`;
   if (e.state === 'premium') {
     return e.via === 'eth'
       ? `premium · ${(Number(e.wei) / 1e18).toFixed(3)} ETH held`

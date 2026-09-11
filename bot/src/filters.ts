@@ -198,10 +198,10 @@ export function filterRates(days = 7): FilterRate[] {
 export function rateLine(r: FilterRate): string {
   const def = filterDef(r.key);
   if (r.perDay === null) {
-    return `${r.key} — ${def.describe}\n  rate unknown (only ${r.n} indexed launches, need ${MIN_RATE_SAMPLES})`;
+    return `${r.key}: ${def.describe}\n  rate unknown (only ${r.n} indexed launches, need ${MIN_RATE_SAMPLES})`;
   }
   const per = r.perDay;
   const howOften =
     per >= 1 ? `~${Math.round(per)} a day` : per > 0 ? `~${(per * 7).toFixed(1)} a week` : 'not seen yet';
-  return `${r.key} — ${def.describe}\n  ${howOften}`;
+  return `${r.key}: ${def.describe}\n  ${howOften}`;
 }

@@ -123,9 +123,9 @@ export async function printVerify(): Promise<boolean> {
   }
   const warned = checks.filter((c) => !c.ok && c.advisory).length;
   if (ok) {
-    console.log(`\nAll scan-critical checks passed${warned ? ` (${warned} advisory warning${warned === 1 ? '' : 's'} — explorer only, no hot path depends on it)` : ''}.`);
+    console.log(`\nAll scan-critical checks passed${warned ? ` (${warned} advisory warning${warned === 1 ? '' : 's'}, explorer only, no hot path depends on it)` : ''}.`);
   } else {
-    console.log('\nSOME CHECKS FAILED — do not trust scans until resolved.');
+    console.log('\nSOME CHECKS FAILED. do not trust scans until resolved.');
   }
   return ok;
 }

@@ -100,8 +100,8 @@ export function deployerActivityLine(a: DeployerActivity | null, everRead = true
    */
   if (!a) {
     return everRead
-      ? 'deployer: transfers could not be read — undetermined'
-      : 'deployer: not read yet — the holder walk has not run for this token';
+      ? 'deployer: transfers could not be read, undetermined'
+      : 'deployer: not read yet, the holder walk has not run for this token';
   }
   if (a.unchanged) {
     return `deployer: holds ${a.heldPct.toFixed(1)}% of supply, unchanged since launch`;

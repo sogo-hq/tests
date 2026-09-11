@@ -139,8 +139,8 @@ test('the why-line names the address and the reason, and claims nothing else', (
     }));
   `);
   const r = JSON.parse(out);
-  assert.match(r.dep, /launched \$NEW — you watch this deployer$/);
-  assert.match(r.wal, /pre-exempted on \$NEW — you watch this wallet$/);
+  assert.match(r.dep, /launched \$NEW, you watch this deployer$/);
+  assert.match(r.wal, /pre-exempted on \$NEW, you watch this wallet$/);
   const VERDICT = /\b(good|bad|safe|risky|opportunity|smart|alpha|gem|buy|sell)\b/i;
   for (const line of [r.dep, r.wal]) assert.ok(!VERDICT.test(line), `framing in "${line}"`);
 });

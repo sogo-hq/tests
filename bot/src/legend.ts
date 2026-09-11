@@ -11,10 +11,10 @@ import { db } from './db.js';
  * Five lines. It appears once per user and on request, never repeatedly.
  */
 export const LEGEND = [
-  '\u{1F6A9} a finding — something the chain shows, stated as a fact',
-  '◌ undetermined — the check could not be answered from the data',
-  'no marker — that check found nothing',
-  'index median — the same measure across every launch indexed, with its n',
+  '\u{1F6A9} a finding: something the chain shows, stated as a fact',
+  '◌ undetermined: the check could not be answered from the data',
+  'no marker: that check found nothing',
+  'index median: the same measure across every launch indexed, with its n',
   'no finding ≠ clean. vitals reports; you decide.',
 ].join('\n');
 

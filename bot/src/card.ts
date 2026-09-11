@@ -106,7 +106,7 @@ function earlySeconds(r: ScanResult): string {
 }
 
 export const EARLY_TRACTION_LINE =
-  'traction unavailable — the snipe tax window is still open. re-scan in 2 minutes.';
+  'traction unavailable: the snipe tax window is still open. re-scan in 2 minutes.';
 
 /**
  * Was the creation transaction decoded at all?
@@ -170,9 +170,9 @@ function renderEarlyCard(r: ScanResult): string {
   const name = k.name ? esc(clamp(k.name, MAX_NAME)) : 'unknown';
 
   const L: string[] = [];
-  L.push(`<b>${sym}</b> — ${name}`);
+  L.push(`<b>${sym}</b>: ${name}`);
   L.push(`<code>${k.token}</code>`);
-  L.push(`<b>launched ${earlySeconds(r)} ago — too early for traction</b>`);
+  L.push(`<b>launched ${earlySeconds(r)} ago, too early for traction</b>`);
   L.push(`${esc(phaseLabel(k.phaseName))} · pair ${esc(quote)}`);
   L.push('');
   L.push(EARLY_TRACTION_LINE);
@@ -189,10 +189,10 @@ function renderEarlyCard(r: ScanResult): string {
   const n = r.creation.snipeExemptionCount;
   L.push(
     n === null
-      ? `  ${MARK_GLYPH.undetermined} snipe-tax exemptions: creation transaction not decoded — not confirmed clean`
+      ? `  ${MARK_GLYPH.undetermined} snipe-tax exemptions: creation transaction not decoded, not confirmed clean`
       : n > 0
         ? `  🚩 snipe-tax exemptions: ${n} wallet${n === 1 ? '' : 's'} pre-exempted from the opening tax`
-        : '  · snipe-tax exemptions: none — no wallets pre-exempted at creation',
+        : '  · snipe-tax exemptions: none, no wallets pre-exempted at creation',
   );
   // launchBuyAmount is null both when there was genuinely no buy and when the
   // creation transaction could not be decoded at all. Those must not render
@@ -202,7 +202,7 @@ function renderEarlyCard(r: ScanResult): string {
     hasCreatorLaunchBuy(r)
       ? `  🚩 creator opening buy: ${fmtUnits(r.creation.launchBuyAmount!, k.pairDecimals)} ${esc(quote)} bought in the launch transaction`
       : creationUndecoded(r)
-        ? `  ${MARK_GLYPH.undetermined} creator opening buy: unknown — the creation transaction could not be decoded`
+        ? `  ${MARK_GLYPH.undetermined} creator opening buy: unknown, the creation transaction could not be decoded`
         : '  · creator opening buy: none in the launch transaction',
   );
   L.push('');
@@ -230,7 +230,7 @@ function renderEarlyCard(r: ScanResult): string {
 
   // Worst flag only. The spec replaces the traction block with a single line and
   // it is already above; a second traction statement here just restates it.
-  const worst = f.worst ? `${f.worst.label.toLowerCase()} — ${f.worst.detail}` : 'no flags raised';
+  const worst = f.worst ? `${f.worst.label.toLowerCase()}, ${f.worst.detail}` : 'no flags raised';
   L.push(`<b>Worst flag:</b> ${esc(worst)}.`);
   L.push('');
   L.push(`<a href="${EXPLORER_URL}/address/${k.token}">token</a> · <a href="${EXPLORER_URL}/address/${k.curve}">curve</a> · <a href="${EXPLORER_URL}/address/${k.deployer}">deployer</a>`);
@@ -267,13 +267,13 @@ export function renderCard(r: ScanResult): string {
   const name = k.name ? esc(clamp(k.name, MAX_NAME)) : 'unknown';
 
   const L: string[] = [];
-  L.push(`<b>${sym}</b> — ${name}`);
+  L.push(`<b>${sym}</b>: ${name}`);
   L.push(`<code>${k.token}</code>`);
   L.push(`launched ${age(r.ageSeconds)} ago · ${esc(phaseLabel(k.phaseName))} · pair ${esc(quote)}`);
   L.push('');
 
   const windowNote = t.windowTruncated
-    ? ` (token is ${age(r.ageSeconds)} old — window truncated to ${num(t.windowMinutes, 0)} min)`
+    ? ` (token is ${age(r.ageSeconds)} old, window truncated to ${num(t.windowMinutes, 0)} min)`
     : '';
   L.push(`<b>TRACTION  ${t.label}</b>${windowNote}`);
   const w = t.window;
@@ -296,7 +296,7 @@ export function renderCard(r: ScanResult): string {
   L.push(
     b.median === null
       ? `  buyer benchmark: not enough data yet (n=${b.n}, need ${MIN_BENCHMARK_SAMPLES})`
-      : `  buyer benchmark: ${b.median} — median over the same first ${windowLabel(b.windowMinutes)}, across ${b.n.toLocaleString()} indexed launches that reached it`,
+      : `  buyer benchmark: ${b.median}, median over the same first ${windowLabel(b.windowMinutes)}, across ${b.n.toLocaleString()} indexed launches that reached it`,
   );
   L.push(`  age band: ${esc(b.bucket.label)}${b.measuredAtAge ? '' : ` (buyers counted over the first ${windowLabel(b.windowMinutes)}, not the full age)`}`);
   L.push(`  buyer growth: ${w.uniqueBuyers10m} at +10 min → ${w.uniqueBuyers30m} at +${num(t.windowMinutes, 0)} min${w.buyerGrowthRatio !== null ? ` (${ratioStr(w.buyerGrowthRatio)}x)` : ''}`);
@@ -358,13 +358,13 @@ export function renderCard(r: ScanResult): string {
   L.push('');
 
   const worst = f.worst
-    ? `${f.worst.label.toLowerCase()} — ${f.worst.detail}`
+    ? `${f.worst.label.toLowerCase()}, ${f.worst.detail}`
     : 'no flags raised';
   L.push(
     `<b>Strongest signal:</b> ${esc(
       t.window
         ? strongestSignal(t, t.window, quote, k.pairDecimals)
-        : 'undetermined — the opening window has not been indexed',
+        : 'undetermined, the opening window has not been indexed',
     )}. ` +
       `<b>Worst flag:</b> ${esc(worst)}.`,
   );
@@ -664,7 +664,7 @@ export function buyerLine(r: ScanResult): string {
   // count there is nothing for the benchmark to compare against either, so the
   // reference point goes with it rather than sitting beside a blank.
   const win = windowLabel(r.traction.windowMinutes);
-  if (!w) return `buyers undetermined \u2014 first ${win} not indexed`;
+  if (!w) return `buyers undetermined, first ${win} not indexed`;
   const buyers = w.uniqueBuyers30m;
   // The count carries its own window. "13 buyers" is not a fact anyone can use
   // without knowing 13 buyers IN WHAT.
@@ -792,7 +792,7 @@ export function concentrationLine(r: ScanResult): string | null {
   // The aggregate hides the shape: one wallet at 17% and five at 4% both read
   // as "top 5 hold 21%", and they are not the same situation. The largest
   // single share is stated beside it; the full breakdown stays in /full.
-  const largest = c.top1Share > 0 ? ` \u2014 largest ${c.top1Share.toFixed(0)}%` : '';
+  const largest = c.top1Share > 0 ? `, largest ${c.top1Share.toFixed(0)}%` : '';
   return `top 5 hold ${c.top5Share.toFixed(0)}%${largest} \u00b7 ${c.holders} holders`;
 }
 
@@ -1063,7 +1063,7 @@ export function notALaunchLines(token: string): string[] {
   if (!d) return [NOT_A_PONS_LAUNCH];
   const ticker = d.latestSymbol ? `$${plainField(d.latestSymbol, MAX_TICKER).toUpperCase()}` : 'its latest launch';
   return [
-    `that is a deployer, not a token \u2014 ${d.launches.toLocaleString()} launch${d.launches === 1 ? '' : 'es'} in the index`,
+    `that is a deployer, not a token. ${d.launches.toLocaleString()} launch${d.launches === 1 ? '' : 'es'} in the index`,
     '',
     `most recent: ${ticker}`,
     d.latestToken,

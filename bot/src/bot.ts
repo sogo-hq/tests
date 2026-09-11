@@ -123,44 +123,44 @@ const EXAMPLE = '0x147Bbaa458Ab7Cd11E1E478B87f08FE5A42A9E67';
  * The previous version was the last HTML message left in the bot.
  */
 const HELP = [
-  'VITALS — pons v2 launch scanner, Robinhood Chain',
+  'VITALS: pons v2 launch scanner, Robinhood Chain',
   '',
   'Send /scan <token address> for a card of what the chain shows.',
   '',
   'Works three ways, same card on each:',
-  '  • DM — /scan <address>, or just paste an address',
-  '  • Groups — /scan <address>',
-  '  • Inline — type @BOTNAME <address> in any chat',
+  '  • DM: /scan <address>, or just paste an address',
+  '  • Groups: /scan <address>',
+  '  • Inline: type @BOTNAME <address> in any chat',
   '',
   '/full <address> adds the technical detail behind every line.',
   '/stats shows what has been indexed.',
   '',
   'Launch readiness:',
-  '  • /ready in the group — the totals, and only the totals',
-  '  • /tge — the same, with the countdown once a time is set',
+  '  • /ready in the group: the totals, and only the totals',
+  '  • /tge: the same, with the countdown once a time is set',
   '  • register in DM only. a wallet posted in the group is deleted unread,',
   '    and no wallet, label or user id is ever shown in a group message.',
   '',
-  'Alerts, delivered here and only here — never into a group:',
-  '  • /watch deployer <address> — when that address launches again',
-  '  • /watch wallet <address> — when that address is pre-exempted on a launch',
-  '  • /watch filter <name> — when a new launch has a shape you picked',
+  'Alerts, delivered here and only here, never into a group:',
+  '  • /watch deployer <address>: when that address launches again',
+  '  • /watch wallet <address>: when that address is pre-exempted on a launch',
+  '  • /watch filter <name>: when a new launch has a shape you picked',
   '  • /filters lists the filters and how often each fires',
   '  • /watching lists your subscriptions, /unwatch <address|filter> removes one',
   '',
   'one paid line at the bottom funds this. it never touches what a card says,',
   'and it always points at a scan. /sponsor for the numbers.',
   '',
-  'The card leads with concerns — the things fixed at creation, which are',
-  'readable the second a token exists — and puts the counts underneath. There',
+  'The card leads with concerns (the things fixed at creation, which are',
+  'readable the second a token exists) and puts the counts underneath. There',
   'is no grade and no score. The absence of a raised flag is not an all-clear:',
   'the card says how many checks ran and how many could not be determined.',
   '',
   DISCLAIMER,
   '',
   'checkvitals.xyz',
-  '@vitalsofficial — every change lands here first',
-  '@siriusthemaster — dev, tell me what\'s broken',
+  '@vitalsofficial: every change lands here first',
+  '@siriusthemaster: dev, tell me what\'s broken',
 ].join('\n');
 
 /**
@@ -210,7 +210,7 @@ async function handleScan(ctx: Context, raw: string, full = false): Promise<void
       // One short line, attached to whoever asked, gone in twenty seconds.
       // The full usage block posted here fifteen times in one session, which is
       // how a bot gets removed from a group.
-      await replyEphemeral(ctx, lead ?? `send a pons v2 token address — /${cmd} 0x…`, replyOpts);
+      await replyEphemeral(ctx, lead ?? `send a pons v2 token address: /${cmd} 0x…`, replyOpts);
     } else {
       // A DM is nobody else's timeline, so it keeps the example in full.
       await ctx.reply(
@@ -467,7 +467,7 @@ async function handleInline(ctx: Context): Promise<void> {
         'Paste a pons token address',
         'VITALS scans pons v2 launches on Robinhood Chain',
         [
-          'VITALS — pons v2 launch scanner',
+          'VITALS: pons v2 launch scanner',
           `Paste a token address after @${usernameOf(ctx) ?? 'the bot'} to scan it.`,
           footerLine(usernameOf(ctx)),
         ].join('\n'),
@@ -493,7 +493,7 @@ async function handleInline(ctx: Context): Promise<void> {
         isSol ? 'Solana address' : isTx ? 'That is a transaction hash' : 'Not a token address',
         isSol ? 'this bot covers pons v2 on Robinhood Chain' : 'Expected 0x followed by 40 hex characters',
         [
-          'VITALS — pons v2 launch scanner',
+          'VITALS: pons v2 launch scanner',
           `${lead} Expected 0x followed by 40 hex characters, e.g.`,
           EXAMPLE,
           footerLine(usernameOf(ctx)),
@@ -527,13 +527,13 @@ async function handleInline(ctx: Context): Promise<void> {
       // serving "launched 12s ago" for a full minute and defeat the short
       // server-side TTL entirely.
       await answerShared(
-        [article(token, `VITALS — ${label}`, inlineDescription(outcome.meta), outcome.defaultCard)],
+        [article(token, `VITALS: ${label}`, inlineDescription(outcome.meta), outcome.defaultCard)],
         inlineCacheSeconds(outcome.meta),
       );
       return;
     case 'not_found':
       await answerShared([
-        article(`nf:${token}`, `VITALS — ${short}`, 'not a pons v2 launch on this chain', outcome.defaultCard),
+        article(`nf:${token}`, `VITALS: ${short}`, 'not a pons v2 launch on this chain', outcome.defaultCard),
       ]);
       return;
     case 'rate_limited':
@@ -902,7 +902,7 @@ export function createBot(token = TELEGRAM_BOT_TOKEN): Bot {
       await replyOrPrompt(
         ctx,
         'watch a deployer, a wallet, or a filter:\n/watch deployer 0x…\n/watch wallet 0x…\n' +
-          '/watch filter <name> — /filters lists them',
+          '/watch filter <name>. /filters lists them',
       );
       return;
     }
@@ -915,7 +915,7 @@ export function createBot(token = TELEGRAM_BOT_TOKEN): Bot {
     // created without somewhere private to deliver it.
     const dm = dmChatFor(userId);
     if (dm === null) {
-      await replyEphemeralOnce(ctx, userId, 'message me directly first — alerts only ever go to a DM, never to a group');
+      await replyEphemeralOnce(ctx, userId, 'message me directly first. alerts only ever go to a DM, never to a group');
       return;
     }
 
@@ -944,7 +944,7 @@ export function createBot(token = TELEGRAM_BOT_TOKEN): Bot {
       const def = filterDef(name);
       const rate = filterRates().find((r) => r.key === name);
       const lines = [
-        `watching filter ${name} — ${def.describe}.`,
+        `watching filter ${name}: ${def.describe}.`,
         `${countWatches(userId)} of ${MAX_WATCHES}. alerts arrive here.`,
       ];
       // Said before the feed starts, not discovered from it: a filter matching
@@ -953,7 +953,7 @@ export function createBot(token = TELEGRAM_BOT_TOKEN): Bot {
       if (def.loud) {
         lines.push(
           rate?.perDay != null
-            ? `heads up: this one fires on most launches — about ${Math.round(rate.perDay)} a day.`
+            ? `heads up: this one fires on most launches, about ${Math.round(rate.perDay)} a day.`
             : 'heads up: this one fires on most launches.',
         );
       }
@@ -963,7 +963,7 @@ export function createBot(token = TELEGRAM_BOT_TOKEN): Bot {
     }
 
     if (!address) {
-      await replyOrPrompt(ctx, `send an address to watch — /watch ${kind} 0x…`);
+      await replyOrPrompt(ctx, `send an address to watch: /watch ${kind} 0x…`);
       return;
     }
 
@@ -977,7 +977,7 @@ export function createBot(token = TELEGRAM_BOT_TOKEN): Bot {
       return;
     }
     await ctx.reply(
-      `watching ${kind} ${address.slice(0, 6)}…${address.slice(-4)} — ` +
+      `watching ${kind} ${address.slice(0, 6)}…${address.slice(-4)}, ` +
         `${countWatches(userId)} of ${MAX_WATCHES}. alerts arrive here.`,
     );
   });
@@ -989,7 +989,7 @@ export function createBot(token = TELEGRAM_BOT_TOKEN): Bot {
     const filters = listFilterWatches(userId);
     if (!list.length && !filters.length) {
       await ctx.reply(
-        'not watching anything yet — /watch deployer 0x…, /watch wallet 0x…, or /watch filter <name> (/filters)',
+        'not watching anything yet. /watch deployer 0x…, /watch wallet 0x…, or /watch filter <name> (/filters)',
       );
       return;
     }
@@ -1013,7 +1013,7 @@ export function createBot(token = TELEGRAM_BOT_TOKEN): Bot {
     }
     const address = normaliseAddress(raw);
     if (!address) {
-      await replyOrPrompt(ctx, 'send the address or filter name to stop watching — /unwatch 0x… or /unwatch <filter>');
+      await replyOrPrompt(ctx, 'send the address or filter name to stop watching: /unwatch 0x… or /unwatch <filter>');
       return;
     }
     const gone = removeWatch(userId, address);
@@ -1046,7 +1046,7 @@ export function createBot(token = TELEGRAM_BOT_TOKEN): Bot {
       }
       const dm = dmChatFor(userId);
       if (dm !== null) {
-        await ctx.api.sendMessage(dm, 'register in DM, never in the group — send /ready 0x… here');
+        await ctx.api.sendMessage(dm, 'register in DM, never in the group. send /ready 0x… here');
       }
       return;
     }
@@ -1110,7 +1110,7 @@ export function createBot(token = TELEGRAM_BOT_TOKEN): Bot {
     }
 
     if (!selfRegistrationOpen()) {
-      await ctx.reply('registration is handled by the team right now — ask an admin to add you');
+      await ctx.reply('registration is handled by the team right now. ask an admin to add you');
       return;
     }
 
@@ -1119,9 +1119,9 @@ export function createBot(token = TELEGRAM_BOT_TOKEN): Bot {
       await ctx.reply(
         res.reason === 'malformed' ? 'that is not an address'
         : res.reason === 'contract' ? 'that is a contract, not a wallet'
-        : res.reason === 'cooldown' ? `one registration per ${Math.round(REGISTER_COOLDOWN_MS / 60_000)} min — try again shortly`
+        : res.reason === 'cooldown' ? `one registration per ${Math.round(REGISTER_COOLDOWN_MS / 60_000)} min. try again shortly`
         : res.reason === 'closed' ? 'registration is closed'
-        : `not yet — ${(Number(res.balanceWei) / 1e18).toFixed(3)} ETH on Robinhood Chain, minimum ${READY_MIN_ETH}. ` +
+        : `not yet: ${(Number(res.balanceWei) / 1e18).toFixed(3)} ETH on Robinhood Chain, minimum ${READY_MIN_ETH}. ` +
           'fastest: Maestro → /relay → Robinhood Chain, then /ready again.',
       );
       return;
@@ -1254,7 +1254,7 @@ export function createBot(token = TELEGRAM_BOT_TOKEN): Bot {
     const rates = filterRates();
     await ctx.reply(
       [
-        'filters — subscribe with /watch filter <name>',
+        'filters: subscribe with /watch filter <name>',
         '',
         ...rates.map((r) => rateLine(r)),
         '',
@@ -1355,9 +1355,9 @@ export async function deliverAlerts(tokens: string[]): Promise<number> {
  * day should not sit silently among numbers that have.
  */
 export function indexStatusLine(h: IndexHealth): string {
-  if (h.behindSeconds === null) return 'index has never advanced — nothing below is current';
+  if (h.behindSeconds === null) return 'index has never advanced, nothing below is current';
   if (h.stalled) {
-    return `index stalled ${agoWords(h.behindSeconds)} ago — index-derived checks are withheld`;
+    return `index stalled ${agoWords(h.behindSeconds)} ago, index-derived checks are withheld`;
   }
   return `index current, last advanced ${agoWords(h.behindSeconds)} ago`;
 }
@@ -1417,7 +1417,7 @@ export function sponsorText(now = Math.floor(Date.now() / 1000)): string {
       : [];
 
   return [
-    'VITALS — sponsorship',
+    'VITALS: sponsorship',
     '',
     ...short,
     `scans, last 30d   ${scans30.toLocaleString()}`,
@@ -1430,7 +1430,7 @@ export function sponsorText(now = Math.floor(Date.now() / 1000)): string {
     ...series,
     '',
     'one line, second from the bottom of every card. it points at a scan,',
-    'never at a buy, and it is identical on every card — a sponsor cannot',
+    'never at a buy, and it is identical on every card, a sponsor cannot',
     'buy a different card, or a different reading of one.',
     '',
     'contact @siriusthemaster',
@@ -1450,7 +1450,7 @@ export function statsText(): string {
   const cov = indexCoverage();
   const health = indexHealth();
   return [
-    ...(cov.recovering ? ['index rebuilding after restart — counts below are incomplete'] : []),
+    ...(cov.recovering ? ['index rebuilding after restart, counts below are incomplete'] : []),
     // First line, above the counts, because it is the one that decides whether
     // any of them mean anything. The index failed for a day without this, and
     // every count below stayed confidently wrong the whole time.
@@ -1490,18 +1490,18 @@ export async function startBot(): Promise<void> {
   // best the bot can do is report what it actually has and say how to fix it.
   if (me.can_read_all_group_messages) {
     console.warn(
-      '[bot] WARNING: privacy mode is OFF — this bot can read every group message.\n' +
+      '[bot] WARNING: privacy mode is OFF. this bot can read every group message.\n' +
       '[bot]          Turn it on: BotFather -> /setprivacy -> Enable.\n' +
       '[bot]          The bot never acts on unaddressed group messages regardless,\n' +
       '[bot]          but with privacy off it still receives them.',
     );
   } else {
-    console.log('[bot] privacy mode ON — only sees messages addressed to it');
+    console.log('[bot] privacy mode ON, only sees messages addressed to it');
   }
   if (me.supports_inline_queries) {
     console.log('[bot] inline mode enabled');
   } else {
-    console.warn('[bot] WARNING: inline mode is disabled — BotFather -> /setinline to enable');
+    console.warn('[bot] WARNING: inline mode is disabled. BotFather -> /setinline to enable');
   }
 
   startCacheReporter();

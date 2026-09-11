@@ -427,7 +427,7 @@ export function startWindowLoop(intervalMs = 15_000, batch = BATCH): NodeJS.Time
           `[windows] ${plural(pass.indexed, 'window')} read (${pass.exempt} exempt, ${pass.sample} sample), ` +
             `${pass.trades.toLocaleString()} trades, ${plural(pass.concentration, 'holder reading')}` +
             `${pass.failed ? `, ${pass.failed} unreadable` : ''}` +
-            `${pass.rateLimited ? ', paused on a rate limit' : ''} — ` +
+            `${pass.rateLimited ? ', paused on a rate limit' : ''}, ` +
             // "remaining" only means the exempt population, which is read to
             // completion. The rest is a target, not a queue: the sample stops
             // when the buckets and check 09 are satisfied, so the unindexed

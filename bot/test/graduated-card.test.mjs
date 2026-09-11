@@ -70,6 +70,6 @@ test('a walk that never ran is not a walk that failed', () => {
 
   const walked = graduated();
   walked.holderWalkComplete = true;
-  assert.match(renderCardText(walked), /transfers could not be read — undetermined/,
+  assert.match(renderCardText(walked), /transfers could not be read, undetermined/,
     'once the walk HAS run, an empty result is genuinely undetermined');
 });

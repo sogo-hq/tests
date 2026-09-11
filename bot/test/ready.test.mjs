@@ -548,7 +548,7 @@ test('the below-minimum reply says the figure, the minimum, and the way out', as
   const { bot, msg, drain } = harness();
   await bot.handleUpdate(msg('private', `/ready ${WALLET}`, 5010, 5010));
   const text = drain().find((x) => x.method === 'sendMessage').payload.text;
-  assert.match(text, /not yet — 0\.021 ETH on Robinhood Chain, minimum 0\.05/);
+  assert.match(text, /not yet: 0\.021 ETH on Robinhood Chain, minimum 0\.05/);
   assert.match(text, /Maestro → \/relay → Robinhood Chain, then \/ready again/);
 });
 

@@ -433,7 +433,7 @@ export function startIndexLoop(intervalMs = 3_000, onNewLaunches?: NewLaunchHand
       if (before.fatal) {
         console.error(
           `[index] RECOVERED after ${before.consecutiveFailures}+ consecutive failures` +
-            `${before.behindSeconds === null ? '' : ` — index was ${agoWords(before.behindSeconds)} behind`}`,
+            `${before.behindSeconds === null ? '' : `, index was ${agoWords(before.behindSeconds)} behind`}`,
         );
       }
       recordIndexAdvance(BigInt(res.toBlock));

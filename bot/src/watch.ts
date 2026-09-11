@@ -160,8 +160,8 @@ export function whyLine(match: Match, ticker: string): string {
   if (match.kind === 'filter') return `matches your ${match.filter} filter`;
   const short = `${match.address.slice(0, 6)}…${match.address.slice(-4)}`;
   return match.kind === 'deployer'
-    ? `${short} launched ${ticker} — you watch this deployer`
-    : `${short} was pre-exempted on ${ticker} — you watch this wallet`;
+    ? `${short} launched ${ticker}, you watch this deployer`
+    : `${short} was pre-exempted on ${ticker}, you watch this wallet`;
 }
 
 // ---------------------------------------------------------------- filters

@@ -104,9 +104,9 @@ export function computeFlags(opts: {
       key: 'snipe_exemptions',
       label: 'Snipe-tax exemptions',
       state: 'unknown',
-      detail: 'creation transaction could not be decoded — not confirmed clean',
-      compactDetail: 'creation tx not decoded — exemptions unconfirmed',
-      plain: "couldn't read the launch — tax-free wallets unknown",
+      detail: 'creation transaction could not be decoded, not confirmed clean',
+      compactDetail: 'creation tx not decoded, exemptions unconfirmed',
+      plain: "couldn't read the launch, tax-free wallets unknown",
       severity: 60,
     });
   } else if (exCount > 0) {
@@ -123,7 +123,7 @@ export function computeFlags(opts: {
         (viaBuy ? ' + creator buy same tx' : ''),
       // 32 is the protocol's cap on pre-exempted wallets, so it is the
       // denominator a reader needs to size the count against.
-      plain: `${exCount} of 32 exempt slots used \u2014 tax-free at launch`,
+      plain: `${exCount} of 32 exempt slots used, tax-free at launch`,
       severity: 100 + exCount,
     });
   } else {
@@ -131,7 +131,7 @@ export function computeFlags(opts: {
       key: 'snipe_exemptions',
       label: 'Snipe-tax exemptions',
       state: 'clean',
-      detail: 'none — no wallets pre-exempted at creation',
+      detail: 'none, no wallets pre-exempted at creation',
       compactDetail: 'no pre-exempted wallets',
       plain: 'nobody got in tax-free at launch',
       severity: 0,
@@ -250,7 +250,7 @@ export function computeFlags(opts: {
       detail:
         priorPeaks.length === 0
           ? 'no prior launches with recorded outcomes yet'
-          : `only ${priorPeaks.length} prior launch with outcome data — too few to judge`,
+          : `only ${priorPeaks.length} prior launch with outcome data, too few to judge`,
       compactDetail: 'no prior outcomes for this deployer yet',
       plain: "no history yet on this deployer's past tokens",
       severity: 5,
@@ -296,7 +296,7 @@ export function computeFlags(opts: {
       detail:
         withData.length === 0
           ? 'no prior launches rechecked at +24h yet'
-          : `only ${withData.length} prior with +24h data — too few to judge`,
+          : `only ${withData.length} prior with +24h data, too few to judge`,
       compactDetail: 'no +24h history for this deployer yet',
       plain: "no 24h history on this deployer's past tokens",
       severity: 5,
@@ -401,10 +401,10 @@ export function computeFlags(opts: {
     label: 'Ticker vs pair asset',
     state: impersonatesPair ? 'raised' : 'clean',
     detail: impersonatesPair
-      ? `ticker ${clamp(opts.symbol ?? '?', MAX_TICKER)} is the same as the pair asset ${clamp(opts.pairSymbol ?? '?', MAX_TICKER)} — different contracts, identical ticker`
+      ? `ticker ${clamp(opts.symbol ?? '?', MAX_TICKER)} is the same as the pair asset ${clamp(opts.pairSymbol ?? '?', MAX_TICKER)}: different contracts, identical ticker`
       : 'ticker differs from the pair asset',
     compactDetail: impersonatesPair
-      ? `ticker matches its pair asset ${clamp(opts.pairSymbol ?? '?', MAX_TICKER)} — different contract`
+      ? `ticker matches its pair asset ${clamp(opts.pairSymbol ?? '?', MAX_TICKER)}: different contract`
       : 'ticker differs from the pair asset',
     plain: impersonatesPair
       ? 'same ticker as the asset it trades against'
@@ -422,13 +422,13 @@ export function computeFlags(opts: {
     label: 'Pair asset',
     state: custom ? 'raised' : 'clean',
     detail: custom
-      ? `custom pair ${clamp(opts.pairSymbol ?? opts.pairToken, MAX_TICKER)} — the launch inherits that asset's risk`
+      ? `custom pair ${clamp(opts.pairSymbol ?? opts.pairToken, MAX_TICKER)}: the launch inherits that asset's risk`
       : 'native ETH pair',
     compactDetail: custom
-      ? `custom pair ${clamp(opts.pairSymbol ?? 'token', MAX_TICKER)} — inherits that asset's risk`
+      ? `custom pair ${clamp(opts.pairSymbol ?? 'token', MAX_TICKER)}: inherits that asset's risk`
       : 'native ETH pair',
     plain: custom
-      ? `priced in ${clamp(opts.pairSymbol ?? 'a token', 12)}, not ETH — inherits its risk`
+      ? `priced in ${clamp(opts.pairSymbol ?? 'a token', 12)}, not ETH. inherits its risk`
       : 'priced in ETH',
     severity: custom ? 35 : 0,
   });
@@ -470,8 +470,8 @@ export function computeFlags(opts: {
       key: 'holder_concentration',
       label: 'Holder concentration',
       state: 'unknown',
-      detail: `${conc.holders} holder${conc.holders === 1 ? '' : 's'} — too few for a top-5 share to mean anything (it is 100% by arithmetic below ${MIN_HOLDERS_FOR_SHARE})`,
-      compactDetail: `${conc.holders} holders — too few to measure concentration`,
+      detail: `${conc.holders} holder${conc.holders === 1 ? '' : 's'}, too few for a top-5 share to mean anything (it is 100% by arithmetic below ${MIN_HOLDERS_FOR_SHARE})`,
+      compactDetail: `${conc.holders} holders, too few to measure concentration`,
       plain: `only ${conc.holders} holder${conc.holders === 1 ? '' : 's'} so far`,
       severity: 2,
     });
@@ -483,9 +483,9 @@ export function computeFlags(opts: {
       key: 'holder_concentration',
       label: 'Holder concentration',
       state: 'unknown',
-      detail: `top 5 hold ${shareStr} of circulating, largest single wallet ${conc.top1Share.toFixed(1)}% (${conc.holders} holders, ${arithmeticFloor(conc.holders).toFixed(1)}% is the least ${conc.holders} wallets can hold) — no threshold yet (n=${n}, need ${MIN_CONCENTRATION_SAMPLES})`,
+      detail: `top 5 hold ${shareStr} of circulating, largest single wallet ${conc.top1Share.toFixed(1)}% (${conc.holders} holders, ${arithmeticFloor(conc.holders).toFixed(1)}% is the least ${conc.holders} wallets can hold), no threshold yet (n=${n}, need ${MIN_CONCENTRATION_SAMPLES})`,
       compactDetail: `top 5 hold ${shareStr}, no threshold yet (n=${n})`,
-      plain: `top 5 hold ${shareStr}${conc.top1Share > 0 ? ` \u2014 largest ${conc.top1Share.toFixed(0)}%` : ''} (no reference yet)`,
+      plain: `top 5 hold ${shareStr}${conc.top1Share > 0 ? `, largest ${conc.top1Share.toFixed(0)}%` : ''} (no reference yet)`,
       severity: 3,
     });
   } else {
@@ -502,15 +502,15 @@ export function computeFlags(opts: {
       key: 'holder_concentration',
       label: 'Holder concentration',
       state: over ? 'raised' : 'clean',
-      detail: `top 5 hold ${shareStr} of circulating, largest single wallet ${conc.top1Share.toFixed(1)}% (${conc.holders} holders) — ${audit}`,
+      detail: `top 5 hold ${shareStr} of circulating, largest single wallet ${conc.top1Share.toFixed(1)}% (${conc.holders} holders), ${audit}`,
       compactDetail: over
-        ? `top 5 hold ${shareStr}${conc.top1Share > 0 ? ` \u2014 largest ${conc.top1Share.toFixed(0)}%` : ''} (over ${thr.thresholdShare.toFixed(1)}%)`
-        : `top 5 hold ${shareStr}${conc.top1Share > 0 ? ` \u2014 largest ${conc.top1Share.toFixed(0)}%` : ''}`,
+        ? `top 5 hold ${shareStr}${conc.top1Share > 0 ? `, largest ${conc.top1Share.toFixed(0)}%` : ''} (over ${thr.thresholdShare.toFixed(1)}%)`
+        : `top 5 hold ${shareStr}${conc.top1Share > 0 ? `, largest ${conc.top1Share.toFixed(0)}%` : ''}`,
       // Rounded as the card rounds, and carrying the holder count, because when
       // this is raised it is the only place the reader sees either.
       plain: over
-        ? `top 5 hold ${conc.top5Share.toFixed(0)}% of supply${conc.top1Share > 0 ? ` \u2014 largest ${conc.top1Share.toFixed(0)}%` : ''} \u00b7 ${conc.holders} holders`
-        : `top 5 hold ${conc.top5Share.toFixed(0)}%${conc.top1Share > 0 ? ` \u2014 largest ${conc.top1Share.toFixed(0)}%` : ''}`,
+        ? `top 5 hold ${conc.top5Share.toFixed(0)}% of supply${conc.top1Share > 0 ? `, largest ${conc.top1Share.toFixed(0)}%` : ''} \u00b7 ${conc.holders} holders`
+        : `top 5 hold ${conc.top5Share.toFixed(0)}%${conc.top1Share > 0 ? `, largest ${conc.top1Share.toFixed(0)}%` : ''}`,
       severity: over ? 60 : 0,
     });
   }
@@ -529,7 +529,7 @@ export function computeFlags(opts: {
     buyback: {
       enabled: opts.buybackEnabled,
       detail: opts.buybackEnabled
-        ? 'buyback enabled — creator locked into a 5-year linear vest'
+        ? 'buyback enabled, creator locked into a 5-year linear vest'
         : 'buyback not enabled',
       plain: opts.buybackEnabled
         ? 'creator locked fees into a 5-year buyback'

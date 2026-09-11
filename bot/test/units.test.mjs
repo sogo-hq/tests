@@ -369,6 +369,26 @@ test('the user-facing failure message never leaks internal error text', async ()
   assert.ok(!/stack|Error:|0x[0-9a-f]{40}|http/i.test(SCAN_FAILED));
 });
 
+test('no em dash survives in any string the bot can print', async () => {
+  const { readdirSync, readFileSync, statSync } = await import('node:fs');
+  const walk = (dir) => readdirSync(dir).flatMap((f) => {
+    const p = `${dir}/${f}`;
+    return statSync(p).isDirectory() ? walk(p) : p.endsWith('.ts') ? [p] : [];
+  });
+  // Both spellings. Nine occurrences were written as the \\u2014 escape and were
+  // invisible to a literal grep, which is exactly how a sweep misses them.
+  const EM = String.fromCharCode(0x2014);
+  const offenders = [];
+  for (const file of walk('src')) {
+    readFileSync(file, 'utf8').split('\n').forEach((line, i) => {
+      const t = line.trimStart();
+      if (t.startsWith('*') || t.startsWith('//') || t.startsWith('/*')) return;
+      if (line.includes(EM) || line.includes('\\u2014')) offenders.push(`${file}:${i + 1}: ${t.slice(0, 90)}`);
+    });
+  }
+  assert.deepEqual(offenders, [], `em dash in bot text:\n${offenders.join('\n')}`);
+});
+
 test('no bare catch survives in the shipped source', async () => {
   const { readdirSync, readFileSync, statSync } = await import('node:fs');
   const walk = (dir) => readdirSync(dir).flatMap((f) => {

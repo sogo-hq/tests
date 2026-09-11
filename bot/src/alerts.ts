@@ -113,7 +113,7 @@ export async function buildAlerts(
           userId: match.userId,
           token,
           text:
-            `that is ${ALERTS_PER_HOUR} alerts this hour, which is the cap — ` +
+            `that is ${ALERTS_PER_HOUR} alerts this hour, which is the cap, ` +
             `holding the rest until it clears. /watching shows what you are subscribed to.`,
         });
       }

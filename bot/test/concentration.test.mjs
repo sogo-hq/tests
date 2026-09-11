@@ -129,7 +129,7 @@ test('at the floor the threshold comes from the distribution and is auditable', 
   assert.match(r.overDetail, /90th percentile of 40 launches/);
   // Rounded as the card rounds, and carrying the holder count: when this is
   // raised it is the only line the reader sees about concentration.
-  assert.match(r.overPlain, /^top 5 hold \d+% of supply( — largest \d+%)? · \d+ holders$/, r.overPlain);
+  assert.match(r.overPlain, /^top 5 hold \d+% of supply(, largest \d+%)? · \d+ holders$/, r.overPlain);
 });
 
 test('a share the holder count forces cannot be flagged, however low the threshold', () => {

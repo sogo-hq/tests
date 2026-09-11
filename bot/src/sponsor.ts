@@ -106,7 +106,7 @@ export function checkSponsorText(raw: string): SponsorCheck {
   const subject = maskSubjects(line);
   for (const re of BANNED) {
     const hit = subject.match(re);
-    if (hit) return { ok: false, reason: `says "${hit[0]}" — a card points at a scan, not a buy`, addresses };
+    if (hit) return { ok: false, reason: `says "${hit[0]}": a card points at a scan, not a buy`, addresses };
   }
   const pct = subject.match(PERCENT);
   if (pct) return { ok: false, reason: `states a percentage ("${pct[0]}")`, addresses };

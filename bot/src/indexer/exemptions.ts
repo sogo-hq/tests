@@ -35,7 +35,7 @@ function reportUndecodable(selector: string, err: unknown): void {
   if (reportedSelectors.has(selector)) return;
   reportedSelectors.add(selector);
   console.warn(
-    `[exemptions] cannot decode launch calldata with selector ${selector} — ` +
+    `[exemptions] cannot decode launch calldata with selector ${selector}, ` +
     `recorded as undetermined, never as clean. ${String((err as Error)?.message ?? err).slice(0, 160)}`,
   );
 }
