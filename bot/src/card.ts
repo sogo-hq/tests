@@ -3,6 +3,7 @@ import type { TractionMetrics, WindowMetrics } from './metrics/traction.js';
 import type { FlagResult } from './metrics/flags.js';
 import { DISCLAIMER, EXPLORER_URL } from './config.js';
 import { sponsorLine } from './sponsor.js';
+import { launchNotice } from './launchnotice.js';
 import { deployerSummary } from './deployerlookup.js';
 import { clamp, clampMessage, MAX_NAME, MAX_TICKER, TELEGRAM_MAX_MESSAGE } from './text.js';
 import { EARLY_WINDOW_SECONDS } from './config.js';
@@ -242,6 +243,8 @@ function renderEarlyCard(r: ScanResult): string {
   L.push('');
   L.push(`<a href="${EXPLORER_URL}/address/${k.token}">token</a> · <a href="${EXPLORER_URL}/address/${k.curve}">curve</a> · <a href="${EXPLORER_URL}/address/${k.deployer}">deployer</a>`);
   L.push(`<i>${DISCLAIMER}</i>`);
+  const notice = launchNotice();
+  if (notice) L.push(esc(notice));
   return clampMessage(L.join('\n'));
 }
 
@@ -385,6 +388,8 @@ export function renderCard(r: ScanResult): string {
   L.push('');
   L.push(`<a href="${EXPLORER_URL}/address/${k.token}">token</a> · <a href="${EXPLORER_URL}/address/${k.curve}">curve</a> · <a href="${EXPLORER_URL}/address/${k.deployer}">deployer</a>`);
   L.push(`<i>${DISCLAIMER}</i>`);
+  const notice = launchNotice();
+  if (notice) L.push(esc(notice));
   return clampMessage(L.join('\n'));
 }
 
@@ -864,7 +869,10 @@ export type CardRole =
   | 'spacer'
   | 'doctrine'
   | 'sponsor'
-  | 'footer';
+  | 'footer'
+  // Last on every card, below the paid line and below the footer. About VITALS
+  // rather than about the token, which is why it is never anywhere else.
+  | 'launch';
 
 /**
  * Three states, and only three. A finding, an undetermined check, or nothing.
@@ -1041,6 +1049,11 @@ export function cardLines(r: ScanResult, botUsername?: string): CardLine[] {
     text: footerLine(botUsername),
     imageText: imageFooterLine(botUsername),
   });
+  // After the footer, and only ever here. It is the one line on a card that is
+  // about this tool instead of about the launch being scanned, so a reader who
+  // stops at the disclaimer has read the whole card.
+  const notice = launchNotice();
+  if (notice) push('launch', notice);
   return L;
 }
 

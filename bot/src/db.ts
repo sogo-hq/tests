@@ -497,6 +497,10 @@ for (const [table, column, decl] of [
   // memory: this container has no volume, so an in-memory "seen" set would
   // re-send the legend to everyone after every deploy.
   ['dm_chats', 'legend_at', 'INTEGER'],
+  // Which launch notice this user has already been shown, as a digest of the
+  // line itself. A timestamp would have meant a user who saw "launching on the
+  // 24th" never saw "is live".
+  ['dm_chats', 'launch_notice_seen', 'TEXT'],
   // Where this row's exemption count came from. NULL means the calldata-only
   // decoder, which is measurably wrong: the curve auto-exempts the deployer and
   // never says so in the calldata, so 61 of 64 cross-checked launches had one

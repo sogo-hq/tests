@@ -27,6 +27,8 @@ export interface CachedScan {
    * is simply the wrong card.
    */
   sponsorVersion?: number;
+  /** The launch notice is in the card's text too, and expires on its own date. */
+  noticeVersion?: number;
   /** Plain-text card shown by default on every surface. */
   defaultCard: string;
   /** Today's HTML card, served only by /full. */
@@ -74,6 +76,7 @@ const TTL_MS = positiveInt('SCAN_CACHE_TTL_MS', process.env.SCAN_CACHE_TTL_MS, 6
 const MAX_ENTRIES = positiveInt('SCAN_CACHE_MAX', process.env.SCAN_CACHE_MAX, 500);
 
 import { sponsorVersion } from './sponsor.js';
+import { noticeVersion } from './launchnotice.js';
 
 export class ScanCache {
   private map = new Map<string, CachedScan>();
@@ -113,11 +116,12 @@ export class ScanCache {
       this.misses++;
       return null;
     }
-    if (hit.sponsorVersion !== sponsorVersion()) {
-      // The paid line is part of the card's text, so a card rendered under a
-      // different one is the wrong card now. Dropped rather than served: the
-      // whole point of reading it at send time is that it changes without a
-      // deploy, and a minute of the old line is a minute nobody paid for.
+    if (hit.sponsorVersion !== sponsorVersion() || hit.noticeVersion !== noticeVersion()) {
+      // The paid line and the launch notice are both part of the card's text,
+      // so a card rendered under a different one is the wrong card now. Dropped
+      // rather than served: the whole point of reading them at send time is
+      // that they change without a deploy, and a minute of the old line is a
+      // minute nobody paid for.
       this.map.delete(k);
       this.expired++;
       this.misses++;
@@ -156,7 +160,9 @@ export class ScanCache {
     this.map.delete(k);
     // Stamped on write, so a later read can tell whether the paid line inside
     // this card is still the one being sold.
-    this.map.set(k, { ...value, ts: Date.now(), sponsorVersion: sponsorVersion() });
+    this.map.set(k, {
+      ...value, ts: Date.now(), sponsorVersion: sponsorVersion(), noticeVersion: noticeVersion(),
+    });
 
     while (this.map.size > this.maxEntries) {
       const oldest = this.map.keys().next();

@@ -145,3 +145,34 @@ test('the deep link opens the declaration it names', async () => {
   const missing = await send('private', '/start d999');
   assert.match(missing[0].payload.text, /no declaration with that id/);
 });
+
+// --------------------------------------------------- the launch notice
+
+test('the launch notice ends /start and /legend, once per user', async () => {
+  const LINE = '$VITALS, the first declared launch on pons: 24 Sep · t.me/vitalsofficial';
+  process.env.LAUNCH_NOTICE = LINE;
+  delete process.env.LAUNCH_NOTICE_UNTIL;
+  const N = await import('../dist/launchnotice.js');
+  N.resetLaunchNotice();
+  N.resetLaunchNoticeSeen(USER);
+
+  // /start carries it once. The legend that follows a first /start must not
+  // repeat it: two copies in two messages is the thing "once per user" is for.
+  let c = await send('private', '/start');
+  const withNotice = c.filter((x) => (x.payload?.text ?? '').endsWith(LINE));
+  assert.equal(withNotice.length, 1, `${withNotice.length} messages carried the notice`);
+
+  c = await send('private', '/legend');
+  assert.ok(!(c[0].payload.text ?? '').endsWith(LINE), 'said twice to the same user');
+  assert.match(c[0].payload.text, /no finding/);
+
+  // A different user gets their own copy.
+  calls.length = 0;
+  const other = { ...at('private', '/legend') };
+  other.message.from = { id: 9999, is_bot: false, first_name: 'V' };
+  await bot.handleUpdate(other);
+  assert.ok(calls.filter((x) => !isLegend(x))[0].payload.text.endsWith(LINE));
+
+  delete process.env.LAUNCH_NOTICE;
+  N.resetLaunchNotice();
+});

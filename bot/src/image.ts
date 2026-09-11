@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import type { ScanResult } from './scan.js';
 import { measure, wrap, fitSize, hasGlyph } from './fontmetrics.js';
 import { sponsorLine } from './sponsor.js';
+import { launchNotice } from './launchnotice.js';
 import { type Declaration } from './declare.js';
 import { db } from './db.js';
 import { indexCoverage } from './coverage.js';
@@ -363,11 +364,17 @@ export function cardSvg(r: ScanResult, renderedAt = new Date(), size: CardSize =
   const ad = sponsorLine();
   const adH = ad ? 44 : 0;
   const stripH = cells.length ? 96 : 0;
+  // Below the footer, so it is reserved with the rest of the tail rather than
+  // drawn into whatever happened to be left. Never above the paid line, and
+  // never in the body: it is the one line here about this tool rather than
+  // about the launch on the card.
+  const notice = launchNotice();
+  const noticeH = notice ? 26 : 0;
   // Everything below the body, measured once: the gap above the strip, the
   // strip, the sponsor line, the footer rule and its two lines, and the bottom
   // padding. The body's budget is the ceiling minus this, and the finished
   // card's height is where the body actually ended plus this.
-  const TAIL = 100 + stripH + adH + PAD;
+  const TAIL = 100 + stripH + adH + noticeH + PAD;
 
   /**
    * The omission note's own line, reserved only on the pass that needs it.
@@ -537,7 +544,7 @@ export function cardSvg(r: ScanResult, renderedAt = new Date(), size: CardSize =
   // ended early and the card ends with it. Everything below is anchored to the
   // bottom and so is positioned from this number.
   const H = Math.max(MIN_H, Math.min(MAX_H, Math.round(y + TAIL)));
-  const footTop = H - PAD - 52 - 24;
+  const footTop = H - PAD - noticeH - 52 - 24;
 
   // -- market strip -------------------------------------------------------
   if (cells.length) {
@@ -552,7 +559,7 @@ export function cardSvg(r: ScanResult, renderedAt = new Date(), size: CardSize =
   }
 
   // -- sponsor, then footer ----------------------------------------------
-  const footY = H - PAD - 52;
+  const footY = H - PAD - noticeH - 52;
   if (ad) {
     const adSize = 22;
     const fitted = wrap(drawable(ad), adSize, CW, SANS_FILE)[0] ?? '';
@@ -567,6 +574,10 @@ export function cardSvg(r: ScanResult, renderedAt = new Date(), size: CardSize =
       ? `${utcStamp(renderedAt)}  ·  ${indexed.toLocaleString()} launches indexed`
       : utcStamp(renderedAt),
     { size: 19, fill: DIM }));
+  // Dim, like every other line down here, and never REF: green on this card
+  // means "a reference point the finding above was measured against", and a
+  // notice about our own launch is not one.
+  if (notice) p.push(text(PAD, footY + 72, drawable(notice), { size: 19, fill: DIM }));
 
   return (
     `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">` +

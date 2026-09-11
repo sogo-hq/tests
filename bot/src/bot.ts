@@ -13,6 +13,7 @@ import {
 } from './watch.js';
 import { isFilterKey, filterDef, filterRates, rateLine } from './filters.js';
 import { LEGEND, claimLegend } from './legend.js';
+import { launchNotice, claimLaunchNotice } from './launchnotice.js';
 import { age } from './card.js';
 import {
   tierOf, atLeast, thresholds, setThreshold, setVitalsToken, vitalsToken,
@@ -205,6 +206,24 @@ const HELP = [
  * state was not, silently dropping the "via @bot" attribution the compact card
  * footer is specified to carry.
  */
+/**
+ * The launch notice, appended once per user.
+ *
+ * /start and /legend are the two surfaces somebody reads deliberately rather
+ * than scrolls past, so the line goes at the end of both. Claimed per user and
+ * keyed on the notice itself, so it is said once, and said again only when it
+ * changes from a date to an address.
+ *
+ * The card footer carries its own copy on every card; that is a different rule
+ * and this one must not be made to serve it, or a group would see the line on
+ * one card and not the next.
+ */
+function withLaunchNotice(text: string, userId: number | undefined): string {
+  const notice = launchNotice();
+  if (!notice || userId === undefined || !claimLaunchNotice(userId, notice)) return text;
+  return `${text}\n\n${notice}`;
+}
+
 function usernameOf(ctx: Context): string | undefined {
   return ctx.me?.username;
 }
@@ -1006,7 +1025,7 @@ export function createBot(token = TELEGRAM_BOT_TOKEN): Bot {
         if (days > 0) text += `\n\npremium: ${days} day${days === 1 ? '' : 's'} remaining`;
       }
     }
-    await ctx.reply(text, {
+    await ctx.reply(withLaunchNotice(text, userId), {
       // No preview: the footer carries a domain, and a link card would push the
       // text off the first screen.
       link_preview_options: { is_disabled: true },
@@ -1015,12 +1034,12 @@ export function createBot(token = TELEGRAM_BOT_TOKEN): Bot {
     // the one thing a card cannot convey by itself is that a missing marker is
     // not an all-clear. Said once, on the way in.
     if (userId !== undefined && claimLegend(userId)) {
-      await ctx.reply(LEGEND, { link_preview_options: { is_disabled: true } });
+      await ctx.reply(withLaunchNotice(LEGEND, userId), { link_preview_options: { is_disabled: true } });
     }
   });
 
   bot.command('legend', (ctx) =>
-    ctx.reply(LEGEND, { link_preview_options: { is_disabled: true } }),
+    ctx.reply(withLaunchNotice(LEGEND, ctx.from?.id), { link_preview_options: { is_disabled: true } }),
   );
 
   // Works in private, group and supergroup. grammY strips the @botname suffix,
