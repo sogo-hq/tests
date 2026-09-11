@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import type { ScanResult } from './scan.js';
 import { measure, wrap, fitSize, hasGlyph } from './fontmetrics.js';
 import { sponsorLine } from './sponsor.js';
-import { isDeclared } from './declare.js';
+import { type Declaration } from './declare.js';
 import { db } from './db.js';
 import { indexCoverage } from './coverage.js';
 
@@ -199,6 +199,8 @@ export interface HeroContent {
   headline: string;
   reference: string | null;
   marked: Mark;
+  /** What the deployer said this check would show, when they said anything. */
+  declared?: string | null;
 }
 
 /**
@@ -212,7 +214,12 @@ export interface HeroContent {
 export function heroOf(r: ScanResult): HeroContent {
   const worst = r.flags.worst;
   if (worst) {
-    return { headline: drawable(worst.plain || worst.compactDetail), reference: null, marked: 'finding' };
+    return {
+      headline: drawable(worst.plain || worst.compactDetail),
+      reference: null,
+      marked: 'finding',
+      declared: worst.declared ? drawable(worst.declared) : null,
+    };
   }
   const w = r.traction.window;
   const median = r.benchmark.median;
@@ -238,7 +245,7 @@ export function heroOf(r: ScanResult): HeroContent {
   };
 }
 
-export interface Secondary { label: string; marked: Mark }
+export interface Secondary { label: string; marked: Mark; declared?: string | null }
 
 /**
  * Up to three findings below the hero, worst first, the hero's own excluded.
@@ -253,8 +260,9 @@ export function secondariesOf(r: ScanResult, limit = 3): { shown: Secondary[]; m
   const all: Secondary[] = [];
   for (const f of r.flags.flags) {
     if (f.key === worstKey) continue;
-    if (f.state === 'raised') all.push({ label: drawable(f.plain || f.compactDetail), marked: 'finding' });
-    else if (f.state === 'unknown') all.push({ label: drawable(f.plain || f.compactDetail), marked: 'undetermined' });
+    const declared = f.declared ? drawable(f.declared) : null;
+    if (f.state === 'raised') all.push({ label: drawable(f.plain || f.compactDetail), marked: 'finding', declared });
+    else if (f.state === 'unknown') all.push({ label: drawable(f.plain || f.compactDetail), marked: 'undetermined', declared });
   }
   return { shown: all.slice(0, limit), more: Math.max(0, all.length - limit) };
 }
@@ -391,12 +399,21 @@ export function cardSvg(r: ScanResult, renderedAt = new Date(), size: CardSize =
   let y = PAD + 22;
   p.push(text(PAD, y, 'PONS V2, ROBINHOOD CHAIN', { size: 20, fill: DIM, weight: 600, spacing: 1.6 }));
   const tagW = measure('PONS V2, ROBINHOOD CHAIN', 20, SANS_BOLD_FILE) + 1.6 * 24;
-  if (isDeclared(r.reads.token)) {
+  const declaration = r.flags.declaration;
+  if (declaration) {
     const bx = PAD + tagW + 20;
     const label = 'DECLARED';
     const bw = measure(label, 18, SANS_BOLD_FILE) + 24;
     p.push(`<rect x="${bx}" y="${y - 19}" width="${bw}" height="26" rx="4" fill="none" stroke="${DIM}" stroke-width="1.5"/>`);
     p.push(text(bx + 12, y, label, { size: 18, fill: DIM, weight: 600, spacing: 1.2 }));
+    // Where the claim can be read, beside the badge that says one exists. A
+    // card is screenshotted out of every context it was posted in, so the
+    // badge without somewhere to check it is worth less than nothing.
+    const host = drawable(declaration.docsUrl.replace(/^https?:\/\//, '').replace(/\/+$/, ''));
+    const hx = bx + bw + 14;
+    const room = (W - PAD) - hx - measure(utcStamp(renderedAt), 20, SANS_FILE) - 24;
+    const fitted = wrap(host, 18, room, SANS_FILE)[0] ?? '';
+    if (fitted === host) p.push(text(hx, y, host, { size: 18, fill: DIM }));
   }
   p.push(text(W - PAD, y, utcStamp(renderedAt), { size: 20, fill: DIM, anchor: 'end' }));
 
@@ -440,6 +457,13 @@ export function cardSvg(r: ScanResult, renderedAt = new Date(), size: CardSize =
     p.push(text(heroX, y, hero.reference, { size: wide ? 23 : 26, fill: REF }));
     y += 26;
   }
+  // What the deployer said this would be, under what it turned out to be. Set
+  // in the dim ink the card uses for context, never in the green it uses for
+  // reference points: a claim is not a measurement.
+  if (hero.declared) {
+    y += wide ? 24 : 30;
+    p.push(text(heroX, y, hero.declared, { size: wide ? 22 : 24, fill: DIM }));
+  }
 
   // -- secondary findings, then traction, while there is room ------------
   let omitted = 0;
@@ -452,15 +476,22 @@ export function cardSvg(r: ScanResult, renderedAt = new Date(), size: CardSize =
     // Measured to the LAST BASELINE, not past the trailing gap: a finding was
     // being dropped for eight points of air that nothing would have been drawn
     // in. The budget already keeps twenty-four points clear above the strip.
-    const need = (sLines.length - 1) * sSize * 1.3 + (first ? (wide ? 18 : 44) : 0);
+    const dSize = sSize - 5;
+    const need = (sLines.length - 1) * sSize * 1.3
+      + (sec.declared ? dSize * 1.25 : 0)
+      + (first ? (wide ? 18 : 44) : 0);
     if (y + need > limitY) { omitted++; continue; }
     if (first) { y += wide ? 26 : 44; first = false; }
     p.push(mark(sec.marked, PAD, y, sSize * 0.72));
-    for (const line of sLines) {
+    sLines.forEach((line, i) => {
+      if (i > 0) y += sSize * 1.3;
       p.push(text(PAD + secIndent, y, line, { size: sSize, fill: INK }));
-      y += sSize * 1.3;
+    });
+    if (sec.declared) {
+      y += dSize * 1.25;
+      p.push(text(PAD + secIndent, y, sec.declared, { size: dSize, fill: DIM }));
     }
-    y += 8;
+    y += sSize * 1.3 + 8;
   }
 
   const measures = measuresOf(r);
@@ -543,8 +574,98 @@ export function cardSvg(r: ScanResult, renderedAt = new Date(), size: CardSize =
   );
 }
 
+/**
+ * The card a creator posts after declaring.
+ *
+ * It states what was claimed and says, in the one line that matters, that
+ * nothing here was checked against a chain: the launch has not happened yet.
+ * Deliberately plain. A declaration card that looked like a certificate would
+ * be doing the opposite of what this whole feature is for.
+ */
+export function declarationCardSvg(d: Declaration, renderedAt = new Date()): string {
+  const W = 1080;
+  const PAD = 72;
+  const CW = W - PAD * 2;
+  const p: string[] = [];
+
+  let y = PAD + 22;
+  p.push(text(PAD, y, 'PONS V2, ROBINHOOD CHAIN', { size: 20, fill: DIM, weight: 600, spacing: 1.6 }));
+  p.push(text(W - PAD, y, utcStamp(renderedAt), { size: 20, fill: DIM, anchor: 'end' }));
+  y += 26;
+  p.push(`<rect x="${PAD}" y="${y}" width="${CW}" height="1" fill="${RULE}"/>`);
+
+  y += 90;
+  p.push(text(PAD, y, 'DECLARED LAUNCH', { size: 58, weight: 700, spacing: 1 }));
+  y += 44;
+  p.push(text(PAD, y, d.freeSlot !== null
+    ? `founding declared launch #${d.freeSlot}`
+    : `declaration ${d.id}`, { size: 26, fill: REF }));
+
+  y += 52;
+  p.push(text(PAD, y, d.deployer, { size: 24, fill: DIM, mono: true }));
+
+  const others = d.exemptCount - 1;
+  const claims: [string, string][] = [
+    ['dev buy', `${d.devBuyPct}% of supply`],
+    ['tax-free at launch', others === 0
+      ? 'the deployer only'
+      : `the deployer and ${others} other${others === 1 ? '' : 's'}`],
+    ['creator tax', `${d.creatorTaxBps} bps, ${d.taxSplit}`],
+    ['team tokens', d.vesting],
+  ];
+
+  y += 40;
+  p.push(`<rect x="${PAD}" y="${y}" width="${CW}" height="1" fill="${RULE}"/>`);
+  y += 56;
+  for (const [label, value] of claims) {
+    p.push(text(PAD, y, label, { size: 25, fill: DIM }));
+    const lines = wrap(drawable(value), 30, CW - 320, SANS_BOLD_FILE).slice(0, 2);
+    lines.forEach((line, i) => {
+      if (i > 0) y += 38;
+      p.push(text(PAD + 320, y, line, { size: 30, weight: 600 }));
+    });
+    y += 56;
+  }
+
+  y += 8;
+  p.push(text(PAD, y, drawable(d.docsUrl), { size: 24, fill: REF }));
+
+  // The sentence the whole card exists to carry.
+  y += 56;
+  for (const line of wrap(
+    'a claim made before the launch, signed by the wallet that will deploy it. '
+    + 'nothing here has been checked against a chain. every scan reads the launch '
+    + 'itself and says where the two differ.',
+    23, CW, SANS_FILE,
+  ).slice(0, 3)) {
+    p.push(text(PAD, y, line, { size: 23, fill: DIM }));
+    y += 32;
+  }
+
+  const H = Math.max(760, Math.round(y + 24 + 52 + 24 + PAD));
+  const footY = H - PAD - 52;
+  p.push(`<rect x="${PAD}" y="${footY - 24}" width="${CW}" height="1" fill="${RULE}"/>`);
+  p.push(text(PAD, footY + 16, '@vitalscheck_bot, paste any CA', { size: 26, fill: INK, weight: 600 }));
+  p.push(text(W - PAD, footY + 16, 'checkvitals.xyz', { size: 26, fill: DIM, anchor: 'end' }));
+  p.push(text(PAD, footY + 46,
+    `signed at block ${d.blockNumber.toLocaleString()}  ·  ${utcStamp(new Date(d.declaredAtSeconds * 1000))}`,
+    { size: 19, fill: DIM }));
+
+  return (
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">` +
+    `<rect width="${W}" height="${H}" fill="${BG}"/>${p.join('')}</svg>`
+  );
+}
+
+export function renderDeclarationPng(d: Declaration, renderedAt = new Date()): Buffer {
+  return rasterise(declarationCardSvg(d, renderedAt), 1080);
+}
+
 export function renderCardPng(r: ScanResult, renderedAt = new Date(), size: CardSize = 'portrait'): Buffer {
-  const svg = cardSvg(r, renderedAt, size);
+  return rasterise(cardSvg(r, renderedAt, size), SIZES[size].w);
+}
+
+function rasterise(svg: string, width: number): Buffer {
   const resvg = new Resvg(svg, {
     background: BG,
     font: {
@@ -552,7 +673,7 @@ export function renderCardPng(r: ScanResult, renderedAt = new Date(), size: Card
       loadSystemFonts: false,
       defaultFontFamily: SANS,
     },
-    fitTo: { mode: 'width', value: SIZES[size].w },
+    fitTo: { mode: 'width', value: width },
   });
   return resvg.render().asPng();
 }

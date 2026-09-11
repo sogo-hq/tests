@@ -93,6 +93,9 @@ export function makeScan(over = {}) {
       // null unless a test supplies one: an unreadable concentration is the
       // default state, and the card must be correct in it.
       concentration: over.concentration ?? null,
+      // The declaration the scan found, which is what the card renders from.
+      // Null by default: most launches have never been declared.
+      declaration: over.declaration ?? null,
     },
     benchmark: {
       bucket: over.benchmarkBucket ?? { key: 'to30m', fromSeconds: 300, toSeconds: 1800, label: '5-30m' },

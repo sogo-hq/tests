@@ -221,11 +221,18 @@ function renderEarlyCard(r: ScanResult): string {
         ? MARK_GLYPH.undetermined
         : ' ';
     L.push(`  ${mark} ${esc(fl.label)}: ${esc(fl.detail)}`);
+    // Under the finding, never instead of it. A declaration is a claim about
+    // the launch; the line above it is what the launch did.
+    if (fl.declared) L.push(`      ${esc(fl.declared)}`);
   }
   // No marker either way. A green tick on "buyback enabled" renders a fact as
   // an endorsement -- it is a property of the launch, not a finding in its
   // favour, and the card does not hand out approval.
   L.push(`    ${esc(f.buyback.detail)}`);
+  if (f.buyback.declared) L.push(`      ${esc(f.buyback.declared)}`);
+  if (f.declaration) {
+    L.push(`    <a href="${esc(f.declaration.docsUrl)}">declaration ${f.declaration.id}</a>, signed by the deployer before the launch`);
+  }
   L.push('');
 
   // Worst flag only. The spec replaces the traction block with a single line and
@@ -350,11 +357,18 @@ export function renderCard(r: ScanResult): string {
         ? MARK_GLYPH.undetermined
         : ' ';
     L.push(`  ${mark} ${esc(fl.label)}: ${esc(fl.detail)}`);
+    // Under the finding, never instead of it. A declaration is a claim about
+    // the launch; the line above it is what the launch did.
+    if (fl.declared) L.push(`      ${esc(fl.declared)}`);
   }
   // No marker either way. A green tick on "buyback enabled" renders a fact as
   // an endorsement -- it is a property of the launch, not a finding in its
   // favour, and the card does not hand out approval.
   L.push(`    ${esc(f.buyback.detail)}`);
+  if (f.buyback.declared) L.push(`      ${esc(f.buyback.declared)}`);
+  if (f.declaration) {
+    L.push(`    <a href="${esc(f.declaration.docsUrl)}">declaration ${f.declaration.id}</a>, signed by the deployer before the launch`);
+  }
   L.push('');
 
   const worst = f.worst

@@ -11,6 +11,7 @@ import {
   type Concentration,
 } from './concentration.js';
 import { MIN_BENCHMARK_SAMPLES } from './benchmark.js';
+import { declarationFor, MAX_DECLARED_LINE, type Declaration } from '../declare.js';
 
 export type FlagState = 'clean' | 'raised' | 'unknown';
 
@@ -35,6 +36,14 @@ export interface Flag {
   plain: string;
   /** Ranking weight used only to pick the single worst flag for the summary. */
   severity: number;
+  /**
+   * What the deployer said this check would show, before they launched.
+   *
+   * An extra line under the finding, never a replacement for it and never a
+   * reason to soften it. A declaration that matches adds context; one that does
+   * not becomes its own finding, and the check it contradicts still stands.
+   */
+  declared?: string | null;
 }
 
 export interface FlagResult {
@@ -43,7 +52,11 @@ export interface FlagResult {
   total: number;
   unknown: number;
   /** buybackEnabled is a positive signal, reported separately from the flags. */
-  buyback: { enabled: boolean; detail: string; plain: string };
+  buyback: {
+    enabled: boolean; detail: string; plain: string;
+    /** What the deployer said would happen to any team tokens. */
+    declared?: string | null;
+  };
   worst: Flag | null;
   snipeExemptionCount: number | null;
   creatorTaxMedianBps: number | null;
@@ -53,6 +66,8 @@ export interface FlagResult {
   nameCollision: boolean;
   /** The concentration reading this result was built from, for the card. */
   concentration: Concentration | null;
+  /** The declaration covering this launch, when there is one. */
+  declaration: Declaration | null;
 }
 
 /**
@@ -73,6 +88,12 @@ export interface FlagResult {
  * creator's cut and above the deployer's history.
  */
 const RAISED_BAND = {
+  // A signed statement contradicted by the transaction it describes. Above the
+  // exemption set because it is the only line on the card that is not about
+  // what happened but about what was promised, and because it is the single
+  // thing here that a buyer could not arrive at from the chain alone. It never
+  // takes the place of the check it contradicts; both are printed.
+  declaration_mismatch: 950,
   snipe_exemptions: 900,
   creator_open_buy: 800,
   creator_tax: 700,
@@ -111,6 +132,15 @@ const UNKNOWN_BAND: Record<string, number> = {
   deployer_rate: 120,
   collision: 110,
 };
+
+/**
+ * How far past a declared dev buy counts as a different dev buy.
+ *
+ * A plan stated in advance against a figure measured from the chain, so an
+ * exact comparison would fire on rounding. Half a percentage point, and only
+ * upward.
+ */
+const DEV_BUY_TOLERANCE_PP = 0.5;
 
 /** A band plus a size inside it, with the size clamped so bands cannot cross. */
 function sev(band: number, magnitude = 0, width = 99): number {
@@ -158,7 +188,7 @@ export function computeFlags(opts: {
   const launchRow = db
     .prepare(
       `SELECT snipe_exemption_count, snipe_exemptions, entry_point, launch_buy_amount,
-              exemption_source, exempt_open_pct, creator_open_pct
+              exemption_source, exempt_open_pct, creator_open_pct, block_number
          FROM launches WHERE token = ?`,
     )
     .get(token) as
@@ -166,6 +196,7 @@ export function computeFlags(opts: {
         snipe_exemption_count: number | null; snipe_exemptions: string | null; entry_point: string;
         launch_buy_amount: string | null; exemption_source: string | null;
         exempt_open_pct: number | null; creator_open_pct: number | null;
+        block_number: number;
       }
     | undefined;
 
@@ -708,6 +739,61 @@ export function computeFlags(opts: {
     });
   }
 
+  // -------------------------------------------------------- the declaration
+  //
+  // Last, because it is about the checks above rather than about the chain. It
+  // adds a line to each check it speaks to, and where it disagrees with one it
+  // becomes a finding of its own. It never edits, softens or removes a finding:
+  // the declaration is a claim, the transaction is the record, and a badge that
+  // could quiet a check would be worth buying.
+  const declaration = launchRow ? declarationFor(deployer, launchRow.block_number) : null;
+  if (declaration) {
+    const attach = (key: string, line: string) => {
+      const f = flags.find((x) => x.key === key);
+      if (f) f.declared = clamp(line, MAX_DECLARED_LINE);
+    };
+    const others = declaration.exemptCount - 1;
+    attach('snipe_exemptions', others === 0
+      ? 'declared: the deployer only'
+      : `declared: ${declaration.exemptCount} wallets, ${others} beyond the deployer`);
+    attach('creator_open_buy', `declared: a dev buy of ${declaration.devBuyPct}% of supply`);
+    attach('creator_tax', `declared: ${declaration.creatorTaxBps} bps, ${declaration.taxSplit}`);
+
+    /**
+     * What the launch did against what it said it would.
+     *
+     * The exemption count and the creator tax are exact quantities on both
+     * sides, so any difference at all is a difference. The dev buy is a plan
+     * against a measurement, so it is given half a percentage point, and it
+     * only counts when the launch took MORE than it said: taking less than you
+     * announced is not the thing anyone is worried about.
+     */
+    const diffs: string[] = [];
+    if (exCount !== null && exFromLogs && exCount !== declaration.exemptCount) {
+      diffs.push(`${exCount} exempt wallet${exCount === 1 ? '' : 's'}, declared ${declaration.exemptCount}`);
+    }
+    if (openShare !== null && openShare > declaration.devBuyPct + DEV_BUY_TOLERANCE_PP) {
+      diffs.push(`dev buy ${openShare.toFixed(1)}%, declared ${declaration.devBuyPct}%`);
+    }
+    if (opts.creatorTaxBps !== declaration.creatorTaxBps) {
+      diffs.push(`creator tax ${opts.creatorTaxBps} bps, declared ${declaration.creatorTaxBps}`);
+    }
+
+    flags.push({
+      key: 'declaration_mismatch',
+      label: 'Launch against declaration',
+      state: diffs.length ? 'raised' : 'clean',
+      detail: diffs.length
+        ? `the launch transaction differs from the signed declaration: ${diffs.join('; ')}`
+        : 'the launch transaction matches the signed declaration on every declared figure',
+      compactDetail: diffs.length ? `differs from declaration: ${diffs[0]}` : 'matches its declaration',
+      plain: diffs.length
+        ? `launch differs from declaration: ${diffs[0]}`
+        : 'the launch did what it said it would',
+      severity: diffs.length ? sev(RAISED_BAND.declaration_mismatch, diffs.length * 10) : 0,
+    });
+  }
+
   const raised = flags.filter((f) => f.state === 'raised').length;
   const unknown = flags.filter((f) => f.state === 'unknown').length;
   const worst = flags
@@ -727,6 +813,11 @@ export function computeFlags(opts: {
       plain: opts.buybackEnabled
         ? 'creator locked fees into a 5-year buyback'
         : 'no buyback lock',
+      // The vesting answer goes here because it is the one line on the card
+      // already about what the creator has tied up, and there is no vesting
+      // check of its own to hang it under: nothing on chain states a team
+      // allocation, which is exactly why a creator saying so is worth a line.
+      declared: declaration ? clamp(`declared: ${declaration.vesting}`, MAX_DECLARED_LINE) : null,
     },
     worst,
     snipeExemptionCount: exCount,
@@ -735,6 +826,7 @@ export function computeFlags(opts: {
     deployerMedianPeakMcap: deployerMedianPeak,
     deployerSurvival24h: survival,
     concentration: opts.concentration ?? null,
+    declaration,
     nameCollision: collisionCount > 0,
   };
 }

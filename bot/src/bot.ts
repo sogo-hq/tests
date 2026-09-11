@@ -3,7 +3,7 @@ import type { InlineQueryResult } from 'grammy/types';
 import { performScan, scanImage, normaliseToken, looksLikeTxHash, looksLikeSolanaAddress, inlineCacheSeconds, rateLimitFrom, rateLimitedMessage, SCAN_FAILED, type ScanSource, type ScanOutcome } from './service.js';
 import { scanCache, startCacheReporter } from './cache.js';
 import { userQuota, floodQuota, scanSemaphore, startQuotaSweeper } from './quota.js';
-import { benchmarkCoverageLine } from './metrics/benchmark.js';
+import { benchmarkCoverageLine, MIN_BENCHMARK_SAMPLES } from './metrics/benchmark.js';
 import { indexHealth, agoWords, type IndexHealth } from './indexer/health.js';
 import { providerLimitLine } from './providerlimits.js';
 import {
@@ -53,6 +53,12 @@ export { exemptedHoldTime, holdTimeLine, MIN_HOLD_SAMPLES, type HoldTime };
 import { concentrationCoverageLine } from './metrics/concentration.js';
 import { inlineDescription, footerLine, GROUP_HANDLE } from './card.js';
 import { db } from './db.js';
+import {
+  startDraft, answerDraft, draftOpen, clearDraft, signDraft, recentDeclarations,
+  STEPS, DECLARE_PRICE, DECLARE_FREE_UNTIL, declarationCount,
+  declarationLink, declarationOutcome, shortWallet, byId,
+} from './declare.js';
+import { renderDeclarationPng } from './image.js';
 import { indexCoverage } from './coverage.js';
 import { TELEGRAM_BOT_TOKEN, DISCLAIMER } from './config.js';
 
@@ -166,6 +172,13 @@ const HELP = [
   '  • /watch filter <name>: when a new launch has a shape you picked',
   '  • /filters lists the filters and how often each fires',
   '  • /watching lists your subscriptions, /unwatch <address|filter> removes one',
+  '',
+  'Declared launches:',
+  '  • /declare in DM: state what your launch will do, and sign it with the',
+  '    wallet that will deploy. the badge says a claim exists and nothing more.',
+  '  • /declared lists them, newest first, with what the launch did afterwards',
+  '  • a declaration never softens a check. where the launch differs from what',
+  '    was signed, the card says so and the original finding still stands.',
   '',
   'holding $VITALS unlocks access, not yield. tiers: 250k, 1M, 10M.',
   '',
@@ -959,6 +972,29 @@ export function createBot(token = TELEGRAM_BOT_TOKEN): Bot {
   });
 
   bot.command(['start', 'help'], async (ctx) => {
+    // The permalink a declaration card carries, until the site route exists.
+    const deep = /^d(\d+)$/.exec((ctx.match ?? '').toString().trim());
+    if (deep) {
+      const d = byId(Number(deep[1]));
+      if (!d) {
+        await ctx.reply('no declaration with that id');
+        return;
+      }
+      await ctx.reply([
+        d.freeSlot !== null ? `founding declared launch #${d.freeSlot}` : `declaration ${d.id}`,
+        '',
+        d.canonical,
+        '',
+        `signed at block ${d.blockNumber.toLocaleString()}`,
+        d.signature,
+        '',
+        declarationOutcome(d),
+        '',
+        'a claim made before the launch. nothing in it was checked against a chain.',
+      ].join('\n'), { link_preview_options: { is_disabled: true } });
+      return;
+    }
+
     // Days remaining, when there are any. Nothing is said to somebody who has
     // no grant: a line reading "0 days" is an advert, not a status.
     let text = HELP.replace(/BOTNAME/g, usernameOf(ctx) ?? 'bot');
@@ -1845,6 +1881,98 @@ export function createBot(token = TELEGRAM_BOT_TOKEN): Bot {
     await ctx.reply(statsText());
   });
 
+  // -------------------------------------------------------------- declare
+
+  /**
+   * A creator states what the launch will do, before it does it.
+   *
+   * DM only, and a form rather than one long command: six answers, then the
+   * exact text to sign with the wallet that will deploy. The signature is what
+   * makes it a declaration instead of a message, and the block it arrives at is
+   * what makes it a statement about a launch that has not happened.
+   */
+  bot.command('declare', async (ctx) => {
+    const userId = ctx.from?.id;
+    if (userId === undefined) return;
+    if (ctx.chat?.type !== 'private') {
+      await replyEphemeral(ctx, 'declaring is a DM. message me directly.', {});
+      return;
+    }
+    const parts = (ctx.match ?? '').toString().trim().split(/\s+/).filter(Boolean);
+    const sub = parts[0]?.toLowerCase();
+
+    if (sub === 'cancel') {
+      clearDraft(userId);
+      await ctx.reply('form cleared. /declare to start again');
+      return;
+    }
+
+    if (sub === 'sign' && parts[1]) {
+      const res = await signDraft(userId, parts[1]);
+      if (!res.ok) {
+        await ctx.reply(
+          res.reason === 'no-draft' ? 'no finished form. /declare to start one'
+          : res.reason === 'wrong-wallet' ? `that was signed by ${res.detail}, which is not the wallet you named`
+          : res.reason === 'bad-signature' ? 'that signature did not recover an address. paste the whole thing'
+          : res.reason === 'not-entitled' ? DECLARE_PRICE
+          : `could not read the chain to date this: ${res.detail ?? 'unknown'}. try again`,
+        );
+        return;
+      }
+      const d = res.declaration;
+      await ctx.reply([
+        d.freeSlot !== null
+          ? `recorded. founding declared launch #${d.freeSlot}`
+          : `recorded. declaration ${d.id}`,
+        declarationLink(d.id, usernameOf(ctx)),
+        '',
+        'the badge appears on every scan of a token this wallet launches from here on.',
+        'it says a claim exists. it does not soften a single check, and where the',
+        'launch differs from what you signed, the card says so.',
+      ].join('\n'), { link_preview_options: { is_disabled: true } });
+      try {
+        await ctx.replyWithPhoto(
+          new InputFile(renderDeclarationPng(d), `vitals-declaration-${d.id}.png`),
+        );
+      } catch (err) {
+        console.warn('[declare] card render failed:', String((err as Error)?.message ?? err).slice(0, 160));
+      }
+      return;
+    }
+
+    // What this costs, before the six questions rather than after them. The
+    // entitlement is checked again at the signature, where it is enforced; this
+    // is only so nobody fills a form in to be turned away by it.
+    const used = declarationCount();
+    const price = used < DECLARE_FREE_UNTIL
+      ? `the first ${DECLARE_FREE_UNTIL} declarations are free. this would be #${used + 1}.`
+      : DECLARE_PRICE;
+
+    const first = startDraft(userId);
+    await ctx.reply([
+      'six questions, one answer per message. /declare cancel to stop.',
+      price,
+      '',
+      `1 of ${STEPS.length}. ${first}`,
+    ].join('\n'), { link_preview_options: { is_disabled: true } });
+  });
+
+  /** Every declaration, newest first, and how the launch that followed went. */
+  bot.command('declared', async (ctx) => {
+    const rows = recentDeclarations(10);
+    if (!rows.length) {
+      await ctx.reply('no declarations yet. /declare in a DM to make one');
+      return;
+    }
+    const lines = ['declared launches, newest first', ''];
+    for (const d of rows) {
+      lines.push(`${d.freeSlot !== null ? `#${d.freeSlot}` : `id ${d.id}`}  ${shortWallet(d.deployer)}`);
+      lines.push(`  dev buy ${d.devBuyPct}%, ${d.exemptCount} tax-free, ${d.creatorTaxBps} bps`);
+      lines.push(`  ${declarationOutcome(d)}`);
+    }
+    await ctx.reply(lines.join('\n'), { link_preview_options: { is_disabled: true } });
+  });
+
   bot.on('inline_query', handleInline);
 
   // Only the chat surfaces get the button. An inline result is posted into a
@@ -1862,6 +1990,33 @@ export function createBot(token = TELEGRAM_BOT_TOKEN): Bot {
   bot.chatType('private').on('message:text', async (ctx) => {
     const text = ctx.message.text.trim();
     if (text.startsWith('/')) return;
+    const userId = ctx.from?.id;
+
+    // An open form takes the message before anything else does. A creator part
+    // way through /declare who is asked for the deployer address would
+    // otherwise have that address scanned instead of recorded.
+    if (userId !== undefined && draftOpen(userId)) {
+      const res = answerDraft(userId, text);
+      if (res.state === 'rejected') {
+        await ctx.reply(`${res.error}.\n\n${res.step + 1} of ${STEPS.length}. ${res.prompt}`);
+        return;
+      }
+      if (res.state === 'asked') {
+        await ctx.reply(`${res.step + 1} of ${STEPS.length}. ${res.prompt}`);
+        return;
+      }
+      if (res.state === 'complete') {
+        await ctx.reply([
+          'sign this exact text with the deployer wallet:',
+          '',
+          res.canonical,
+          '',
+          'then send: /declare sign <signature>',
+        ].join('\n'), { link_preview_options: { is_disabled: true } });
+        return;
+      }
+    }
+
     if (normaliseToken(text)) await handleScan(ctx, text);
   });
 
@@ -2021,6 +2176,28 @@ export function statsText(): string {
   const decoded = q('SELECT COUNT(*) n FROM launches WHERE snipe_exemption_count IS NOT NULL');
   const withExempt = q('SELECT COUNT(*) n FROM launches WHERE snipe_exemption_count > 0');
   const pct = decoded > 0 ? ((withExempt / decoded) * 100).toFixed(1) : '0.0';
+
+  /**
+   * Exemptions BEYOND the deployer, over the rows the curve's own events
+   * settled.
+   *
+   * Counted only where exemption_source is 'logs'. A count decoded from
+   * calldata omits the deployer, so pooling the two would put launches that
+   * exempted nobody but the dev into the "beyond the dev" column, which is the
+   * one number here anyone would quote.
+   */
+  const fromLogs = q("SELECT COUNT(*) n FROM launches WHERE exemption_source = 'logs'");
+  const beyond = q("SELECT COUNT(*) n FROM launches WHERE exemption_source = 'logs' AND snipe_exemption_count > 1");
+  const beyondPct = fromLogs > 0 ? ((beyond / fromLogs) * 100).toFixed(1) : '0.0';
+  const beyondCounts = db
+    .prepare("SELECT snipe_exemption_count AS c FROM launches WHERE exemption_source = 'logs' AND snipe_exemption_count > 1 ORDER BY c")
+    .all() as { c: number }[];
+  const medianBeyond = beyondCounts.length >= MIN_BENCHMARK_SAMPLES
+    ? (beyondCounts.length % 2
+      ? beyondCounts[beyondCounts.length >> 1]!.c
+      : (beyondCounts[(beyondCounts.length >> 1) - 1]!.c + beyondCounts[beyondCounts.length >> 1]!.c) / 2)
+    : null;
+  const declarations = q('SELECT COUNT(*) n FROM launch_declarations');
   const hold = exemptedHoldTime();
   const scans = q('SELECT COUNT(*) n FROM scan_events');
 
@@ -2038,6 +2215,11 @@ export function statsText(): string {
     providerLimitLine(),
     `launches indexed ${launches.toLocaleString()}`,
     `launches with pre-exempted wallets ${withExempt.toLocaleString()} (${pct}% of ${decoded.toLocaleString()} decoded)`,
+    `exempting beyond the deployer ${beyond.toLocaleString()} (${beyondPct}% of ${fromLogs.toLocaleString()} read from the curve)`,
+    medianBeyond === null
+      ? `median count where any went beyond the deployer: not published under ${MIN_BENCHMARK_SAMPLES} observations (n=${beyondCounts.length.toLocaleString()})`
+      : `median count where any went beyond the deployer ${medianBeyond} (n=${beyondCounts.length.toLocaleString()})`,
+    `declarations recorded ${declarations.toLocaleString()}`,
     holdTimeLine(hold),
     // Whether the comparison on every card is running yet, and on how much. A
     // feature that is silent for want of data should say so where the numbers

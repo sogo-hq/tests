@@ -375,10 +375,51 @@ CREATE INDEX IF NOT EXISTS idx_premium_wallet ON premium_payments(wallet);
 -- The card shows a badge when a row exists here and nothing when it does not,
 -- which is the whole contract: a declaration is a claim somebody made, never a
 -- judgement this bot formed, and the badge says only that the claim exists.
-CREATE TABLE IF NOT EXISTS declarations (
-  token       TEXT PRIMARY KEY,
-  declared_by INTEGER NOT NULL,
-  declared_at INTEGER NOT NULL
+-- A declaration was keyed on a token before it was built. It could not be: the
+-- statement is made before the token exists, by a wallet, about a launch that
+-- has not happened. Nothing ever wrote a row, so the table goes.
+DROP TABLE IF EXISTS declarations;
+
+-- ---------------------------------------------------------------------------
+-- Declared launches.
+--
+-- A declaration is a signed statement made BEFORE a launch exists, so it is
+-- keyed on the deployer wallet and its block, never on a token. What it claims
+-- is compared against what the launch transaction actually did; a mismatch is a
+-- finding of its own and never suppresses the check it contradicts.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS launch_declarations (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  deployer        TEXT NOT NULL,
+  declared_by     INTEGER NOT NULL,
+  declared_at     INTEGER NOT NULL,
+  -- The chain head when the declaration was stored. A declaration only counts
+  -- for a launch mined after it.
+  block_number    INTEGER NOT NULL,
+  dev_buy_pct     REAL NOT NULL,
+  -- JSON array of the addresses named besides the deployer.
+  exempt_list     TEXT NOT NULL,
+  -- What the curve should emit: the named wallets plus the deployer itself.
+  exempt_count    INTEGER NOT NULL,
+  creator_tax_bps INTEGER NOT NULL,
+  tax_split       TEXT NOT NULL,
+  vesting         TEXT NOT NULL,
+  docs_url        TEXT NOT NULL,
+  -- The exact bytes that were signed, kept so the signature stays checkable.
+  canonical       TEXT NOT NULL,
+  signature       TEXT NOT NULL,
+  -- The founding number, 1..DECLARE_FREE_UNTIL, or NULL when it was paid for.
+  free_slot       INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_decl_deployer ON launch_declarations(deployer, block_number);
+
+-- One open form per user, so the six questions survive a restart.
+CREATE TABLE IF NOT EXISTS declare_drafts (
+  user_id    INTEGER PRIMARY KEY,
+  step       INTEGER NOT NULL,
+  answers    TEXT NOT NULL,
+  nonce      TEXT NOT NULL,
+  started_at INTEGER NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS cursors (

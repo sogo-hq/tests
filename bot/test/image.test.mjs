@@ -295,17 +295,27 @@ test('anything the font cannot draw is dropped rather than drawn as tofu', () =>
 
 // ------------------------------------------------------------------ declared
 
-test('the declared badge appears only when a declaration exists', async () => {
-  const { db } = await import('../dist/db.js');
-  const r = RICH();
-  db.prepare('DELETE FROM declarations').run();
-  assert.ok(!texts(svg(r)).some((t) => t.body === 'DECLARED'));
+test('the declared badge appears only when a declaration exists', () => {
+  // The card renders the declaration the SCAN found. Whether one covers this
+  // launch is decided in flags.ts, against the launch block; the renderer never
+  // reaches back into the index to decide it a second time.
+  assert.ok(!texts(svg(RICH())).some((t) => t.body === 'DECLARED'));
 
-  db.prepare('INSERT INTO declarations (token, declared_by, declared_at) VALUES (?,?,?)')
-    .run(r.reads.token.toLowerCase(), 7, 1_789_000_000);
-  assert.ok(texts(svg(r)).some((t) => t.body === 'DECLARED'),
-    'the badge says a claim exists, and nothing more');
-  db.prepare('DELETE FROM declarations').run();
+  const declared = makeScan({
+    flags: RICH().flags.flags,
+    concentration: { top5Share: 61, top1Share: 34, holders: 412, excess: 0.4 },
+    declaration: {
+      id: 12, deployer: '0x' + '3'.repeat(40), declaredBy: 7, declaredAtSeconds: 1_789_000_000,
+      blockNumber: 8000, devBuyPct: 1, exemptList: [], exemptCount: 1, creatorTaxBps: 400,
+      taxSplit: 'half to the artist', vesting: 'no team allocation',
+      docsUrl: 'https://docs.checkvitals.xyz', canonical: 'c', signature: '0xsig', freeSlot: 12,
+    },
+  });
+  const bodies = texts(svg(declared)).map((t) => t.body);
+  assert.ok(bodies.includes('DECLARED'), 'the badge says a claim exists, and nothing more');
+  // And where it can be read, because a card is screenshotted out of every
+  // context it was posted in.
+  assert.ok(bodies.includes('docs.checkvitals.xyz'), bodies.join(' | '));
 });
 
 // ------------------------------------------------------------------ sponsor
