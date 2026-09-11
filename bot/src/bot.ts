@@ -58,7 +58,14 @@ import {
   autoscanEnabled, setAutoscan, autoscanSetting, addressesIn, claimAutoReply,
   everAnswered, AUTOSCAN_DEDUPE_MS,
 } from './autoscan.js';
-import { recordFirstCall, firstCallOf } from './firstcall.js';
+import {
+  recordFirstCall, firstCallOf, renderLeaderboard, leaderboard,
+  LEADERBOARD_WINDOWS,
+} from './firstcall.js';
+import { renderCallPng } from './image.js';
+import {
+  membershipOf, gateActive, joinMessage, joinButton, markJoined,
+} from './membership.js';
 import { renderGroupCard } from './groupcard.js';
 import { holderBreakdown } from './metrics/concentration.js';
 import type { ScanResult } from './scan.js';
@@ -184,6 +191,13 @@ const HELP = [
   '  • /filters lists the filters and how often each fires',
   '  • /watching lists your subscriptions, /unwatch <address|filter> removes one',
   '',
+  'In a group:',
+  '  \u2022 /autoscan on, by an admin, and an address posted here gets a card',
+  '  \u2022 off by default in every group. the bot never scans what it was not asked to',
+  '  \u2022 /leaderboard: who called what here, by how far it ran afterwards',
+  '  \u2022 /card, as a reply to a call: that call as a picture',
+  '  \u2022 add it to yours: t.me/BOTNAME?startgroup=true',
+  '',
   'Declared launches:',
   '  • /declare in DM: state what your launch will do, and sign it with the',
   '    wallet that will deploy. the badge says a claim exists and nothing more.',
@@ -232,6 +246,25 @@ function withLaunchNotice(text: string, userId: number | undefined): string {
   const notice = launchNotice();
   if (!notice || userId === undefined || !claimLaunchNotice(userId, notice)) return text;
   return `${text}\n\n${notice}`;
+}
+
+/**
+ * The unit every market figure on every surface is in.
+ *
+ * One place, because a leaderboard in ETH beside a card in something else would
+ * be two different numbers under one name. Most launches pair against the
+ * native asset; a launch that does not is stated in its own pair on its card,
+ * where the pair is known.
+ */
+function quoteUnit(): string {
+  return process.env.QUOTE_SYMBOL || 'ETH';
+}
+
+function leaderboardTabs(active: number): { text: string; callback_data: string }[] {
+  return LEADERBOARD_WINDOWS.map((d) => ({
+    text: d === active ? `\u00b7 ${d}d \u00b7` : `${d}d`,
+    callback_data: `lb:${d}`,
+  }));
 }
 
 function usernameOf(ctx: Context): string | undefined {
@@ -1198,6 +1231,48 @@ export function createBot(token = TELEGRAM_BOT_TOKEN): Bot {
   bot.on('message', autoReply);
 
   /**
+   * The DM gate.
+   *
+   * Private chats only. A group card is read by people who did not choose this
+   * bot, and an inline result appears in a chat the bot is not even in; gating
+   * either would make the tool useless where it is most useful and turn every
+   * card into an advert for joining.
+   *
+   * An unreadable membership is not a refusal. The bot may not be an admin of
+   * the channel, or Telegram may be having a minute, and neither is evidence
+   * that a person is not a member.
+   */
+  bot.use(async (ctx, next) => {
+    const userId = ctx.from?.id;
+    if (!gateActive() || ctx.chat?.type !== 'private' || userId === undefined || isAdmin(userId)) {
+      await next();
+      return;
+    }
+    const verdict = await membershipOf(ctx.api, userId);
+    if (verdict !== 'absent') {
+      await next();
+      return;
+    }
+    // Answered once per message, whatever the message was: a gate that only
+    // caught /start would let every other command through.
+    if (ctx.callbackQuery) {
+      await ctx.answerCallbackQuery({ text: joinMessage().split('\n')[0], show_alert: true });
+      return;
+    }
+    await ctx.reply(joinMessage(), {
+      link_preview_options: { is_disabled: true },
+      reply_markup: { inline_keyboard: joinButton() },
+    });
+  });
+
+  // Somebody joining lifts their own gate immediately rather than at the end of
+  // the cache window.
+  bot.on('chat_member', (ctx) => {
+    const uid = ctx.chatMember?.new_chat_member?.user?.id;
+    if (uid !== undefined) markJoined(uid);
+  });
+
+  /**
    * Turn the auto-reply on or off for this chat.
    *
    * Admins only, and per chat: one person deciding for one group is the whole
@@ -1277,6 +1352,15 @@ export function createBot(token = TELEGRAM_BOT_TOKEN): Bot {
         if (days > 0) text += `\n\npremium: ${days} day${days === 1 ? '' : 's'} remaining`;
       }
     }
+    // In a group, what THIS group is currently set to. A features list that
+    // does not say whether the feature is on here answers the wrong question.
+    if (ctx.chat?.type !== 'private' && ctx.chat?.id !== undefined) {
+      const set = autoscanSetting(ctx.chat.id);
+      text += `\n\nin this group: autoscan is ${set.on ? 'on' : 'off'}`
+        + (set.setAt ? `, set ${agoWords(Math.floor(Date.now() / 1000) - set.setAt)} ago` : ', never changed')
+        + '. an admin changes it with /autoscan on or /autoscan off.';
+    }
+
     await ctx.reply(withLaunchNotice(text, userId), {
       // No preview: the footer carries a domain, and a link card would push the
       // text off the first screen.
@@ -2242,6 +2326,100 @@ export function createBot(token = TELEGRAM_BOT_TOKEN): Bot {
       lines.push(`  ${declarationOutcome(d)}`);
     }
     await ctx.reply(lines.join('\n'), { link_preview_options: { is_disabled: true } });
+  });
+
+  /**
+   * A call, as a picture somebody can post.
+   *
+   * Used as a reply to the message that made the call, which is the only thing
+   * that identifies WHICH call: the same token can have been called in many
+   * groups and this one is about this group's record of it.
+   */
+  bot.command('card', async (ctx) => {
+    const chatId = ctx.chat?.id;
+    const replied = ctx.message?.reply_to_message;
+    if (chatId === undefined) return;
+    if (ctx.chat?.type === 'private') {
+      await ctx.reply('reply /card to the message that called it, in the group where it was called.');
+      return;
+    }
+    if (!replied) {
+      await replyEphemeral(ctx, 'reply /card to the message that called it', {});
+      return;
+    }
+    const address = addressesIn(replied)[0];
+    const call = address ? firstCallOf(chatId, address) : null;
+    if (!call || call.mcapQuote === null) {
+      await replyEphemeral(ctx, 'no call on record here for that address', {});
+      return;
+    }
+    // The ranking already computes the peak after a call; one row of it is this
+    // card, so the two can never disagree about the same number.
+    const row = leaderboard(chatId, 3650).find((r) => r.token === call.token && r.userId === call.userId);
+    if (!row) {
+      await replyEphemeral(ctx, 'nothing has traded since that call yet', {});
+      return;
+    }
+    try {
+      await ctx.replyWithPhoto(
+        new InputFile(
+          renderCallPng({
+            symbol: row.symbol, token: row.token, username: row.username,
+            calledAt: row.calledAt, mcapQuote: row.mcapQuote, athQuote: row.peakQuote,
+            multiple: row.multiple, quote: quoteUnit(), botUsername: usernameOf(ctx),
+          }),
+          `vitals-call-${row.token.slice(0, 10)}.png`,
+        ),
+        {
+          reply_parameters: { message_id: replied.message_id, allow_sending_without_reply: true },
+        },
+      );
+    } catch (err) {
+      console.error('[card] render failed:', err);
+      await replyEphemeral(ctx, 'could not render that card', {});
+    }
+  });
+
+  // ---------------------------------------------------------- leaderboard
+
+  /**
+   * Who called what, here, ranked by how far it ran afterwards.
+   *
+   * Group only: the whole quantity is "first in front of this group", and a DM
+   * has one reader. Two windows behind buttons rather than two commands,
+   * because the interesting comparison is between them.
+   */
+  bot.command('leaderboard', async (ctx) => {
+    const chatId = ctx.chat?.id;
+    if (chatId === undefined) return;
+    if (ctx.chat?.type === 'private') {
+      await ctx.reply('the leaderboard is per group. run it in a group.');
+      return;
+    }
+    await ctx.reply(renderLeaderboard(chatId, LEADERBOARD_WINDOWS[0], quoteUnit()), {
+      link_preview_options: { is_disabled: true },
+      reply_markup: { inline_keyboard: [leaderboardTabs(LEADERBOARD_WINDOWS[0])] },
+    });
+  });
+
+  bot.callbackQuery(/^lb:/, async (ctx) => {
+    const chatId = ctx.chat?.id;
+    const days = Number((ctx.callbackQuery?.data ?? '').slice(3));
+    if (chatId === undefined || !LEADERBOARD_WINDOWS.includes(days as any)) {
+      await ctx.answerCallbackQuery({ text: 'unrecognised window' });
+      return;
+    }
+    await ctx.answerCallbackQuery();
+    try {
+      await ctx.editMessageText(renderLeaderboard(chatId, days, quoteUnit()), {
+        link_preview_options: { is_disabled: true },
+        reply_markup: { inline_keyboard: [leaderboardTabs(days)] },
+      });
+    } catch (err) {
+      // Telegram refuses an edit that changes nothing, which is exactly what
+      // pressing the tab you are already on does.
+      console.warn('[leaderboard] edit refused:', String((err as Error)?.message ?? err).slice(0, 100));
+    }
   });
 
   bot.on('inline_query', handleInline);

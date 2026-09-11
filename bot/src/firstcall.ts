@@ -179,3 +179,58 @@ function peakAfter(token: string, calledAt: number, mcapAtCall: number): number 
 export function ratio(peak: number, call: number): number {
   return call <= 0 ? 0 : peak / call;
 }
+
+// -------------------------------------------------------------- rendering
+
+/** The windows the leaderboard offers, in days. */
+export const LEADERBOARD_WINDOWS = [7, 30] as const;
+
+function esc(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+/**
+ * The leaderboard, as it is posted.
+ *
+ * Multiples and nothing else. There is no profit column and there is not going
+ * to be one: a multiple is a fact about the token that would read the same
+ * whoever had posted it, and a profit is a claim about somebody's trading that
+ * this tool has no way to know and no business asserting. The footer says what
+ * the list is, because a ranked list of people beside big numbers reads as
+ * advice unless it is told not to.
+ */
+export function renderLeaderboard(
+  chatId: number, days: number, quote: string, now = Date.now(),
+): string {
+  const rows = leaderboard(chatId, days, now);
+  const head = `calls in this group, last ${days} days`;
+  if (!rows.length) {
+    return [
+      head,
+      '',
+      'nothing to rank yet. a call is recorded the first time somebody posts an',
+      'address here, and it needs a market cap at that moment and trades after it.',
+      '',
+      'calls are records, not advice',
+    ].join('\n');
+  }
+  const lines = rows.map((r, i) => {
+    const who = r.username ? `@${esc(clampName(r.username))}` : 'a member';
+    const sym = r.symbol ? `$${esc(clampName(r.symbol))}` : `${r.token.slice(0, 8)}\u2026`;
+    return `${i + 1}. ${who}, ${sym}, ${r.multiple.toFixed(1)}x, called at ${short(r.mcapQuote)} ${esc(quote)}`;
+  });
+  return [head, '', ...lines, '', 'calls are records, not advice'].join('\n');
+}
+
+function clampName(s: string): string {
+  return s.length > 32 ? `${s.slice(0, 31)}\u2026` : s;
+}
+
+/** The same scale the cards use, so one number does not read two ways. */
+function short(v: number): string {
+  const a = Math.abs(v);
+  if (a >= 1_000_000) return `${(v / 1_000_000).toFixed(1).replace(/\.0$/, '')}M`;
+  if (a >= 1_000) return `${(v / 1_000).toFixed(1).replace(/\.0$/, '')}K`;
+  if (a >= 100) return String(Math.round(v));
+  return v.toFixed(3).replace(/0+$/, '').replace(/\.$/, '');
+}

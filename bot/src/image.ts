@@ -668,6 +668,101 @@ export function renderDeclarationPng(d: Declaration, renderedAt = new Date()): B
   return rasterise(declarationCardSvg(d, renderedAt), 1080);
 }
 
+export interface CallCard {
+  symbol: string | null;
+  token: string;
+  username: string | null;
+  calledAt: number;
+  mcapQuote: number;
+  athQuote: number;
+  multiple: number;
+  quote: string;
+  botUsername?: string;
+}
+
+/**
+ * A call, as something somebody can post.
+ *
+ * States two market caps and the ratio between them, and stops. No profit, no
+ * ETH figure anybody made, no verdict on the caller: the multiple is a fact
+ * about the token that would read the same whoever had posted it. The line at
+ * the bottom says so, because a big number over somebody's name reads as advice
+ * unless it is told not to.
+ */
+export function callCardSvg(c: CallCard, renderedAt = new Date()): string {
+  const W = 1200;
+  const H = 720;
+  const PAD = 64;
+  const CW = W - PAD * 2;
+  const p: string[] = [];
+
+  let y = PAD + 22;
+  p.push(text(PAD, y, 'PONS V2, ROBINHOOD CHAIN', { size: 20, fill: DIM, weight: 600, spacing: 1.6 }));
+  p.push(text(W - PAD, y, utcStamp(renderedAt), { size: 20, fill: DIM, anchor: 'end' }));
+  y += 26;
+  p.push(`<rect x="${PAD}" y="${y}" width="${CW}" height="1" fill="${RULE}"/>`);
+
+  y = 200;
+  const who = c.username ? `@${drawable(c.username)}` : 'a member';
+  p.push(text(PAD, y, `${who} called ${drawable(c.symbol ? `$${c.symbol}` : c.token.slice(0, 10))}`,
+    { size: 34, fill: DIM }));
+
+  y = 310;
+  const headline = `${c.multiple.toFixed(1)}x`;
+  p.push(text(PAD, y, headline, { size: 116, weight: 700 }));
+  const headW = measure(headline, 116, SANS_BOLD_FILE);
+  // Beside the number, on its baseline, because what the multiple is OF is the
+  // half of it that keeps it from reading as a score.
+  p.push(text(PAD + headW + 32, y, 'from the call to the peak that followed it',
+    { size: 26, fill: DIM }));
+
+  y = 380;
+  p.push(`<rect x="${PAD}" y="${y}" width="${CW}" height="1" fill="${RULE}"/>`);
+  y = 436;
+  const cells: [string, string][] = [
+    ['called at', `${compactNum(c.mcapQuote)} ${c.quote}`],
+    ['peak after', `${compactNum(c.athQuote)} ${c.quote}`],
+  ];
+  cells.forEach(([label, value], i) => {
+    const cx = PAD + i * (CW / 2);
+    p.push(text(cx, y, label, { size: 24, fill: DIM, spacing: 0.8 }));
+    p.push(text(cx, y + 44, drawable(value), { size: 44, weight: 600 }));
+  });
+
+  y = 540;
+  p.push(text(PAD, y, `${drawable(c.token.slice(0, 10))}\u2026${drawable(c.token.slice(-6))}`,
+    { size: 22, fill: DIM, mono: true }));
+
+  const footY = H - PAD - 52;
+  p.push(`<rect x="${PAD}" y="${footY - 24}" width="${CW}" height="1" fill="${RULE}"/>`);
+  const bot = c.botUsername ?? 'vitalscheck_bot';
+  p.push(text(PAD, footY + 16, `via @${drawable(bot)}`, { size: 26, fill: INK, weight: 600 }));
+  p.push(text(W - PAD, footY + 16, `t.me/${drawable(bot)}?startgroup=true`,
+    { size: 24, fill: DIM, anchor: 'end' }));
+  // Last line, like every other card here: what this is, and what it is not.
+  p.push(text(PAD, footY + 46,
+    'a record of what was posted and what happened next. not advice, and not a profit.',
+    { size: 19, fill: DIM }));
+
+  return (
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">` +
+    `<rect width="${W}" height="${H}" fill="${BG}"/>${p.join('')}</svg>`
+  );
+}
+
+export function renderCallPng(c: CallCard, renderedAt = new Date()): Buffer {
+  return rasterise(callCardSvg(c, renderedAt), 1200);
+}
+
+/** The same scale the text surfaces use, so one number does not read two ways. */
+function compactNum(v: number): string {
+  const a = Math.abs(v);
+  if (a >= 1_000_000) return `${(v / 1_000_000).toFixed(1).replace(/\.0$/, '')}M`;
+  if (a >= 1_000) return `${(v / 1_000).toFixed(1).replace(/\.0$/, '')}K`;
+  if (a >= 100) return String(Math.round(v));
+  return v.toFixed(3).replace(/0+$/, '').replace(/\.$/, '');
+}
+
 export function renderCardPng(r: ScanResult, renderedAt = new Date(), size: CardSize = 'portrait'): Buffer {
   return rasterise(cardSvg(r, renderedAt, size), SIZES[size].w);
 }
