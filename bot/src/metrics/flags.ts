@@ -10,6 +10,7 @@ import {
   MIN_CONCENTRATION_SAMPLES,
   type Concentration,
 } from './concentration.js';
+import { MIN_BENCHMARK_SAMPLES } from './benchmark.js';
 
 export type FlagState = 'clean' | 'raised' | 'unknown';
 
@@ -54,6 +55,68 @@ export interface FlagResult {
   concentration: Concentration | null;
 }
 
+/**
+ * Where each finding starts, before its own size is added.
+ *
+ * The order is a policy, not an accident of which check runs first: findings
+ * rank by what a buyer cannot get anywhere else, and then by how large a claim
+ * on supply they describe. The pre-exempted wallets are first on both counts --
+ * no view function in the protocol exposes them and no explorer reconstructs
+ * them, and they are the only wallets that could take supply before anyone else
+ * could bid for it. The pair asset is last: it is printed on every page that
+ * shows the token at all.
+ *
+ * Bands are spaced so a finding never overtakes a higher-ranked one on size
+ * alone; the magnitude added inside a band is what orders two findings of the
+ * same kind. Holder concentration is not in the stated order, because it is a
+ * large claim on supply that any explorer already shows: it sits below the
+ * creator's cut and above the deployer's history.
+ */
+const RAISED_BAND = {
+  snipe_exemptions: 900,
+  creator_open_buy: 800,
+  creator_tax: 700,
+  holder_concentration: 600,
+  deployer_survival: 560,
+  deployer_peaks: 530,
+  deployer_rate: 500,
+  pair_ticker: 400,
+  collision: 300,
+  custom_pair: 200,
+} as const;
+
+/**
+ * An unreadable launch transaction outranks everything but a measured claim on
+ * supply.
+ *
+ * Every other undetermined check sits below every finding: "no baseline yet" is
+ * not a reason to look away from a custom pair asset. The exemption read is the
+ * exception, and deliberately so. It is the one thing here a buyer cannot go
+ * and look up, so not having it is itself a useful sentence, and the
+ * alternative -- leading with the pair asset while the biggest question goes
+ * unmentioned -- is the false all-clear this tool exists to avoid.
+ *
+ * It sits at 599: directly under the holder-concentration band, so a measured
+ * share of supply still leads over a missing one, and above the deployer's
+ * history and everything below it. Placed at a band edge rather than inside
+ * one, so which of the two leads never depends on the data.
+ */
+const UNKNOWN_BAND: Record<string, number> = {
+  snipe_exemptions: 599,
+  creator_open_buy: 150,
+  creator_tax: 140,
+  holder_concentration: 130,
+  deployer_survival: 124,
+  deployer_peaks: 122,
+  deployer_rate: 120,
+  collision: 110,
+};
+
+/** A band plus a size inside it, with the size clamped so bands cannot cross. */
+function sev(band: number, magnitude = 0, width = 99): number {
+  return band + Math.max(0, Math.min(width, magnitude));
+}
+
 /** Basis points as a percentage, trimmed: 100 -> "1", 250 -> "2.5". */
 function pctOfBps(bps: number): string {
   const pct = bps / 100;
@@ -93,13 +156,26 @@ export function computeFlags(opts: {
   // anywhere in the protocol exposes this -- the creation transaction is the
   // only source, across four different entry points.
   const launchRow = db
-    .prepare('SELECT snipe_exemption_count, snipe_exemptions, entry_point, launch_buy_amount, exemption_source FROM launches WHERE token = ?')
+    .prepare(
+      `SELECT snipe_exemption_count, snipe_exemptions, entry_point, launch_buy_amount,
+              exemption_source, exempt_open_pct, creator_open_pct
+         FROM launches WHERE token = ?`,
+    )
     .get(token) as
-    | { snipe_exemption_count: number | null; snipe_exemptions: string | null; entry_point: string; launch_buy_amount: string | null; exemption_source: string | null }
+    | {
+        snipe_exemption_count: number | null; snipe_exemptions: string | null; entry_point: string;
+        launch_buy_amount: string | null; exemption_source: string | null;
+        exempt_open_pct: number | null; creator_open_pct: number | null;
+      }
     | undefined;
 
   const exCount = launchRow?.snipe_exemption_count ?? null;
   const exFromLogs = launchRow?.exemption_source === 'logs';
+  const exShare = launchRow?.exempt_open_pct ?? null;
+  const openShare = launchRow?.creator_open_pct ?? null;
+
+  /** "22.3% of supply", or nothing when the window was never measured. */
+  const shareClause = exShare === null ? '' : `, together ${exShare.toFixed(1)}% of supply`;
 
   /**
    * How many wallets skipped the opening tax, said in one quantity.
@@ -127,7 +203,7 @@ export function computeFlags(opts: {
       plain: exCount === null
         ? "couldn't read the launch, tax-free wallets unknown"
         : 'tax-free wallets: being re-counted from the launch itself',
-      severity: 60,
+      severity: UNKNOWN_BAND.snipe_exemptions!,
     });
   } else if (exCount === 0) {
     // A real and common zero, not an anomaly: measured across 420 launches, 139
@@ -166,12 +242,85 @@ export function computeFlags(opts: {
       state: 'raised',
       detail:
         `${exCount} wallets skipped the opening tax, ${others} of them besides the deployer` +
+        (exShare === null ? '' : `, and took ${exShare.toFixed(1)}% of supply between them in the tax-free window`) +
         (viaBuy ? ', alongside a creator buy in the same transaction' : ''),
       compactDetail:
         `${exCount} tax-free at launch, ${others} beyond the deployer` +
+        (exShare === null ? '' : `, ${exShare.toFixed(1)}% of supply`) +
         (viaBuy ? ' + creator buy same tx' : ''),
-      plain: `${exCount} wallets tax-free at launch, 1 of them the deployer`,
-      severity: 100 + exCount,
+      // Says which wallets, and how much of the token they were able to take
+      // before anyone else could bid. The count alone does not separate five
+      // wallets that took 0.2% from five that took 40%.
+      plain: `${exCount} wallets tax-free at launch, 1 of them the deployer${shareClause}`,
+      // Ordered by the share of supply they took, which is the size of the
+      // claim. A launch whose window was never measured falls back to its
+      // count, which cannot overtake a measured share: an unmeasured 32 ranks
+      // below a measured 40%.
+      severity: exShare === null
+        ? sev(RAISED_BAND.snipe_exemptions, exCount, 40)
+        : sev(RAISED_BAND.snipe_exemptions, exShare),
+    });
+  }
+
+  // --------------------------------------------------------------- flag 1b
+  // What the creator took for itself before anyone else could bid.
+  //
+  // Separate from the exemption count, and ranked directly below it, because
+  // they answer different questions: how many wallets got in tax-free, and how
+  // much of the token one of them walked away with. A launch can exempt only
+  // its deployer -- the ordinary case -- and still have that deployer take a
+  // third of supply in the first four seconds.
+  //
+  // Measured over the opening-buy window by metrics/opening.ts, not from the
+  // launch receipt: the exempted wallets buy in the tax-free seconds after the
+  // launch transaction, not inside it.
+  const openRows = db
+    .prepare('SELECT creator_open_pct AS p FROM launches WHERE creator_open_pct IS NOT NULL')
+    .all() as { p: number }[];
+  const openMedian = openRows.length >= MIN_BENCHMARK_SAMPLES ? medianOf(openRows.map((r) => r.p)) : null;
+
+  if (openShare === null) {
+    flags.push({
+      key: 'creator_open_buy',
+      label: 'Creator opening buy',
+      state: 'unknown',
+      detail: "the opening window was not read, the creator's own buy is not known",
+      compactDetail: 'creator opening buy undetermined',
+      plain: "creator's opening buy: not read",
+      severity: UNKNOWN_BAND.creator_open_buy!,
+    });
+  } else if (openMedian === null) {
+    // A real measurement with nothing to measure it against. Printed as the
+    // number it is, never as an all-clear.
+    flags.push({
+      key: 'creator_open_buy',
+      label: 'Creator opening buy',
+      state: 'unknown',
+      detail:
+        `creator took ${openShare.toFixed(2)}% of supply in the opening window, ` +
+        `no index baseline yet (n=${openRows.length}, need ${MIN_BENCHMARK_SAMPLES})`,
+      compactDetail: `creator opened with ${openShare.toFixed(1)}%, no baseline yet`,
+      plain: `creator opened with ${openShare.toFixed(1)}% of supply (no reference yet)`,
+      severity: UNKNOWN_BAND.creator_open_buy!,
+    });
+  } else {
+    const raisedOpen = openShare > openMedian;
+    const withBaseline =
+      `creator opened with ${openShare.toFixed(1)}% of supply \u00b7 ` +
+      `index median ${openMedian.toFixed(1)}% (n=${openRows.length.toLocaleString()})`;
+    flags.push({
+      key: 'creator_open_buy',
+      label: 'Creator opening buy',
+      state: raisedOpen ? 'raised' : 'clean',
+      detail:
+        `${openShare.toFixed(2)}% of supply in the opening window, ` +
+        `${raisedOpen ? 'above' : 'at or below'} the ${openMedian.toFixed(2)}% median ` +
+        `across ${openRows.length} measured launches`,
+      compactDetail: raisedOpen
+        ? `creator opened with ${openShare.toFixed(1)}% vs ${openMedian.toFixed(1)}% median`
+        : `creator opened with ${openShare.toFixed(1)}%, at or below median`,
+      plain: withBaseline,
+      severity: raisedOpen ? sev(RAISED_BAND.creator_open_buy, openShare) : 0,
     });
   }
 
@@ -188,7 +337,7 @@ export function computeFlags(opts: {
       detail: taxMedian === null ? 'no indexed baseline yet' : coverageReason(cov),
       compactDetail: 'no creator-tax baseline yet',
       plain: "no baseline yet for the creator's cut",
-      severity: 10,
+      severity: UNKNOWN_BAND.creator_tax!,
     });
   } else {
     /**
@@ -220,7 +369,13 @@ export function computeFlags(opts: {
         ? `creator tax ${opts.creatorTaxBps} bps vs ${taxMedian} bps median`
         : `creator tax ${opts.creatorTaxBps} bps, at or below median`,
       plain: withBaseline,
-      severity: raised ? 40 + Math.min(40, opts.creatorTaxBps - taxMedian) : 0,
+      // Ranked by how many times the median it is, not by how many bps above.
+      // A 50 bps gap means one thing against a 25 bps median and another
+      // against a 500 bps one; the difference ranked those two the same.
+      // 25x the median saturates the band, which no observed launch reaches.
+      severity: raised
+        ? sev(RAISED_BAND.creator_tax, taxMedian > 0 ? (opts.creatorTaxBps / taxMedian - 1) * 4 : 99)
+        : 0,
     });
   }
 
@@ -239,7 +394,7 @@ export function computeFlags(opts: {
       detail: coverageReason(cov),
       compactDetail: 'deployer history unavailable',
       plain: "can't check the deployer's other launches yet",
-      severity: 15,
+      severity: UNKNOWN_BAND.deployer_rate!,
     });
   } else if (launches7d > 2) {
     flags.push({
@@ -251,7 +406,7 @@ export function computeFlags(opts: {
       // The threshold that made this a finding. "7 tokens this week" is a
       // count; whether 7 is many is the question, and the rule answers it.
       plain: `deployer launched ${launches7d} tokens in 7d \u00b7 flag above 2`,
-      severity: 50 + Math.min(40, launches7d),
+      severity: sev(RAISED_BAND.deployer_rate, launches7d, 29),
     });
   } else {
     flags.push({
@@ -290,7 +445,7 @@ export function computeFlags(opts: {
           : `only ${priorPeaks.length} prior launch with outcome data, too few to judge`,
       compactDetail: 'no prior outcomes for this deployer yet',
       plain: "no history yet on this deployer's past tokens",
-      severity: 5,
+      severity: UNKNOWN_BAND.deployer_peaks!,
     });
   } else if (deployerMedianPeak < globalMedianPeak) {
     flags.push({
@@ -300,7 +455,7 @@ export function computeFlags(opts: {
       detail: `median peak mcap ${deployerMedianPeak.toFixed(3)} across ${priorPeaks.length} priors, below the ${globalMedianPeak.toFixed(3)} median of all tracked tokens`,
       compactDetail: `deployer's ${priorPeaks.length} prior tokens peaked below median`,
       plain: `deployer's last ${priorPeaks.length} tokens all stayed small`,
-      severity: 45,
+      severity: sev(RAISED_BAND.deployer_peaks, 0, 29),
     });
   } else {
     flags.push({
@@ -336,7 +491,7 @@ export function computeFlags(opts: {
           : `only ${withData.length} prior with +24h data, too few to judge`,
       compactDetail: 'no +24h history for this deployer yet',
       plain: "no 24h history on this deployer's past tokens",
-      severity: 5,
+      severity: UNKNOWN_BAND.deployer_survival!,
     });
   } else if (survival < 0.5) {
     flags.push({
@@ -346,7 +501,8 @@ export function computeFlags(opts: {
       detail: `${(survival * 100).toFixed(0)}% of ${withData.length} prior launches were still trading at +24h`,
       compactDetail: `only ${(survival * 100).toFixed(0)}% of deployer's priors alive at +24h`,
       plain: `${withData.length - Math.round(survival * withData.length)} of deployer's last ${withData.length} tokens died in 24h`,
-      severity: 55,
+      // Within the band, the worse the survival rate the higher it ranks.
+      severity: sev(RAISED_BAND.deployer_survival, Math.round((0.5 - survival) * 58), 29),
     });
   } else {
     flags.push({
@@ -383,7 +539,7 @@ export function computeFlags(opts: {
       detail: coverageReason(cov),
       compactDetail: 'ticker collisions not checkable yet',
       plain: "can't check this ticker against other launches yet",
-      severity: 20,
+      severity: UNKNOWN_BAND.collision!,
     });
   } else if (collisionCount > 0) {
     // Colliding tokens frequently share the same rendered symbol, so show
@@ -405,7 +561,7 @@ export function computeFlags(opts: {
       // another in an index of 400,000, and the card had no way to tell them
       // apart.
       plain: `${collisionCount} of ${cov.indexed.toLocaleString()} indexed launches use this ticker`,
-      severity: 70,
+      severity: sev(RAISED_BAND.collision, collisionCount),
     });
   } else {
     flags.push({
@@ -449,7 +605,7 @@ export function computeFlags(opts: {
     // Above a plain name collision: colliding with some other launch is common
     // noise, whereas wearing the ticker of the asset on the other side of your
     // own pool is targeted at the person about to trade it.
-    severity: impersonatesPair ? 80 : 0,
+    severity: impersonatesPair ? RAISED_BAND.pair_ticker : 0,
   });
 
   // ---------------------------------------------------------------- flag 8
@@ -467,7 +623,7 @@ export function computeFlags(opts: {
     plain: custom
       ? `priced in ${clamp(opts.pairSymbol ?? 'a token', 12)}, not ETH. inherits its risk`
       : 'priced in ETH',
-    severity: custom ? 35 : 0,
+    severity: custom ? RAISED_BAND.custom_pair : 0,
   });
 
   // ---------------------------------------------------------------- flag 9
@@ -498,7 +654,7 @@ export function computeFlags(opts: {
       detail: 'top 5 holder share could not be read',
       compactDetail: 'top 5 holder share undetermined',
       plain: 'top 5 wallet share undetermined',
-      severity: 1,
+      severity: UNKNOWN_BAND.holder_concentration!,
     });
   } else if (conc.holders < MIN_HOLDERS_FOR_SHARE) {
     // Stated as arithmetic, not as a finding: with this many holders the top
@@ -510,7 +666,7 @@ export function computeFlags(opts: {
       detail: `${conc.holders} holder${conc.holders === 1 ? '' : 's'}, too few for a top-5 share to mean anything (it is 100% by arithmetic below ${MIN_HOLDERS_FOR_SHARE})`,
       compactDetail: `${conc.holders} holders, too few to measure concentration`,
       plain: `only ${conc.holders} holder${conc.holders === 1 ? '' : 's'} so far`,
-      severity: 2,
+      severity: UNKNOWN_BAND.holder_concentration!,
     });
   } else if (!thr || thr.threshold === null || thr.thresholdShare === null) {
     // The share is a real measurement, but there is no distribution to judge it
@@ -523,7 +679,7 @@ export function computeFlags(opts: {
       detail: `top 5 hold ${shareStr} of circulating, largest single wallet ${conc.top1Share.toFixed(1)}% (${conc.holders} holders, ${arithmeticFloor(conc.holders).toFixed(1)}% is the least ${conc.holders} wallets can hold), no threshold yet (n=${n}, need ${MIN_CONCENTRATION_SAMPLES})`,
       compactDetail: `top 5 hold ${shareStr}, no threshold yet (n=${n})`,
       plain: `top 5 hold ${shareStr}${conc.top1Share > 0 ? `, largest ${conc.top1Share.toFixed(0)}%` : ''} (no reference yet)`,
-      severity: 3,
+      severity: UNKNOWN_BAND.holder_concentration!,
     });
   } else {
     // Judged on the excess, not the raw share. Reported as a share, because
@@ -548,7 +704,7 @@ export function computeFlags(opts: {
       plain: over
         ? `top 5 hold ${conc.top5Share.toFixed(0)}% of supply${conc.top1Share > 0 ? `, largest ${conc.top1Share.toFixed(0)}%` : ''} \u00b7 ${conc.holders} holders`
         : `top 5 hold ${conc.top5Share.toFixed(0)}%${conc.top1Share > 0 ? `, largest ${conc.top1Share.toFixed(0)}%` : ''}`,
-      severity: over ? 60 : 0,
+      severity: over ? sev(RAISED_BAND.holder_concentration, conc.top5Share) : 0,
     });
   }
 

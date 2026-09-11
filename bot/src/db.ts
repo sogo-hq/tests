@@ -465,6 +465,15 @@ for (const [table, column, decl] of [
   // that is merely one short and showing "undetermined" for a day would be a
   // worse answer than the one it replaces.
   ['launches', 'exemption_source', 'TEXT'],
+  // What the pre-exempted wallets took in the tax-free opening window, and the
+  // deployer's own share of it, as percentages of total supply. Measured by
+  // metrics/opening.ts over the first forty blocks, NOT from the launch
+  // receipt: the exempted wallets buy after the launch transaction, not inside
+  // it, and the receipt alone reported 1.0% where the window reported 17.4%.
+  // NULL is undetermined, and a finding sized by a share it does not have falls
+  // back to its count.
+  ['launches', 'exempt_open_pct', 'REAL'],
+  ['launches', 'creator_open_pct', 'REAL'],
 ] as const) {
   if (!columnsOf(table).includes(column)) {
     db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${decl}`);

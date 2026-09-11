@@ -249,11 +249,16 @@ async function ensureLaunchRow(
   launch: { block: number; txHash: Hex; launchedAt: number },
 ): Promise<void> {
   const existing = db
-    .prepare('SELECT snipe_exemption_count FROM launches WHERE token = ?')
-    .get(reads.token.toLowerCase()) as { snipe_exemption_count: number | null } | undefined;
-  if (existing && existing.snipe_exemption_count !== null) return;
+    .prepare('SELECT snipe_exemption_count, exemption_source FROM launches WHERE token = ?')
+    .get(reads.token.toLowerCase()) as
+      { snipe_exemption_count: number | null; exemption_source: string | null } | undefined;
+  // A count decoded from calldata alone is not enough to stop here: the card
+  // only states the exemption set when it came from the curve's own events, so
+  // a legacy row would keep reading "undetermined" until the backfill reached
+  // it. One extra receipt on the interactive path settles it now, once.
+  if (existing && existing.snipe_exemption_count !== null && existing.exemption_source === 'logs') return;
 
-  const cd = await fetchLaunchCalldata(launch.txHash);
+  const cd = await fetchLaunchCalldata(launch.txHash, reads.curve);
   const name = cd.name ?? reads.name;
   const symbol = cd.symbol ?? reads.symbol;
   db.prepare(`
@@ -261,8 +266,9 @@ async function ensureLaunchRow(
       token, curve, deployer, pair_token, launch_config_id, graduation_threshold,
       block_number, tx_hash, launched_at, name, symbol, name_key, symbol_key,
       snipe_exemption_count, snipe_exemptions, entry_point, creator_tax_bps,
-      buyback_enabled, launch_buy_amount, launch_buy_recipient, phase
-    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+      buyback_enabled, launch_buy_amount, launch_buy_recipient, phase,
+      exemption_source
+    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     ON CONFLICT(token) DO UPDATE SET
       snipe_exemption_count = COALESCE(excluded.snipe_exemption_count, launches.snipe_exemption_count),
       snipe_exemptions      = COALESCE(excluded.snipe_exemptions, launches.snipe_exemptions),
@@ -273,6 +279,7 @@ async function ensureLaunchRow(
       -- confident "creator opening buy: none".
       launch_buy_amount     = excluded.launch_buy_amount,
       launch_buy_recipient  = excluded.launch_buy_recipient,
+      exemption_source      = COALESCE(excluded.exemption_source, launches.exemption_source),
       name = COALESCE(excluded.name, launches.name),
       symbol = COALESCE(excluded.symbol, launches.symbol),
       name_key = COALESCE(excluded.name_key, launches.name_key),
@@ -287,7 +294,43 @@ async function ensureLaunchRow(
     cd.entryPoint, cd.creatorTaxBps ?? reads.creatorTaxBps,
     (cd.buybackEnabled ?? reads.buybackEnabled) ? 1 : 0,
     cd.buyAmount === null ? null : String(cd.buyAmount), cd.buyRecipient, reads.phase,
+    cd.source,
   );
+}
+
+/**
+ * Measure what the pre-exempted wallets took, once, and keep it.
+ *
+ * Not read from the launch receipt: the exempted wallets do not buy inside the
+ * launch transaction, they buy in the tax-free seconds after it. Measured on
+ * four launches, the receipt alone reported 1.0% where the opening window
+ * reported 17.4%, and 5.0% where it reported 40.0%. A number that understates
+ * the claim on supply seventeen-fold is worse than no number.
+ *
+ * Persisted because it cannot change: the window is forty blocks wide and long
+ * closed for every launch but the newest. A row that already has it is skipped,
+ * so a rescan costs nothing.
+ */
+async function ensureOpeningShares(reads: TokenReads, launchBlock: number): Promise<void> {
+  const token = reads.token.toLowerCase();
+  const row = db
+    .prepare('SELECT exempt_open_pct FROM launches WHERE token = ?')
+    .get(token) as { exempt_open_pct: number | null } | undefined;
+  if (row && row.exempt_open_pct !== null) return;
+  if (reads.totalSupply <= 0n) return;
+
+  const { readOpeningWindow } = await import('./metrics/opening.js');
+  const w = await readOpeningWindow({
+    curve: reads.curve,
+    deployer: reads.deployer,
+    totalSupply: reads.totalSupply,
+    fromBlock: BigInt(launchBlock),
+  });
+  // A partial window is not a measurement. Left NULL, which reads as
+  // undetermined rather than as a small share.
+  if (!w || !w.complete) return;
+  db.prepare('UPDATE launches SET exempt_open_pct = ?, creator_open_pct = ? WHERE token = ?')
+    .run(w.exemptSharePct, w.creatorSharePct, token);
 }
 
 export async function scanToken(token: string, requestedBy?: number): Promise<ScanResult | null> {
@@ -350,6 +393,7 @@ async function scanTokenInner(token: string, requestedBy?: number): Promise<Scan
   // NOT NULL. The snipe-exemption check then reports undetermined, which is
   // true -- the creation transaction has not been read.
   if (launch.txHash) await timer.time('launchRow', () => ensureLaunchRow(reads, { ...launch, txHash: launch.txHash! }));
+  await timer.time('openingShares', () => ensureOpeningShares(reads, launch.block));
 
   // Index the measurement window. Capped at the 30-minute window even for old
   // tokens, because that is the window every traction metric is defined over.
