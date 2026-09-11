@@ -16,7 +16,7 @@ import { LEGEND, claimLegend } from './legend.js';
 import { age } from './card.js';
 import {
   tierOf, atLeast, thresholds, setThreshold, setVitalsToken, vitalsToken,
-  grant, revokeGrant, linkedWallet, type Tier,
+  grant, revokeGrant, linkedWallet, effectiveTier, type Tier,
 } from './tiers.js';
 import { issueNonce, linkMessage, linkBySignature, linkByTxHash, unlink, verifyAddress } from './holder.js';
 import {
@@ -339,12 +339,18 @@ async function handleImageButton(ctx: Context): Promise<void> {
   await ctx.answerCallbackQuery({ text: 'rendering…' });
   const source = sourceOf(ctx);
   try {
+    // A premium holder's renders are not metered. The flag is explicit rather
+    // than a missing quota key, because service.ts falls back through userId
+    // and chatId and a merely absent key still charges somebody.
+    const premiumRender = ctx.from?.id !== undefined
+      && atLeast(await effectiveTier(ctx.from.id), 'premium');
     const res = await scanImage({
       token,
       source,
       userId: ctx.from?.id,
       chatId: ctx.chat?.id,
       quotaKey,
+      unlimited: premiumRender,
       botUsername: usernameOf(ctx),
     });
     if (res.kind !== 'ok') {
@@ -1586,8 +1592,15 @@ export function createBot(token = TELEGRAM_BOT_TOKEN): Bot {
     }
 
     if (!selfRegistrationOpen()) {
-      await ctx.reply('registration is handled by the team right now. ask an admin to add you');
-      return;
+      // Premium holders register early when a room is set up for it. This is
+      // the only place the 24 h head start can mean anything today: there is no
+      // room object yet, so it is the registration gate itself that opens.
+      const early = (process.env.ROOM_EARLY_ACCESS ?? '').toLowerCase() === 'true'
+        && atLeast(await effectiveTier(userId), 'premium');
+      if (!early) {
+        await ctx.reply('registration is handled by the team right now. ask an admin to add you');
+        return;
+      }
     }
 
     const res = await registerMember(userId, parts[0]!, { inviteLink: inviteOf(userId) });

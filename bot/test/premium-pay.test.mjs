@@ -174,3 +174,78 @@ test('the pay address falls back to the treasury rather than being unset', () =>
   process.env.PREMIUM_PAY_ADDRESS = saved;
   assert.equal(I.premiumPayAddress().toLowerCase(), PAY.toLowerCase());
 });
+
+test('the poller detects a payment from a block and grants without a hash', async () => {
+  reset();
+  await link(7);
+  I.expectPayment(7);
+
+  const HASH2 = '0x' + 'd'.repeat(64);
+  txs.set(HASH2, payment());
+  client.getBlockNumber = async () => 60_000_010n;
+  client.getBlock = async ({ blockNumber, includeTransactions }) => {
+    if (!includeTransactions) return { timestamp: BigInt(blockTime) };
+    return {
+      timestamp: BigInt(blockTime),
+      transactions: blockNumber === 60_000_005n
+        ? [{ hash: HASH2, to: PAY, from: WALLET, value: eth(0.05), input: '0x' }]
+        : [],
+    };
+  };
+  // A cold cursor starts at the head, so prime it behind the payment.
+  const R = await import('../dist/ready.js');
+  R.setSetting('inbound_poll_block', '60000000');
+
+  const res = await I.pollInbound();
+  assert.equal(res.paid, 1, 'a payment nobody sent a hash for is still credited');
+  assert.equal((await T.tierOf(7)).tier, 'premium');
+});
+
+test('the poller links a wallet from a verify transfer carrying the code', async () => {
+  reset();
+  process.env.VERIFY_ADDRESS = '0x8888888888888888888888888888888888888888';
+  const nonce = H.issueNonce(11);
+  client.getBlockNumber = async () => 60_000_010n;
+  client.getBlock = async ({ blockNumber, includeTransactions }) => {
+    if (!includeTransactions) return { timestamp: BigInt(blockTime) };
+    return {
+      timestamp: BigInt(blockTime),
+      transactions: blockNumber === 60_000_005n
+        ? [{
+            hash: '0x' + 'e'.repeat(64), to: process.env.VERIFY_ADDRESS,
+            from: '0x1212121212121212121212121212121212121212',
+            value: 100_000_000_000_000n,
+            input: '0x' + Buffer.from(nonce, 'utf8').toString('hex'),
+          }]
+        : [],
+    };
+  };
+  const R = await import('../dist/ready.js');
+  R.setSetting('inbound_poll_block', '60000000');
+
+  const res = await I.pollInbound();
+  assert.equal(res.linked, 1);
+  assert.equal(T.linkedWallet(11), '0x1212121212121212121212121212121212121212');
+});
+
+test('a transfer without the code links nobody', async () => {
+  reset();
+  H.issueNonce(11);
+  client.getBlockNumber = async () => 60_000_010n;
+  client.getBlock = async ({ blockNumber, includeTransactions }) => {
+    if (!includeTransactions) return { timestamp: BigInt(blockTime) };
+    return {
+      timestamp: BigInt(blockTime),
+      transactions: blockNumber === 60_000_005n
+        ? [{ hash: '0x' + 'f'.repeat(64), to: process.env.VERIFY_ADDRESS,
+             from: '0x3434343434343434343434343434343434343434',
+             value: 100_000_000_000_000n, input: '0x' }]
+        : [],
+    };
+  };
+  const R = await import('../dist/ready.js');
+  R.setSetting('inbound_poll_block', '60000000');
+  const res = await I.pollInbound();
+  assert.equal(res.linked, 0, 'anybody can send 0.0001 ETH');
+  assert.equal(T.linkedWallet(11), null);
+});

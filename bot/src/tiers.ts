@@ -226,6 +226,19 @@ export async function tierOf(userId: number, now = Date.now()): Promise<TierReso
   return { state: 'ok', tier: held, via: 'balance', balance: whole, grantUntil: g?.expiresAt ?? null };
 }
 
+/**
+ * The effective tier, with everything that is not a measured tier reading as
+ * 'none'.
+ *
+ * For call sites that only need to know whether a gate opens. Anything that
+ * must EXPLAIN a closed gate uses tierOf directly, because 'none' here covers
+ * three different sentences and only one of them is "you do not hold enough".
+ */
+export async function effectiveTier(userId: number, now = Date.now()): Promise<Tier> {
+  const r = await tierOf(userId, now);
+  return r.state === 'ok' ? r.tier : 'none';
+}
+
 /** The wallet this user has PROVEN they control. */
 export function linkedWallet(userId: number): string | null {
   const row = db.prepare('SELECT wallet FROM holder_links WHERE user_id = ?').get(userId) as
