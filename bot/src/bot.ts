@@ -23,7 +23,11 @@ import {
   totalsBlock, isAdmin, gateHit, countdownLine, dueAutoPost, markAutoPost,
 } from './tge.js';
 import { parseLaunchTime, launchTimeLine, getLaunchPlan, clearLaunchPlan } from './launch.js';
-import { launchChat, preflight, preflightLine, startLaunchLoop } from './launchday.js';
+import {
+  launchChat, preflight, preflightLine, startLaunchLoop,
+  guardVerdict, guardActive, pinnedCa, offencesOf, recordOffence,
+  alreadyHandled, markHandled, muteFor24h, GUARD_WARNING, GUARD_MUTED,
+} from './launchday.js';
 import { ALERTS_PER_HOUR } from './alerts.js';
 import { buildAlerts } from './alerts.js';
 import { exemptedHoldTime, holdTimeLine, MIN_HOLD_SAMPLES, type HoldTime } from './holdtime.js';
@@ -735,6 +739,92 @@ export function createBot(token = TELEGRAM_BOT_TOKEN): Bot {
   // producing when one half of a pair is written and the other is assumed.
   liveBot = bot;
 
+  /** Group admins are exempt, as are the ADMIN_IDS list. */
+  const isGroupAdmin = async (ctx: Context, userId: number): Promise<boolean> => {
+    if (isAdmin(userId)) return true;
+    try {
+      const m = await ctx.api.getChatMember(ctx.chat!.id, userId);
+      return m.status === 'administrator' || m.status === 'creator';
+    } catch (err) {
+      // Unreadable membership is not admin. Being wrong that way deletes an
+      // admin's message, which is recoverable; guessing "admin" leaves a fake
+      // CA standing, which is not.
+      console.warn('[launch] admin check failed:', String((err as Error)?.message ?? err).slice(0, 120));
+      return false;
+    }
+  };
+
+  /**
+   * The fake-CA guard.
+   *
+   * Registered before every command and it calls next() unless it acted, so the
+   * rest of the bot still sees the message. Written the other way round first,
+   * where it swallowed the middleware chain and silently disabled every command
+   * declared after it.
+   *
+   * Runs on new messages AND on edits: a scammer can post "gm", let it settle,
+   * then edit a contract address into it, and with only 'message' in
+   * allowed_updates the bot never sees the edit. Bot API 10.3,
+   * Update.edited_message.
+   *
+   * The bot must be an administrator of the group for any of this to arrive at
+   * all. An administrator receives every message regardless of privacy mode,
+   * which is what makes the guard possible without turning privacy mode off.
+   * Privacy mode stays ON.
+   */
+  const caGuard = async (ctx: Context, next: () => Promise<void>): Promise<void> => {
+    const msg = ctx.message ?? ctx.editedMessage;
+    const userId = ctx.from?.id;
+    if (!msg || userId === undefined || ctx.chat?.type === 'private' || !guardActive()) {
+      await next();
+      return;
+    }
+    // A caption carries an address as readily as a body does.
+    const text = `${msg.text ?? ''} ${msg.caption ?? ''}`.trim();
+    if (!text || !/0x[0-9a-fA-F]{40}/.test(text)) {
+      await next();
+      return;
+    }
+
+    const verdict = guardVerdict(text, {
+      pinnedCa: pinnedCa(),
+      isAdmin: await isGroupAdmin(ctx, userId),
+      priorOffences: offencesOf(userId),
+      active: true,
+    });
+    if (verdict.action === 'ignore') {
+      await next();
+      return;
+    }
+
+    // Delete first and always, whatever happens afterwards: the address being
+    // readable is the harm, and every step below it is slower.
+    try {
+      await ctx.api.deleteMessage(ctx.chat!.id, msg.message_id);
+    } catch (err) {
+      console.warn('[launch] could not delete a wrong CA:', String((err as Error)?.message ?? err).slice(0, 120));
+    }
+
+    // An edit re-delivers a message already acted on, and the docs warn edits
+    // fire for unrelated field changes too. Counting that as a second offence
+    // would mute a first offender over one pasted address.
+    if (alreadyHandled(ctx.chat!.id, msg.message_id)) return;
+    markHandled(ctx.chat!.id, msg.message_id);
+    const n = recordOffence(userId);
+
+    const dm = dmChatFor(userId);
+    if (verdict.action === 'mute' || n > 1) {
+      const muted = await muteFor24h(ctx.api, ctx.chat!.id, userId);
+      if (dm !== null) await ctx.api.sendMessage(dm, muted ? GUARD_MUTED : GUARD_WARNING);
+      return;
+    }
+    if (dm !== null) await ctx.api.sendMessage(dm, GUARD_WARNING);
+  };
+
+  bot.on('message', caGuard);
+  bot.on('edited_message', caGuard);
+
+
   // Any private message means this user is reachable. Recorded here rather than
   // inferred from what they scanned: /help in a DM is just as good a proof of a
   // reachable chat as a scan, and inferring it told people who had already
@@ -1424,6 +1514,15 @@ export async function startBot(): Promise<void> {
   // default update set, and without it the invite-link attribution records
   // nothing while looking like it works.
   await bot.start({
-    allowed_updates: ['message', 'inline_query', 'callback_query', 'chat_member'],
+    // Every one of these is load bearing. chat_member is excluded from the
+    // default set entirely, so invite attribution records nothing without it.
+    // edited_message is a separate update type that 'message' does not cover,
+    // which is the hole a fake CA edited into an old message would go through.
+    // my_chat_member is how the bot learns it was demoted mid-launch, which
+    // silently disables the guard.
+    allowed_updates: [
+      'message', 'edited_message', 'inline_query', 'callback_query',
+      'chat_member', 'my_chat_member',
+    ],
   });
 }

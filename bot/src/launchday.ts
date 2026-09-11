@@ -196,6 +196,56 @@ export function guardVerdict(
 /** 24 hours, as Telegram wants it: an absolute unix second. */
 export const MUTE_SECONDS = Number(process.env.FAKE_CA_MUTE_SECONDS || 86_400) || 86_400;
 
+/**
+ * Every send permission ChatPermissions has, all off.
+ *
+ * All ten, not just can_send_messages. The implication rule runs one way only:
+ * leaving can_send_other_messages true re-grants can_send_messages, and the
+ * mute silently does nothing. Bot API 10.3, restrictChatMember, under
+ * use_independent_chat_permissions.
+ */
+const MUTED_PERMISSIONS = {
+  can_send_messages: false,
+  can_send_audios: false,
+  can_send_documents: false,
+  can_send_photos: false,
+  can_send_videos: false,
+  can_send_video_notes: false,
+  can_send_voice_notes: false,
+  can_send_polls: false,
+  can_send_other_messages: false,
+  can_add_web_page_previews: false,
+} as const;
+
+/**
+ * A 24 hour mute, with the until_date clamped.
+ *
+ * "If user is restricted for more than 366 days or less than 30 seconds from
+ * the current time, they are considered to be restricted forever." So a clock
+ * skew, a stale timestamp, or a misconfigured FAKE_CA_MUTE_SECONDS does not
+ * produce a short mute here, it produces a permanent one. The clamp is the
+ * difference between a 24 hour timeout and banning someone from the group for
+ * good over one pasted address.
+ *
+ * Supergroups only. restrictChatMember does not work in a basic group, which
+ * the preflight reports rather than discovering here.
+ */
+export async function muteFor24h(api: Api, chatId: number, userId: number, now = Date.now()): Promise<boolean> {
+  const nowSec = Math.floor(now / 1000);
+  const MIN = 60;                  // comfortably clear of the 30 second cliff
+  const MAX = 364 * 86_400;        // and of the 366 day one
+  const span = Math.min(MAX, Math.max(MIN, MUTE_SECONDS));
+  try {
+    await api.restrictChatMember(chatId, userId, MUTED_PERMISSIONS, {
+      until_date: nowSec + span,
+    });
+    return true;
+  } catch (err) {
+    console.warn(`[launch] mute failed: ${String((err as Error)?.message ?? err).slice(0, 120)}`);
+    return false;
+  }
+}
+
 export const GUARD_WARNING =
   'your message in the group was deleted: it had a contract address in it, and the launch has not happened yet. ' +
   'the only CA will be posted by this bot, pinned, 3 s after launch. post another address and you are muted for 24 h.';
@@ -213,6 +263,23 @@ export function recordOffence(userId: number): number {
   const n = offencesOf(userId) + 1;
   setSetting(`ca_offence:${userId}`, String(n));
   return n;
+}
+
+/**
+ * Has this exact message already been acted on?
+ *
+ * An edited_message update arrives for the same message id, and the docs warn
+ * it "may at times be triggered by changes to message fields that are either
+ * unavailable or not actively used by your bot" -- so the same message can
+ * surface repeatedly. Without this, editing a message twice would walk a first
+ * offender straight to a 24 hour mute for one pasted address.
+ */
+export function alreadyHandled(chatId: number, messageId: number): boolean {
+  return Boolean(getSetting(`ca_msg:${chatId}:${messageId}`));
+}
+
+export function markHandled(chatId: number, messageId: number, now = Date.now()): void {
+  setSetting(`ca_msg:${chatId}:${messageId}`, String(Math.floor(now / 1000)));
 }
 
 /** Is the fake-CA window open? From /launch set until the CA is pinned. */
