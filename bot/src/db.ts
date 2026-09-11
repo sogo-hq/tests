@@ -422,6 +422,53 @@ CREATE TABLE IF NOT EXISTS declare_drafts (
   started_at INTEGER NOT NULL
 );
 
+-- ---------------------------------------------------------------------------
+-- Group auto-reply.
+--
+-- OFF for every chat until an admin turns it on. The row exists only once a
+-- decision has been made, so "no row" and "off" are the same thing and a bot
+-- added to a new group scans nothing until asked.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS group_settings (
+  chat_id  INTEGER NOT NULL,
+  key      TEXT NOT NULL,
+  value    TEXT NOT NULL,
+  set_by   INTEGER,
+  set_at   INTEGER NOT NULL,
+  PRIMARY KEY (chat_id, key)
+);
+
+-- One row per (chat, address) the auto-reply has answered, so a token pasted
+-- five times in a minute costs one card rather than five.
+CREATE TABLE IF NOT EXISTS auto_replies (
+  chat_id   INTEGER NOT NULL,
+  address   TEXT NOT NULL,
+  last_at   INTEGER NOT NULL,
+  hits      INTEGER NOT NULL DEFAULT 1,
+  PRIMARY KEY (chat_id, address)
+);
+
+-- ---------------------------------------------------------------------------
+-- First callers.
+--
+-- Who put an address in front of a group first, and what the token was worth at
+-- that moment. A record, not a recommendation: the leaderboard states multiples
+-- from the call to the peak that followed it and never a profit, because a
+-- multiple is a fact about the token and a profit is a claim about somebody.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS first_calls (
+  chat_id    INTEGER NOT NULL,
+  token      TEXT NOT NULL,
+  user_id    INTEGER NOT NULL,
+  username   TEXT,
+  called_at  INTEGER NOT NULL,
+  -- Market cap in the quote asset, as wei, and the block it was read at.
+  mcap_quote TEXT,
+  block_number INTEGER,
+  PRIMARY KEY (chat_id, token)
+);
+CREATE INDEX IF NOT EXISTS idx_first_calls_chat ON first_calls(chat_id, called_at);
+
 CREATE TABLE IF NOT EXISTS cursors (
   name         TEXT PRIMARY KEY,
   block_number INTEGER NOT NULL,

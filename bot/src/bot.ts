@@ -55,6 +55,11 @@ import { concentrationCoverageLine } from './metrics/concentration.js';
 import { inlineDescription, footerLine, GROUP_HANDLE } from './card.js';
 import { db } from './db.js';
 import {
+  autoscanEnabled, setAutoscan, autoscanSetting, addressesIn, claimAutoReply,
+  everAnswered, AUTOSCAN_DEDUPE_MS,
+} from './autoscan.js';
+import { recordFirstCall, firstCallOf } from './firstcall.js';
+import {
   startDraft, answerDraft, draftOpen, clearDraft, signDraft, recentDeclarations,
   STEPS, DECLARE_PRICE, DECLARE_FREE_UNTIL, declarationCount,
   declarationLink, declarationOutcome, shortWallet, byId,
@@ -321,6 +326,35 @@ async function handleScan(ctx: Context, raw: string, full = false): Promise<void
   // the chat's memory, so a later bare /full detailed a token nobody had seen.
   if (parsed && (outcome.kind === 'ok' || outcome.kind === 'not_found')) {
     rememberToken(ctx.chat?.id, token);
+  }
+
+  /**
+   * Who put this address in front of this group first, and what it was worth.
+   *
+   * Groups only: a DM has one reader and there is nobody to be first in front
+   * of. Recorded on any route to a card, typed or automatic, because the person
+   * who pasted the address is the caller whether or not they also typed /scan.
+   * First writer wins and nothing overwrites it.
+   */
+  const callerId = ctx.from?.id;
+  const chatId = ctx.chat?.id;
+  if (
+    outcome.kind === 'ok' && parsed && chatId !== undefined && callerId !== undefined
+    && ctx.chat?.type !== 'private' && !ctx.from?.is_bot
+  ) {
+    try {
+      const mcap = BigInt(outcome.meta.mcapQuote || '0');
+      if (mcap > 0n) {
+        recordFirstCall({
+          chatId, token, userId: callerId,
+          username: ctx.from?.username ?? null,
+          mcapQuote: mcap, blockNumber: outcome.meta.blockNumber,
+        });
+      }
+    } catch (err) {
+      // A call that cannot be recorded is not a card that should fail.
+      console.warn('[firstcall] could not record:', String((err as Error)?.message ?? err).slice(0, 120));
+    }
   }
 
   // The image is opt-in and lives behind this button. It is never rendered
@@ -978,6 +1012,113 @@ export function createBot(token = TELEGRAM_BOT_TOKEN): Bot {
 
   bot.on('message', caGuard);
   bot.on('edited_message', caGuard);
+
+  /**
+   * Answer an address pasted in a group, when the group has asked to be.
+   *
+   * Registered after the fake-CA guard and before the commands, and it calls
+   * next() on every path it does not act on. Off in every group until an admin
+   * turns it on: a scanner that answers every address in every group it is in
+   * is an unsolicited poster, which is both how a bot gets removed and a thing
+   * nobody asked for.
+   *
+   * Never on an edit. An edited message re-delivers text already answered, and
+   * the docs warn edits fire for unrelated field changes too, so a card would
+   * arrive again for a typo fix.
+   */
+  const autoReply = async (ctx: Context, next: () => Promise<void>): Promise<void> => {
+    const msg = ctx.message;
+    const chatId = ctx.chat?.id;
+    if (!msg || chatId === undefined || ctx.chat?.type === 'private') {
+      await next();
+      return;
+    }
+    if (!autoscanEnabled(chatId)) {
+      await next();
+      return;
+    }
+    // Our own cards carry addresses, and so does anything posted through us.
+    if (msg.from?.is_bot || (msg as any).via_bot) {
+      await next();
+      return;
+    }
+    // A command is the bot's own surface and already does this explicitly.
+    if ([...(msg.entities ?? []), ...(msg.caption_entities ?? [])]
+      .some((e) => e.type === 'bot_command' && e.offset === 0)) {
+      await next();
+      return;
+    }
+
+    const found = addressesIn(msg);
+    if (!found.length) {
+      await next();
+      return;
+    }
+
+    // One card per message even when somebody pastes a list. The first address
+    // is the one they are talking about; the rest are noise or a rug of links.
+    const address = found[0]!;
+
+    // The launch room's pinned CA is answered once, ever. The countdown pins
+    // it, a hundred people quote it, and the group does not need a hundred
+    // cards, or one every ten minutes for a week.
+    const pinned = pinnedCa()?.toLowerCase() ?? null;
+    if (pinned && address === pinned && chatId === launchChat() && everAnswered(chatId, address)) {
+      await next();
+      return;
+    }
+
+    const kind = claimAutoReply(chatId, address);
+    if (kind === 'repeat') {
+      await ctx.reply(
+        `already scanned in the last ${Math.round(AUTOSCAN_DEDUPE_MS / 60_000)} min`,
+        {
+          reply_parameters: { message_id: msg.message_id, allow_sending_without_reply: true },
+          reply_markup: { inline_keyboard: [[{ text: 'Refresh', callback_data: `rf:${address}` }]] },
+        },
+      );
+      return;
+    }
+
+    await handleScan(ctx, address);
+    return;
+  };
+
+  bot.on('message', autoReply);
+
+  /**
+   * Turn the auto-reply on or off for this chat.
+   *
+   * Admins only, and per chat: one person deciding for one group is the whole
+   * consent model, and an ordinary member switching it on for everyone else
+   * would be the same unsolicited posting by another route.
+   */
+  bot.command('autoscan', async (ctx) => {
+    const userId = ctx.from?.id;
+    const chatId = ctx.chat?.id;
+    if (userId === undefined || chatId === undefined) return;
+    if (ctx.chat?.type === 'private') {
+      await ctx.reply('autoscan is a group setting. run it in the group, as an admin.');
+      return;
+    }
+    const arg = (ctx.match ?? '').toString().trim().toLowerCase();
+    const current = autoscanSetting(chatId);
+    if (arg !== 'on' && arg !== 'off') {
+      await replyEphemeral(ctx, `autoscan is ${current.on ? 'on' : 'off'}. /autoscan on, /autoscan off`, {});
+      return;
+    }
+    if (!(await isGroupAdmin(ctx, userId))) {
+      await replyEphemeral(ctx, 'an admin of this group turns autoscan on or off', {});
+      return;
+    }
+    setAutoscan(chatId, arg === 'on', userId);
+    await ctx.reply(
+      arg === 'on'
+        ? 'autoscan on. an address posted here gets a card, once per address per '
+          + `${Math.round(AUTOSCAN_DEDUPE_MS / 60_000)} min. /autoscan off to stop.`
+        : 'autoscan off. addresses posted here are ignored. /scan still works.',
+    );
+  });
 
 
   // Any private message means this user is reachable. Recorded here rather than
@@ -1997,6 +2138,23 @@ export function createBot(token = TELEGRAM_BOT_TOKEN): Bot {
   // Only the chat surfaces get the button. An inline result is posted into a
   // chat the bot may not be in, so a photo reply to it has nowhere to go.
   bot.callbackQuery(/^img:/, handleImageButton);
+
+  /**
+   * Re-scan on demand, from the button a repeat paste gets.
+   *
+   * The dedupe window stops a second CARD, not a second look: somebody who
+   * wants the current numbers presses this and gets them, which is the whole
+   * reason a repeat is answered at all rather than ignored.
+   */
+  bot.callbackQuery(/^rf:/, async (ctx) => {
+    const token = normaliseToken((ctx.callbackQuery?.data ?? '').slice(3));
+    if (!token) {
+      await ctx.answerCallbackQuery({ text: 'unrecognised token', show_alert: false });
+      return;
+    }
+    await ctx.answerCallbackQuery({ text: 'scanning…' });
+    await handleScan(ctx, token);
+  });
 
   /**
    * A bare address is treated as a scan in DMs only.

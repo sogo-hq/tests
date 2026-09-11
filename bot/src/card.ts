@@ -426,6 +426,14 @@ export interface CompactMeta {
   ageSeconds: number;
   /** The threshold that decided `early`, carried so cache lifetimes can match it. */
   earlyThresholdSeconds: number;
+  /**
+   * Market cap in the QUOTE asset, as a wei string, and the block it was read
+   * at. Carried so a first call can be recorded against what the token was
+   * worth at that moment without a second read, and so the number a
+   * leaderboard ranks on is the one the card showed.
+   */
+  mcapQuote: string;
+  blockNumber: number;
 }
 
 /** The N highest-severity raised flags. Undetermined flags are excluded. */
@@ -439,6 +447,8 @@ export function topRaisedFlags(r: ScanResult, n: number) {
 export function compactMeta(r: ScanResult): CompactMeta {
   const top = topRaisedFlags(r, 1)[0] ?? null;
   return {
+    mcapQuote: String(r.reads.mcapInQuote ?? 0n),
+    blockNumber: r.currentBlock,
     symbol: r.reads.symbol ? clamp(r.reads.symbol, MAX_TICKER) : null,
     // 'early' rather than the computed label: reporting 'none' for a token
     // nobody has had time to buy is the false negative this mode removes.

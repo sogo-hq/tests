@@ -347,6 +347,10 @@ function render(token: string, result: Awaited<ReturnType<typeof scanToken>>, bo
         symbol: null, traction: 'unknown', flagsRaised: 0, flagsTotal: 0,
         flagsUnknown: 0, topFlag: null, notFound: true, early: false, ageSeconds: 0,
         earlyThresholdSeconds: EARLY_WINDOW_SECONDS,
+        // An address the factory has no record of has no market cap, and zero
+        // is the right answer rather than a placeholder: nothing is worth
+        // nothing, and a first call is never recorded against one.
+        mcapQuote: '0', blockNumber: 0,
       },
     };
   }
