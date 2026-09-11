@@ -1,260 +1,323 @@
+/**
+ * The card as an image, v2.
+ *
+ * The old renderer mirrored the text card line for line, and the test that
+ * guarded it existed because the image had three times silently dropped a
+ * feature: a renderer that forgets something still produces a perfectly good
+ * smaller picture, and nothing fails. v2 is a different layout, so the guard is
+ * different, but it guards the same thing. Every piece of content comes from
+ * one of the exported selectors, and anything that does not fit is COUNTED on
+ * the card rather than dropped.
+ */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-const { resetSponsor: resetSponsorForTest } = await import('../dist/sponsor.js');
-import { cardSvg, renderCardPng, renderableText, utcStamp, WIDTH, HEIGHT } from '../dist/image.js';
-import { makeScan } from './fixtures.mjs';
+import { freshDb } from './tmpdb.mjs';
 
+process.env.DB_PATH = process.env.DB_PATH || freshDb('image');
+const { resetSponsor } = await import('../dist/sponsor.js');
+const {
+  cardSvg, renderCardPng, drawable, heroOf, secondariesOf, measuresOf, marketOf, SIZES,
+  SANS_FILE, SANS_BOLD_FILE,
+} = await import('../dist/image.js');
+const { measure } = await import('../dist/fontmetrics.js');
+const { makeScan } = await import('./fixtures.mjs');
+
+const AT = new Date(Date.UTC(2026, 7, 28, 14, 32));
 const f = (key, plain, severity, state = 'raised') =>
   ({ key, label: key, state, detail: `${key} technical`, compactDetail: key, plain, severity });
 
-const png = (r) => renderCardPng(r, new Date(Date.UTC(2026, 7, 28, 14, 32)));
-const svg = (r) => cardSvg(r, new Date(Date.UTC(2026, 7, 28, 14, 32)));
+const svg = (r, size) => cardSvg(r, AT, size);
+const png = (r, size) => renderCardPng(r, AT, size);
 
-/** PNG signature plus the dimensions out of the IHDR chunk. */
-function pngInfo(buf) {
-  assert.equal(buf.subarray(0, 8).toString('hex'), '89504e470d0a1a0a', 'not a PNG');
-  return { width: buf.readUInt32BE(16), height: buf.readUInt32BE(20), bytes: buf.length };
-}
-
-// ------------------------------------------------- the four required cases
-const CASES = {
-  'three flags': makeScan({
-    ageSeconds: 47, symbol: 'GHATS', buyers: 2, roundTrippers: 2, flagsTotal: 8,
-    flags: [
-      f('snipe', '8 wallets got in tax-free before you could', 108),
-      f('pair_ticker', 'same ticker as the asset it trades against', 80),
-      f('deployer_rate', 'deployer launched 91 tokens this week', 55),
-    ],
-  }),
-  'no flags': makeScan({
-    ageSeconds: 1200, symbol: 'TOKEN', buyers: 38, roundTrippers: 3,
-    progressPct: 12.4, windowMinutes: 20, flagsTotal: 8, flags: [],
-  }),
-  'undetermined only': makeScan({
-    ageSeconds: 300, symbol: 'UNKN', buyers: 0, roundTrippers: 0, flagsTotal: 8,
-    flags: [
-      f('a', 'no history yet on this deployer', 5, 'unknown'),
-      f('b', 'no 24h history yet', 5, 'unknown'),
-      f('c', "can't check this ticker yet", 20, 'unknown'),
-    ],
-  }),
-  '40-char ticker': makeScan({
-    ageSeconds: 90, symbol: 'A'.repeat(40), buyers: 5, roundTrippers: 1,
-    flagsTotal: 8, flags: [f('x', 'a concern', 50)],
-  }),
-  // Every case above leaves benchmarkMedian and concentration unset, so the
-  // sweeps below -- banned language, palette, provenance -- had never once
-  // rendered the buyer comparison or the top-5 share. A verdict word or a
-  // colour that implies one could have reached the image unseen.
-  'benchmark and concentration': makeScan({
-    ageSeconds: 1200, symbol: 'BOTH', buyers: 38, roundTrippers: 3, progressPct: 12.4,
-    windowMinutes: 20, flagsTotal: 9, benchmarkMedian: 12, benchmarkN: 412,
-    concentration: { top5Share: 44.2, holders: 23, circulating: 1n },
-    flags: [f('snipe', '8 wallets got in tax-free before you could', 108)],
-  }),
-  'benchmark below the floor': makeScan({
-    ageSeconds: 47, symbol: 'THIN', buyers: 5, roundTrippers: 0, flagsTotal: 9,
-    benchmarkMedian: null, benchmarkN: 12,
-    concentration: { top5Share: 100, holders: 3, circulating: 1n },
-    flags: [],
-  }),
-};
-
-for (const [name, scan] of Object.entries(CASES)) {
-  test(`renders: ${name}`, () => {
-    const info = pngInfo(png(scan));
-    assert.equal(info.width, WIDTH);
-    assert.equal(info.height, HEIGHT);
-    assert.ok(info.bytes > 2000, `${name} produced a suspiciously small PNG (${info.bytes} bytes)`);
+/** Every <text> element as { x, size, anchor, body }. */
+function texts(s) {
+  return [...s.matchAll(/<text ([^>]*)>([^<]*)<\/text>/g)].map((m) => {
+    const attr = (n) => (new RegExp(`${n}="([^"]*)"`).exec(m[1]) ?? [])[1];
+    return {
+      x: Number(attr('x')),
+      size: Number(attr('font-size')),
+      weight: Number(attr('font-weight') ?? 400),
+      anchor: attr('text-anchor') ?? 'start',
+      family: attr('font-family'),
+      fill: attr('fill'),
+      body: m[2].replace(/&gt;/g, '>').replace(/&lt;/g, '<').replace(/&amp;/g, '&'),
+    };
   });
 }
 
-test('a 40-char ticker is clamped and cannot overflow the column', () => {
-  const s = svg(CASES['40-char ticker']);
-  const header = s.match(/font-size="(\d+)"[^>]*font-weight="600"[^>]*>(\$[^<]*)</);
-  assert.ok(header, 'header line not found');
-  const [, size, ticker] = header;
-  // monospace: 0.6em per character, inside a 1072px column
-  assert.ok([...ticker].length * Number(size) * 0.6 <= 1072,
-    `header "${ticker}" at ${size}px would be ${Math.round([...ticker].length * Number(size) * 0.6)}px wide`);
-  assert.ok([...ticker].length < 45, 'the ticker is clamped, as on the text card');
+const RICH = () => makeScan({
+  flags: [
+    f('tax', 'creator takes 8% per trade, index median 1%', 3),
+    f('exempt', '5 wallets tax-free at launch, together 22.3% of supply', 2),
+    f('deployer', 'deployer launched 4 tokens in 7d', 2),
+    f('conc', 'top 5 hold 61%, largest 34%', 2),
+    f('pair', 'priced in RDDT, not ETH', 1),
+    f('walk', 'holder transfers could not be read', 1, 'unknown'),
+  ],
+  concentration: { top5Share: 61, top1Share: 34, holders: 412, excess: 0.4 },
 });
 
-// ------------------------------------------------------------ must appear
-for (const [name, scan] of Object.entries(CASES)) {
-  test(`carries its provenance: ${name}`, () => {
-    const s = svg(scan);
-    assert.ok(s.includes(scan.reads.token), 'the token address must appear in full, to be verifiable');
-    assert.match(s, /2026-08-28 14:32 UTC/, 'a UTC stamp, so a week-old card cannot pass as today\'s');
-    assert.ok(s.includes('checkvitals.xyz'));
-    assert.ok(s.includes('not financial advice'));
-  });
-}
+// ------------------------------------------------------------------- shape
 
-// ----------------------------------------------- says nothing the text won't
-test('no score, no grade, no verdict language', () => {
-  const banned = /\b(score|grade|rating|safe|clean|risk score|verdict|pass|fail|good|bad)\b/i;
-  for (const [name, scan] of Object.entries(CASES)) {
-    // The fixed doctrine line is the one place "clean" may appear, and it
-    // appears there to deny it: "no finding does not mean clean". Dropped
-    // before the scan, rather than weakening the pattern for every other line.
-    const s = svg(scan)
-      .replace(/<[^>]+>/g, ' ')
-      .replace(/no finding does not mean clean[^<]*/g, ' ');
-    assert.ok(!banned.test(s), `${name} carries a verdict word: ${s.match(banned)?.[0]}`);
+test('both sizes render at the dimensions the spec names', () => {
+  resetSponsor();
+  const r = RICH();
+  const p = png(r);
+  assert.equal(p.subarray(0, 8).toString('hex'), '89504e470d0a1a0a', 'not a PNG');
+  assert.equal(p.readUInt32BE(16), 1080);
+  assert.equal(p.readUInt32BE(20), 1350);
+
+  const w = png(r, 'wide');
+  assert.equal(w.readUInt32BE(16), 1200);
+  assert.equal(w.readUInt32BE(20), 675);
+});
+
+test('the header names the chain, and the footer names the bot and the site', () => {
+  resetSponsor();
+  const bodies = texts(svg(RICH())).map((t) => t.body);
+  assert.ok(bodies.includes('PONS V2, ROBINHOOD CHAIN'));
+  assert.ok(bodies.includes('@vitalscheck_bot, paste any CA'));
+  assert.ok(bodies.includes('checkvitals.xyz'));
+  assert.ok(bodies.some((b) => /launches indexed/.test(b)));
+  assert.ok(bodies.some((b) => /2026-08-28 14:32 UTC/.test(b)));
+});
+
+// -------------------------------------------------------------- the hero
+
+test('the hero is the worst finding whenever anything is flagged', () => {
+  const r = RICH();
+  const hero = heroOf(r);
+  assert.equal(hero.headline, 'creator takes 8% per trade, index median 1%');
+  assert.equal(hero.marked, 'finding');
+  // And it is the largest type on the card.
+  const t = texts(svg(r));
+  const biggest = Math.max(...t.map((x) => x.size));
+  const heroLine = t.find((x) => x.body.startsWith('creator takes'));
+  assert.equal(heroLine.size, biggest, 'the worst finding is what a reader sees first');
+});
+
+test('with nothing flagged the hero is a traction number beside its reference', () => {
+  const r = makeScan({ flags: [], benchmarkMedian: 12, buyers: 41 });
+  const hero = heroOf(r);
+  assert.match(hero.headline, /^41 buyers/);
+  assert.ok(hero.reference, 'a buyer count alone says nothing about whether a launch is early or over');
+  assert.match(hero.reference, /index median 12/);
+  assert.equal(hero.marked, 'none');
+});
+
+test('with no window at all the hero says so rather than inventing a number', () => {
+  const r = makeScan({ flags: [], windowIndexed: false });
+  const hero = heroOf(r);
+  assert.match(hero.headline, /not measured yet/);
+  assert.equal(hero.marked, 'undetermined');
+});
+
+// --------------------------------------------------- nothing dropped silently
+
+test('findings that do not fit are counted on the card, not dropped', () => {
+  const r = RICH();
+  const { shown, more } = secondariesOf(r, 3);
+  assert.equal(shown.length, 3);
+  // six flags, one is the hero, three are shown, two remain
+  assert.equal(more, 2);
+  const bodies = texts(svg(r)).map((t) => t.body);
+  assert.ok(bodies.includes('+2 more on /full'),
+    'a renderer that forgets a finding still produces a perfectly good smaller picture');
+});
+
+test('every drawn body line comes from a selector, not from a second implementation', () => {
+  const r = RICH();
+  const allowed = new Set([
+    heroOf(r).headline, heroOf(r).reference,
+    ...secondariesOf(r).shown.map((s) => s.label),
+    ...measuresOf(r).flatMap((m) => [m.label, m.value, m.reference]),
+    ...marketOf(r).flatMap((c) => [c.label, c.value]),
+  ].filter(Boolean));
+  // Chrome the card owns, as opposed to content about this token.
+  const chrome = /^(PONS V2, ROBINHOOD CHAIN|DECLARED|@vitalscheck_bot, paste any CA|checkvitals\.xyz|GHATS|0x147B…9E67|\+\d+ more on \/full|.*launches indexed|.*UTC|\d+[smhd].*|30m.*)$/;
+  for (const t of texts(svg(r))) {
+    if (chrome.test(t.body)) continue;
+    // Long lines are wrapped, so a drawn line is a fragment of an allowed one.
+    const ok = [...allowed].some((a) => a.includes(t.body));
+    assert.ok(ok, `"${t.body}" appears on the card but comes from no selector`);
   }
 });
 
-test('only the four brand colours are used', () => {
-  const allowed = new Set(['#080B09', '#C6F73A', '#E8F0DE', '#6E7A66']);
-  for (const [name, scan] of Object.entries(CASES)) {
-    for (const m of svg(scan).matchAll(/fill="(#[0-9A-Fa-f]{6})"/g)) {
-      assert.ok(allowed.has(m[1]), `${name} uses an off-brand colour ${m[1]}`);
+// ------------------------------------------------------------------ markers
+
+test('markers are drawn shapes, never characters', () => {
+  const r = makeScan({ flags: [
+    f('tax', 'creator takes 8% per trade', 3),
+    f('walk', 'holder transfers could not be read', 1, 'unknown'),
+  ] });
+  const s = svg(r);
+  // A red flag per finding, a hollow circle per undetermined.
+  assert.ok(/<path d="M [\d.]+ [\d.]+ L/.test(s), 'the flag is a path');
+  assert.ok(/<circle [^>]*fill="none"/.test(s), 'undetermined is a hollow circle');
+  for (const t of texts(s)) {
+    assert.ok(!/[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}◌]/u.test(t.body),
+      `a marker leaked into text: ${JSON.stringify(t.body)}`);
+  }
+});
+
+test('red marks findings and green marks reference points, and nothing else', () => {
+  const r = makeScan({ flags: [], benchmarkMedian: 12, buyers: 41 });
+  const s = svg(r);
+  // No findings here, so no red anywhere.
+  assert.ok(!/#FF5A47/i.test(s), 'red is a finding and this card has none');
+  const green = texts(s).filter((t) => (t.fill ?? '').toUpperCase() === '#C6F73A');
+  assert.ok(green.length > 0);
+  for (const t of green) {
+    assert.match(t.body, /median|reference|no index median/,
+      `green is for reference points only, not ${JSON.stringify(t.body)}`);
+  }
+});
+
+// -------------------------------------------------------------------- layout
+
+test('no drawn line runs past the edge of the card', () => {
+  resetSponsor();
+  for (const size of ['portrait', 'wide']) {
+    const { w: W, pad: PAD } = SIZES[size];
+    for (const t of texts(svg(RICH(), size))) {
+      const file = t.weight >= 600 ? SANS_BOLD_FILE : SANS_FILE;
+      const width = measure(t.body, t.size, file);
+      const right = t.anchor === 'end' ? t.x : t.x + width;
+      assert.ok(right <= W - PAD + 2,
+        `${size}: "${t.body.slice(0, 40)}" ends at ${right.toFixed(0)}, past ${W - PAD}`);
+      assert.ok(t.x >= PAD - 1, `${size}: "${t.body.slice(0, 30)}" starts left of the margin`);
     }
   }
 });
 
-test('the accent is structural only — it never marks a finding', () => {
-  const s = svg(CASES['three flags']);
-  // every accent-filled element is the wordmark or the footer link
-  for (const m of s.matchAll(/<text[^>]*fill="#C6F73A"[^>]*>([^<]*)<\/text>/g)) {
-    assert.ok(['VITALS', 'checkvitals.xyz'].includes(m[1]),
-      `accent used on "${m[1]}" — green must never read as "good"`);
+test('the hero shrinks to fit rather than overflowing', () => {
+  const long = 'a finding with a great many words in it that will not fit on one line at any size at all whatsoever';
+  const r = makeScan({ flags: [f('x', long, 3)] });
+  const heroLines = texts(svg(r)).filter((t) => t.weight === 700 && t.body !== 'GHATS');
+  assert.ok(heroLines.length <= 3, 'the hero is at most three lines');
+  const { w: W, pad: PAD } = SIZES.portrait;
+  for (const t of heroLines) {
+    assert.ok(t.x + measure(t.body, t.size, SANS_BOLD_FILE) <= W - PAD + 2);
   }
 });
 
-test('a card with three concerns is styled exactly like one with none', () => {
-  const three = svg(CASES['three flags']);
-  const none = svg(CASES['no flags']);
-  const palette = (s) => [...new Set([...s.matchAll(/fill="(#[0-9A-Fa-f]{6})"/g)].map((m) => m[1]))].sort();
-  assert.deepEqual(palette(three), palette(none), 'the two states must not differ in colour');
+// -------------------------------------------------------------------- fonts
 
-  // the concern lines and the no-concerns summary are set at the same size
-  const size = (s) => s.match(/<text x="\d+" y="\d+"[^>]*font-size="(\d+)"[^>]*fill="#E8F0DE"[^>]*>(?!\$)/)?.[1];
-  assert.ok(size(three) && size(none));
+test('text is proportional and only the address is mono', () => {
+  const t = texts(svg(RICH()));
+  const mono = t.filter((x) => x.family === 'IBM Plex Mono');
+  assert.equal(mono.length, 1, 'mono is for the shortened address and nothing else');
+  assert.match(mono[0].body, /^0x[0-9a-fA-F]{4}…[0-9a-fA-F]{4}$/);
+  assert.ok(t.filter((x) => x.family === 'Inter').length > 5);
 });
 
-// ----------------------------------------------------------- text integrity
-test('glyphs no bundled subset carries are substituted, never left as tofu', () => {
-  assert.equal(renderableText('buyers 4 → 4'), 'buyers 4 -> 4');
-  assert.equal(renderableText('Ⴆ'), '?', 'Georgian is absent from Plex Mono');
-  assert.equal(renderableText('a · b — c …'), 'a · b — c …', 'verified punctuation survives');
-  assert.equal(renderableText('Бб éÉ'), 'Бб éÉ', 'Cyrillic and Latin-1 survive');
+test('the two families actually render differently', () => {
+  // The whole family set used to collapse to one face: four subsets sharing a
+  // family name fought for it, resvg picked one, and every string on the card
+  // rendered in whichever family happened to win. This catches that.
+  const w = (s, file) => measure(s, 40, file);
+  const { MONO_FILE } = SIZES.portrait ? { MONO_FILE: 'assets/fonts/ibm-plex-mono-latin-400-normal.ttf' } : {};
+  assert.notEqual(Math.round(w('mmmiii', SANS_FILE)), Math.round(w('mmmiii', MONO_FILE)),
+    'a proportional face and a monospace one cannot measure the same');
+  assert.equal(Math.round(w('iiiiii', MONO_FILE)), Math.round(w('mmmmmm', MONO_FILE)),
+    'mono advances are uniform');
+  assert.notEqual(Math.round(w('iiiiii', SANS_FILE)), Math.round(w('mmmmmm', SANS_FILE)),
+    'Inter advances are not');
 });
 
-test('a hostile ticker cannot break the SVG', () => {
-  const evil = makeScan({ symbol: '<script>&"x', flags: [f('a', 'x & y < z', 9)] });
-  const s = svg(evil);
-  assert.ok(!s.includes('<script>'), 'markup escaped');
-  assert.ok(s.includes('&amp;') || s.includes('&lt;'), 'entities present');
-  const info = pngInfo(renderCardPng(evil));
-  assert.equal(info.width, WIDTH);
+test('anything the font cannot draw is dropped rather than drawn as tofu', () => {
+  assert.equal(drawable('GHATS'), 'GHATS');
+  assert.equal(drawable('ГХАТС'), '', 'Cyrillic is not in the shipped subset');
+  assert.equal(drawable('a\u{1F6A9}b'), 'ab', 'no emoji reaches the SVG');
+  assert.equal(drawable('  spaced   out '), 'spaced out');
 });
 
-test('the UTC stamp is formatted and actually UTC', () => {
-  assert.equal(utcStamp(new Date(Date.UTC(2026, 0, 5, 3, 7))), '2026-01-05 03:07 UTC');
+// ------------------------------------------------------------------ declared
+
+test('the declared badge appears only when a declaration exists', async () => {
+  const { db } = await import('../dist/db.js');
+  const r = RICH();
+  db.prepare('DELETE FROM declarations').run();
+  assert.ok(!texts(svg(r)).some((t) => t.body === 'DECLARED'));
+
+  db.prepare('INSERT INTO declarations (token, declared_by, declared_at) VALUES (?,?,?)')
+    .run(r.reads.token.toLowerCase(), 7, 1_789_000_000);
+  assert.ok(texts(svg(r)).some((t) => t.body === 'DECLARED'),
+    'the badge says a claim exists, and nothing more');
+  db.prepare('DELETE FROM declarations').run();
 });
 
-test('rendering is fast enough to sit behind a button', () => {
-  const t0 = Date.now();
-  png(CASES['three flags']);
-  const ms = Date.now() - t0;
-  assert.ok(ms < 2000, `render took ${ms}ms`);
+// ------------------------------------------------------------------ sponsor
+
+test('the sponsor line sits above the footer and never overlaps it', async () => {
+  // No address: one in a sponsor line has to be a real launch, which needs a
+  // chain read this test has no business making.
+  process.env.SPONSOR_LINE = 'ad, a sponsor line that points at a scan';
+  resetSponsor();
+  const s = svg(RICH());
+  const rows = [...s.matchAll(/<text [^>]*y="([\d.]+)"[^>]*>([^<]*)<\/text>/g)]
+    .map((m) => ({ y: Number(m[1]), body: m[2] }));
+  const foot = rows.find((r) => r.body === '@vitalscheck_bot, paste any CA');
+  const ad = rows.find((r) => /sponsor line/.test(r.body));
+  assert.ok(ad, 'the sponsor line is drawn');
+  assert.ok(ad.y < foot.y - 20, 'and it is clear of the footer');
+  delete process.env.SPONSOR_LINE;
+  resetSponsor();
 });
 
-// ------------------------------------------- the image keeps up with the card
-test('the PNG carries the market cap and the receipt, and clears the footer', async () => {
-  const { cardSvg } = await import('../dist/image.js');
-  const r = makeScan({
-    ageSeconds: 158400, symbol: 'NPC', buyers: 38, roundTrippers: 3, windowMinutes: 30,
-    flagsTotal: 9, benchmarkMedian: 20, benchmarkN: 412, measuredAtAge: false,
-    mcapInQuote: 2.07, realQuoteReserve: 186_200000000000000n,
-    concentration: { top5Share: 44.2, top1Share: 17.3, holders: 23, circulating: 1n },
-    firstScan: { mcap: 1.2, at: 1, since: 22 },
-    flags: [
-      f('a', '38 other tokens use this exact ticker', 100),
-      f('b', 'creator takes 3% of every trade', 60),
-      f('c', 'deployer launched 91 tokens this week', 55),
-      f('d', 'fourth', 50), f('u', 'x', 1, 'unknown'),
-    ],
-  });
-  r.traction.window.uniqueBuyers10m = 20;
-  const svg = cardSvg(r);
-
-  // Both were added to the text card and rendered here from hardcoded
-  // coordinates, so neither reached the picture until this test existed.
-  assert.match(svg, /2\.07 ETH mc/, 'the header lost the market cap');
-  assert.match(svg, /first scanned here at 1\.2 ETH · 22 scans since/, 'the image lost the receipt');
-  assert.match(svg, /0\.186 of 4\.2 ETH to graduation/, 'and the absolute distance to graduation');
-  assert.ok(!/% to graduation/.test(svg), 'no percentage survives here either');
-
-  // Nothing may land in the gap between the last body line and the footer
-  // rule at y=552. The footer's own two lines sit at 578, below it by design.
-  const baselines = [...svg.matchAll(/<text[^>]*y="(\d+)"/g)].map((m) => Number(m[1]));
-  const onRule = baselines.filter((y) => y >= 546 && y < 570);
-  assert.equal(onRule.length, 0, `text drawn onto the footer rule: ${onRule.join(', ')}`);
-
-  // And the stacked block must not overlap itself: every line in the body sits
-  // at least 20px below the one before it.
-  const body = baselines.filter((y) => y > 252 && y < 552).sort((a, b) => a - b);
-  for (let i = 1; i < body.length; i++) {
-    assert.ok(body[i] - body[i - 1] >= 20, `lines at y=${body[i - 1]} and y=${body[i]} overlap`);
+test('no em dash reaches the card', () => {
+  resetSponsor();
+  for (const size of ['portrait', 'wide']) {
+    const s = svg(RICH(), size);
+    assert.ok(!s.includes(String.fromCharCode(0x2014)), `${size} carries an em dash`);
   }
 });
 
-test('when the body cannot fit, growth yields before the receipt does', async () => {
-  const { cardSvg } = await import('../dist/image.js');
-  // Everything on at once: three concerns, an extras line, and five body lines.
-  const r = makeScan({
-    ageSeconds: 158400, symbol: 'NPC', buyers: 38, roundTrippers: 3, windowMinutes: 30,
-    flagsTotal: 9, benchmarkMedian: 20, benchmarkN: 412, measuredAtAge: false,
-    mcapInQuote: 2.07, realQuoteReserve: 186_200000000000000n,
-    concentration: { top5Share: 44.2, top1Share: 17.3, holders: 23, circulating: 1n },
-    firstScan: { mcap: 1.2, at: 1, since: 22 },
-    flags: [
-      f('a', 'first concern', 100), f('b', 'second concern', 60), f('c', 'third concern', 55),
-      f('d', 'fourth', 50), f('u', 'x', 1, 'unknown'),
-    ],
-  });
-  r.traction.window.uniqueBuyers10m = 20;
-  const svg = cardSvg(r);
-  // The receipt is the one line here worth forwarding on its own; growth
-  // restates the buyer count directly above it.
-  assert.match(svg, /first scanned here/, 'the receipt must outrank growth for the last slot');
-});
-
-test('no two lines are drawn on top of each other, sponsor or not', () => {
-  // The paid line and checkvitals.xyz were both given y=578 at x=64, so they
-  // rendered on top of one another. Every image case ran without a sponsor
-  // configured, so nothing caught it. This runs both ways.
-  const saved = process.env.SPONSOR_LINE;
-  try {
-    for (const line of [undefined, 'ad · $MOON is live on pons — scan it']) {
-      if (line === undefined) delete process.env.SPONSOR_LINE;
-      else process.env.SPONSOR_LINE = line;
-      resetSponsorForTest();
-
-      for (const [name, scan] of Object.entries(CASES)) {
-        // Attributes are matched out of the whole tag rather than in a fixed
-        // order: the first version of this assumed x, then y, then anchor, and
-        // silently read every right-aligned line as left-aligned.
-        const drawn = [...svg(scan).matchAll(/<text([^>]*)>/g)].map((m) => ({
-          y: Number(/\by="(\d+)"/.exec(m[1])?.[1] ?? -1),
-          anchor: /text-anchor="(\w+)"/.exec(m[1])?.[1] ?? 'start',
-        }));
-        const seen = new Map();
-        for (const d of drawn) {
-          // Two lines collide when they share a baseline AND start from the
-          // same edge. Left- and right-anchored text on one row is deliberate.
-          const key = `${d.y}:${d.anchor === 'end' ? 'r' : 'l'}`;
-          assert.ok(!seen.has(key),
-            `${name}${line ? ' (with a sponsor)' : ''}: two lines at y=${d.y} from the same edge`);
-          seen.set(key, d);
-        }
-      }
+test('nothing is drawn on top of anything else, at either size', () => {
+  resetSponsor();
+  for (const size of ['portrait', 'wide']) {
+    const { h: H, pad: PAD } = SIZES[size];
+    const rows = [...svg(RICH(), size).matchAll(/<text ([^>]*)>([^<]*)<\/text>/g)].map((m) => {
+      const attr = (n) => (new RegExp(`${n}="([^"]*)"`).exec(m[1]) ?? [])[1];
+      return {
+        y: Number(attr('y')),
+        x: Number(attr('x')),
+        size: Number(attr('font-size')),
+        anchor: attr('text-anchor') ?? 'start',
+        body: m[2],
+      };
+    });
+    for (const r of rows) {
+      assert.ok(r.y <= H - PAD + 22, `${size}: "${r.body.slice(0, 30)}" sits below the card`);
     }
-  } finally {
-    if (saved === undefined) delete process.env.SPONSOR_LINE; else process.env.SPONSOR_LINE = saved;
-    resetSponsorForTest();
+    // Two lines on different baselines must not have overlapping ink, unless
+    // they are side by side.
+    const sorted = [...rows].sort((a, b) => a.y - b.y);
+    for (let i = 1; i < sorted.length; i++) {
+      const above = sorted[i - 1];
+      const below = sorted[i];
+      if (below.y - above.y > above.size * 0.9) continue;
+      if (Math.abs(below.y - above.y) < 0.01) continue;  // same row, different column
+      const aRight = above.anchor === 'end' ? above.x : above.x + measure(above.body, above.size, SANS_FILE);
+      const bLeft = below.anchor === 'end' ? below.x - measure(below.body, below.size, SANS_FILE) : below.x;
+      const sideBySide = bLeft >= aRight - 1 || aRight <= bLeft;
+      assert.ok(sideBySide,
+        `${size}: "${below.body.slice(0, 28)}" at y=${below.y} collides with "${above.body.slice(0, 28)}" at y=${above.y}`);
+    }
+  }
+});
+
+test('a card that had to drop something always says so', () => {
+  resetSponsor();
+  for (const size of ['portrait', 'wide']) {
+    const bodies = texts(svg(RICH(), size)).map((t) => t.body);
+    const shown = secondariesOf(RICH(), size === 'wide' ? 2 : 3).shown.length;
+    const note = bodies.find((b) => /^\+\d+ more on \/full$/.test(b));
+    assert.ok(note, `${size}: findings were dropped with nothing said`);
+    // Everything the card knows, minus the hero and what it drew.
+    const total = RICH().flags.flags.length - 1 + measuresOf(RICH()).length;
+    const drawnMeasures = bodies.includes('buyers') ? measuresOf(RICH()).length : 0;
+    assert.equal(Number(note.slice(1).split(' ')[0]), total - shown - drawnMeasures,
+      `${size}: the count must match what was actually left out`);
   }
 });

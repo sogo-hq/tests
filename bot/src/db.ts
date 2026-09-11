@@ -370,6 +370,17 @@ CREATE TABLE IF NOT EXISTS premium_payments (
 );
 CREATE INDEX IF NOT EXISTS idx_premium_wallet ON premium_payments(wallet);
 
+-- A launch its team has declared to this bot.
+--
+-- The card shows a badge when a row exists here and nothing when it does not,
+-- which is the whole contract: a declaration is a claim somebody made, never a
+-- judgement this bot formed, and the badge says only that the claim exists.
+CREATE TABLE IF NOT EXISTS declarations (
+  token       TEXT PRIMARY KEY,
+  declared_by INTEGER NOT NULL,
+  declared_at INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS cursors (
   name         TEXT PRIMARY KEY,
   block_number INTEGER NOT NULL,

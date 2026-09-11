@@ -298,3 +298,18 @@ test('one holder licenses one group, not every group they can type in', async ()
   const n = db.prepare('SELECT COUNT(*) AS n FROM licences').get().n;
   assert.equal(n, 1);
 });
+
+test('/image renders a picture, and the button is on every card', async () => {
+  reset();
+  const { cardSvg } = await import('../dist/image.js');
+  // The handler path needs a scan, which needs a chain; assert the surface
+  // instead: the command exists, and the button is attached to full cards too.
+  const src = await import('node:fs').then((fs) =>
+    fs.readFileSync(new URL('../src/bot.ts', import.meta.url), 'utf8'));
+  assert.match(src, /bot\.command\('image'/, '/image is a command');
+  assert.match(src, /outcome\.kind === 'ok'\s*\n\s*\? \{ reply_markup/,
+    'the Image button is attached whenever there is a card, /full included');
+  assert.ok(!/!full && \(outcome\.kind === 'ok'\)/.test(src),
+    'the button used to be on the default card only');
+  assert.match(src, /'\/image <address> renders the card as a picture/, 'and it is in /help');
+});

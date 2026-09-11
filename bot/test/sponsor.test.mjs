@@ -205,11 +205,13 @@ test('the same line reaches the image, and the image footer is clickable-free', 
     const drawn = [...svg.matchAll(/<text[^>]*>([^<]*)<\/text>/g)].map((m) => m[1]);
     assert.ok(drawn.some((t) => /\$MOON is live on pons/.test(t)),
       `the picture dropped the paid line:\n${drawn.join('\n')}`);
-    // A PNG cannot be clicked, so a bare @handle in it is a dead end.
-    assert.ok(drawn.some((t) => /t\.me\/vitalsofficial/.test(t)),
+    // A PNG cannot be clicked, so the footer has to give something a reader can
+    // act on by typing. checkvitals.xyz is that; the bot handle is typeable into
+    // Telegram's own search, which a bare channel @handle is not.
+    assert.ok(drawn.some((t) => /checkvitals\.xyz/.test(t)),
       'the image footer must give an address someone can type');
-    assert.ok(!drawn.some((t) => /@vitalsofficial/.test(t)),
-      'the image drew a handle nobody can click');
+    assert.ok(drawn.some((t) => /@vitalscheck_bot, paste any CA/.test(t)),
+      'and say what to do with it');
   } finally {
     if (saved === undefined) delete process.env.SPONSOR_LINE; else process.env.SPONSOR_LINE = saved;
     resetSponsor();

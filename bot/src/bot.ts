@@ -151,6 +151,7 @@ const HELP = [
   '  • Inline: type @BOTNAME <address> in any chat',
   '',
   '/full <address> adds the technical detail behind every line.',
+  '/image <address> renders the card as a picture, for sharing outside Telegram.',
   '/stats shows what has been indexed.',
   '',
   'Launch readiness:',
@@ -293,7 +294,7 @@ async function handleScan(ctx: Context, raw: string, full = false): Promise<void
   // The image is opt-in and lives behind this button. It is never rendered
   // automatically: it is slower than the text and most people do not want it.
   const withImage =
-    !full && (outcome.kind === 'ok')
+    outcome.kind === 'ok'
       ? { reply_markup: { inline_keyboard: [[{ text: 'Image', callback_data: `img:${token}` }]] } }
       : {};
   await deliver(ctx, notice, messageFor(outcome, full), { ...replyOpts, ...withImage }, full);
@@ -1150,6 +1151,48 @@ export function createBot(token = TELEGRAM_BOT_TOKEN): Bot {
     }
     const gone = removeWatch(userId, address);
     await ctx.reply(gone ? `stopped watching ${address.slice(0, 6)}…${address.slice(-4)}` : 'not watching that address');
+  });
+
+  /**
+   * The card as an image, asked for directly.
+   *
+   * The same render the button produces; this exists because somebody sharing a
+   * card elsewhere wants the picture first, not the text and then a tap.
+   */
+  bot.command('image', async (ctx) => {
+    const raw = (ctx.match ?? '').toString().trim();
+    const token = normaliseToken(raw) ?? recallToken(ctx.chat?.id);
+    if (!token) {
+      await replyOrPrompt(ctx, 'send a pons v2 token address: /image 0x…');
+      return;
+    }
+    const source = sourceOf(ctx);
+    const premiumRender = ctx.from?.id !== undefined
+      && atLeast(await effectiveTier(ctx.from.id), 'premium');
+    try {
+      const res = await scanImage({
+        token,
+        source,
+        userId: ctx.from?.id,
+        chatId: ctx.chat?.id,
+        quotaKey: quotaIdentity(ctx),
+        unlimited: premiumRender,
+        botUsername: usernameOf(ctx),
+      });
+      if (res.kind !== 'ok') {
+        await ctx.reply(messageFor(res.outcome, false));
+        return;
+      }
+      rememberToken(ctx.chat?.id, token);
+      await ctx.replyWithPhoto(new InputFile(res.png, `vitals-${token.slice(0, 10)}.png`), {
+        reply_parameters: ctx.message
+          ? { message_id: ctx.message.message_id, allow_sending_without_reply: true }
+          : undefined,
+      });
+    } catch (err) {
+      console.error(`[image] render failed for ${token}:`, err);
+      await ctx.reply(SCAN_FAILED);
+    }
   });
 
   // ------------------------------------------------------------------ tiers
@@ -2030,6 +2073,7 @@ export async function startBot(existing?: Bot): Promise<void> {
 
   await bot.api.setMyCommands([
     { command: 'scan', description: 'What the chain shows about a pons v2 launch' },
+    { command: 'image', description: 'The card as a picture, for sharing' },
     { command: 'legend', description: 'What the markers on a card mean' },
     { command: 'ready', description: 'How many wallets are ready for launch' },
     { command: 'holder', description: 'Link the wallet that holds your $VITALS' },
