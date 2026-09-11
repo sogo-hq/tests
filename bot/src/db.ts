@@ -303,6 +303,59 @@ CREATE TABLE IF NOT EXISTS ready_snapshots (
   wei     TEXT NOT NULL
 );
 
+-- Proof that a Telegram user controls a wallet.
+--
+-- Separate from ready_wallets on purpose: that table records who an ADMIN says
+-- is ready, which is a statement about the launch, while this one records a
+-- signature the holder produced. A tier is access, so it needs the second kind
+-- even when the first already names the same address.
+CREATE TABLE IF NOT EXISTS holder_links (
+  user_id   INTEGER PRIMARY KEY,
+  wallet    TEXT NOT NULL,
+  method    TEXT NOT NULL CHECK (method IN ('signature','transfer')),
+  linked_at INTEGER NOT NULL
+);
+-- One wallet, one holder. Without this, one whale's balance grants a tier to
+-- everybody who names it.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_holder_wallet ON holder_links(wallet);
+
+-- Outstanding link challenges. One per user; issuing a new one retires the old.
+CREATE TABLE IF NOT EXISTS holder_nonces (
+  user_id   INTEGER PRIMARY KEY,
+  nonce     TEXT NOT NULL,
+  issued_at INTEGER NOT NULL
+);
+
+-- Time-boxed access that does not depend on a balance.
+CREATE TABLE IF NOT EXISTS tier_grants (
+  user_id    INTEGER PRIMARY KEY,
+  tier       TEXT NOT NULL,
+  expires_at INTEGER NOT NULL,
+  source     TEXT NOT NULL CHECK (source IN ('payment','admin')),
+  granted_at INTEGER NOT NULL
+);
+
+-- Holder feed subscriptions. DM only; there is no chat id here by design.
+CREATE TABLE IF NOT EXISTS feed_subs (
+  user_id    INTEGER PRIMARY KEY,
+  filters    TEXT,
+  paused     INTEGER NOT NULL DEFAULT 0,
+  -- The last launch this user was actually sent, and how many were skipped
+  -- because they were too far behind to catch up.
+  last_sent  INTEGER NOT NULL DEFAULT 0,
+  missed     INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL
+);
+
+-- A DESK holder's one group licence.
+CREATE TABLE IF NOT EXISTS licences (
+  chat_id    INTEGER PRIMARY KEY,
+  user_id    INTEGER NOT NULL,
+  granted_at INTEGER NOT NULL
+);
+-- One licence per holder, not one per group they can type in.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_licence_user ON licences(user_id);
+
 -- Premium paid for, not held.
 --
 -- Keyed on the transaction hash so one payment entitles one wallet once: a hash
