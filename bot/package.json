@@ -3,9 +3,12 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
+  "engines": {
+    "node": "22.x"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "start": "node dist/index.js",
+    "start": "node dist/index.js bot",
     "bot": "node dist/index.js bot",
     "backfill": "node dist/index.js backfill",
     "index": "node dist/index.js index",
