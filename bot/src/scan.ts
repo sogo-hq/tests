@@ -311,20 +311,47 @@ async function ensureLaunchRow(
  * closed for every launch but the newest. A row that already has it is skipped,
  * so a rescan costs nothing.
  */
-async function ensureOpeningShares(reads: TokenReads, launchBlock: number): Promise<void> {
+async function ensureOpeningShares(reads: TokenReads, launch: LaunchLocation): Promise<void> {
   const token = reads.token.toLowerCase();
   const row = db
-    .prepare('SELECT exempt_open_pct FROM launches WHERE token = ?')
-    .get(token) as { exempt_open_pct: number | null } | undefined;
+    .prepare('SELECT exempt_open_pct, snipe_exemption_count, exemption_source FROM launches WHERE token = ?')
+    .get(token) as
+    | { exempt_open_pct: number | null; snipe_exemption_count: number | null; exemption_source: string | null }
+    | undefined;
   if (row && row.exempt_open_pct !== null) return;
   if (reads.totalSupply <= 0n) return;
+
+  /**
+   * A window is only worth reading where the launch actually is.
+   *
+   * An estimated launch block puts the forty-block window somewhere near the
+   * launch rather than on it, and a window that misses returns zeros that look
+   * exactly like a launch where nothing happened: measured, reading CHIPPER a
+   * hundred blocks late reported a 0.00% creator buy and no exemptions for a
+   * launch that exempted nine wallets holding 17.4% of supply.
+   *
+   * The trades indexer already refuses to claim coverage for an estimated
+   * block, for the same reason and with the same consequence -- a figure that
+   * enters the index as though it had been measured exactly. This is the other
+   * half of that guard.
+   */
+  if (launch.source === 'curve' || launch.uncertaintyBlocks > 0) {
+    console.log(
+      `[opening] not reading shares for ${token.slice(0, 10)}: launch block was estimated `
+      + `(source=${launch.source}, +/-${launch.uncertaintyBlocks} blocks)`,
+    );
+    return;
+  }
 
   const { readOpeningWindow } = await import('./metrics/opening.js');
   const w = await readOpeningWindow({
     curve: reads.curve,
     deployer: reads.deployer,
     totalSupply: reads.totalSupply,
-    fromBlock: BigInt(launchBlock),
+    fromBlock: BigInt(launch.block),
+    // What the receipt already counted, so a window that missed the launch can
+    // say so instead of reporting its zeros as a measurement.
+    expectExemptions: row?.exemption_source === 'logs' ? row.snipe_exemption_count : null,
   });
   // A partial window is not a measurement. Left NULL, which reads as
   // undetermined rather than as a small share.
@@ -393,7 +420,9 @@ async function scanTokenInner(token: string, requestedBy?: number): Promise<Scan
   // NOT NULL. The snipe-exemption check then reports undetermined, which is
   // true -- the creation transaction has not been read.
   if (launch.txHash) await timer.time('launchRow', () => ensureLaunchRow(reads, { ...launch, txHash: launch.txHash! }));
-  await timer.time('openingShares', () => ensureOpeningShares(reads, launch.block));
+  // After ensureLaunchRow, so the receipt's exemption count is on the row and
+  // can be used to check that the window covered the launch.
+  await timer.time('openingShares', () => ensureOpeningShares(reads, launch));
 
   // Index the measurement window. Capped at the 30-minute window even for old
   // tokens, because that is the window every traction metric is defined over.

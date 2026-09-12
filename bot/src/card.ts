@@ -58,12 +58,22 @@ export function age(seconds: number): string {
 /**
  * The single strongest observed signal. This describes what the measured window
  * contains -- it is never a projection.
+ *
+ * `onCurve` decides whether progress toward graduation is a candidate at all.
+ * It is not, once the token has graduated: the opening window's progress is a
+ * true statement about a half hour that has since been overtaken, and offering
+ * it as the strongest signal put "curve at 11.29% of graduation" directly
+ * beside a header reading "graduated". Both were correct and together they read
+ * as a contradiction, which is the only thing a reader takes from them. The
+ * TRACTION block already refuses to print progress after graduation for the
+ * same reason; this line was the one place that did not.
  */
 function strongestSignal(
   t: TractionMetrics,
   w: WindowMetrics,
   quote: string,
   quoteDecimals: number,
+  onCurve: boolean,
 ): string {
   const cands: { weight: number; text: string }[] = [];
 
@@ -79,9 +89,10 @@ function strongestSignal(
     });
   if (w.buySellRatio !== null && w.buySellRatio > 1)
     cands.push({ weight: w.buySellRatio * 8, text: `buys outnumber sells ${ratioStr(w.buySellRatio)} to 1` });
-  if (w.progressAt30m > 0)
+  // Only while there is a curve to be making progress along.
+  if (onCurve && w.progressAt30m > 0)
     cands.push({ weight: w.progressAt30m * 2.5, text: `curve at ${num(w.progressAt30m, 2)}% of graduation` });
-  if (w.progressVelocityPer10m > 0)
+  if (onCurve && w.progressVelocityPer10m > 0)
     cands.push({
       weight: w.progressVelocityPer10m * 2,
       text: `progress accruing at ${num(w.progressVelocityPer10m, 2)}% per 10 min`,
@@ -384,7 +395,7 @@ export function renderCard(r: ScanResult): string {
   L.push(
     `<b>Strongest signal:</b> ${esc(
       t.window
-        ? strongestSignal(t, t.window, quote, k.pairDecimals)
+        ? strongestSignal(t, t.window, quote, k.pairDecimals, k.phaseName === 'NotGraduated')
         : 'undetermined, the opening window has not been indexed',
     )}. ` +
       `<b>Worst flag:</b> ${esc(worst)}.`,

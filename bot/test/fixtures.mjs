@@ -61,7 +61,7 @@ export function makeScan(over = {}) {
               medianBuySize: over.medianBuySize ?? 0n,
               meanBuySize: 0n,
               progressAt10m: 0,
-              progressAt30m: 0,
+              progressAt30m: over.progressAt30m ?? 0,
               progressPct: 0,
               peakProgressPct: 0,
               progressVelocityPer10m: over.progressVelocity ?? 0,

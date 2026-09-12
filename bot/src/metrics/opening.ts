@@ -35,9 +35,18 @@ export interface OpeningWindow {
   taxWei: bigint;
   taxPayers: number;
   /**
-   * False when any read failed. A partial window is never presented as a
-   * measurement: a tax total missing half its logs reads as a smaller number,
-   * not as an error.
+   * Whether this window is a measurement at all.
+   *
+   * False when a read failed -- a tax total missing half its logs reads as a
+   * smaller number, not as an error -- and false when the window did not cover
+   * the launch it was supposed to. Those look identical from inside: three
+   * getLogs calls over the wrong forty blocks succeed and return nothing, and
+   * every figure below comes out zero.
+   *
+   * Measured: reading CHIPPER's window a hundred blocks late returned no
+   * exemptions, no tax and a 0.00% creator buy for a launch that exempted nine
+   * wallets holding 17.4% of supply. So a zero here is only a zero once
+   * something independent says the window was in the right place.
    */
   complete: boolean;
 }
@@ -48,6 +57,18 @@ export interface OpeningInput {
   totalSupply: bigint;
   fromBlock: bigint;
   toBlock?: bigint;
+  /**
+   * What the launch receipt independently established, for corroboration.
+   *
+   * The receipt is decoded from the launch transaction, so it cannot be in the
+   * wrong place: if it says this launch exempted N wallets and the window sees
+   * none of them, the window is not looking at the launch. Undefined means
+   * there is nothing to check against, and the window is then trusted only when
+   * its block was read rather than estimated -- which is the caller's business,
+   * not this function's.
+   */
+  expectExemptions?: number | null;
+
   /**
    * Queue behind background work.
    *
@@ -128,6 +149,25 @@ export async function readOpeningWindow(input: OpeningInput): Promise<OpeningWin
     const pct = (n: bigint): number | null =>
       input.totalSupply > 0n ? Number((n * 1_000_000n) / input.totalSupply) / 10_000 : null;
 
+    /**
+     * Did this window actually cover the launch?
+     *
+     * The one check available from here: the receipt already counted the
+     * exemptions, and the curve emits every one of them in the launch
+     * transaction, which is the first block of this window. A receipt saying
+     * nine and a window seeing zero is not a launch that changed its mind, it
+     * is forty blocks read somewhere else.
+     */
+    const expected = input.expectExemptions;
+    const missedTheLaunch = expected !== undefined && expected !== null
+      && expected > 0 && exemptWallets.length === 0;
+    if (missedTheLaunch) {
+      console.warn(
+        `[opening] window at ${fromBlock} saw no exemptions where the receipt counted ${expected}; `
+        + 'reporting undetermined rather than zero',
+      );
+    }
+
     return {
       exemptWallets,
       creatorTokens,
@@ -136,7 +176,7 @@ export async function readOpeningWindow(input: OpeningInput): Promise<OpeningWin
       exemptSharePct: pct(exemptTokens),
       taxWei,
       taxPayers: payers.size,
-      complete: true,
+      complete: !missedTheLaunch,
     };
   } catch (err) {
     console.warn('[opening] window unreadable:', String((err as Error)?.message ?? err).slice(0, 160));

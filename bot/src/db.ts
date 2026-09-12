@@ -672,6 +672,48 @@ for (const [table, column] of [['holder_snapshots', 'band']] as const) {
 // CREATE INDEX on a column that does not exist yet throws at module load.
 db.exec('CREATE INDEX IF NOT EXISTS idx_holder_snapshots_excess ON holder_snapshots(excess)');
 
+/**
+ * Clear opening-window shares that cannot be true.
+ *
+ * The window used to be read from whatever block the scan had, estimated or
+ * not, and a window that misses the launch returns zeros indistinguishable from
+ * a launch where nothing happened. Two of those zeros are provably wrong and
+ * can be found without touching the chain:
+ *
+ *   the curve's own events counted N exempted wallets and the window saw 0% of
+ *   supply go to them -- the exemptions are emitted in the launch transaction,
+ *   which is the first block of the window, so a zero means the window was not
+ *   there
+ *
+ *   the launch transaction carried a creator buy and the window saw the creator
+ *   take 0% -- the same argument
+ *
+ * Cleared rather than corrected: NULL reads as undetermined, the next scan
+ * re-reads the window, and the new guard refuses to write it again from an
+ * estimated block. A wrong number that looks measured is worse than no number,
+ * which is the whole reason this runs.
+ */
+export function repairFalseOpeningZeros(): void {
+  const cols = columnsOf('launches');
+  if (!cols.includes('exempt_open_pct') || !cols.includes('creator_open_pct')) return;
+
+  const impossible = `
+    (exempt_open_pct = 0 AND exemption_source = 'logs' AND snipe_exemption_count > 0)
+    OR (creator_open_pct = 0 AND launch_buy_amount IS NOT NULL AND CAST(launch_buy_amount AS INTEGER) > 0)
+  `;
+  const n = (db.prepare(
+    `SELECT COUNT(*) AS n FROM launches WHERE (exempt_open_pct IS NOT NULL OR creator_open_pct IS NOT NULL) AND (${impossible})`,
+  ).get() as { n: number }).n;
+  if (!n) return;
+
+  db.prepare(
+    `UPDATE launches SET exempt_open_pct = NULL, creator_open_pct = NULL WHERE ${impossible}`,
+  ).run();
+  console.log(`[db] cleared opening-window shares on ${n} launches whose zeros contradict their own launch receipt`);
+}
+repairFalseOpeningZeros();
+
+
 export function normaliseKey(input: string | null | undefined): string {
   if (!input) return '';
   let s = input.normalize('NFKD').replace(/\p{M}+/gu, '').toLowerCase();
