@@ -8,7 +8,7 @@ import { db } from './db.js';
 import { renderCardPng } from './image.js';
 import { EARLY_CACHE_TTL_MS, EARLY_WINDOW_SECONDS } from './config.js';
 
-export type ScanSource = 'dm' | 'group' | 'inline' | 'cli';
+export type ScanSource = 'dm' | 'group' | 'inline' | 'cli' | 'api';
 
 /**
  * What a user sees when a scan fails for a reason that is not their problem.

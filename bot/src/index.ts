@@ -8,6 +8,7 @@ import { runDueRechecks, startRecheckLoop } from './recheck.js';
 import { startWindowLoop, windowBacklog, indexWindows } from './indexer/windows.js';
 import { deliverAlerts, deliverLaunch } from './bot.js';
 import { initBot, startBot } from './bot.js';
+import { startApi } from './api/server.js';
 import { db } from './db.js';
 import { BACKFILL_DAYS, BLOCKS_PER_DAY } from './config.js';
 
@@ -255,6 +256,11 @@ async function main(): Promise<void> {
       // and [alerts] in production: the first launches after every boot were
       // detected and then dropped.
       const bot = await initBot();
+      // The read-only HTTP API, in this process on purpose: an API answer and a
+      // /scan answer then come from one cache and one index and cannot
+      // disagree, and API requests sit below the bot in the same rate limiter
+      // rather than competing with it from outside. No PORT, no API.
+      startApi();
       startRecovery();
       // Alerts ride the index loop rather than polling: it already sees every
       // launch within three seconds, and a second poller would compete for the

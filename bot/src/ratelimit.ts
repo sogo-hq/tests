@@ -33,6 +33,19 @@ const MAX_429_RETRIES = 6;
 /** How long after interactive work background requests stay out of the way. */
 const BULK_QUIET_MS = Number(process.env.BULK_QUIET_MS || 1_000) || 1_000;
 
+/**
+ * The share of the bucket an API request will not touch.
+ *
+ * A tenth, against the backfill's half. An API caller is a person waiting on a
+ * response, so it is served far more readily than a walk; the reserve exists
+ * only so a fanned-out batch cannot empty the bucket in the instant before a
+ * scan arrives.
+ */
+const API_RESERVE_FRACTION = Math.min(
+  0.9,
+  Math.max(0, Number(process.env.API_RESERVE_FRACTION ?? 0.1)),
+);
+
 /** Share of the bucket kept for whatever arrives next, never spent on background work. */
 const BULK_RESERVE_FRACTION = Math.min(
   0.9,
@@ -88,7 +101,7 @@ export class RpcRateLimited extends Error {
  * travels through AsyncLocalStorage because the limiter sits in a global fetch
  * wrapper and cannot take an argument from the call site.
  */
-type Priority = 'interactive' | 'bulk';
+type Priority = 'interactive' | 'api' | 'bulk';
 const priorityStore = new AsyncLocalStorage<Priority>();
 
 /** Run `fn` with its RPC requests served ahead of bulk work. */
@@ -110,6 +123,21 @@ export function currentPriority(): Priority {
 
 export function bulk<T>(fn: () => Promise<T>): Promise<T> {
   return priorityStore.run('bulk', fn);
+}
+
+/**
+ * Run `fn` at API priority: below the bot, above the indexer.
+ *
+ * A partner calling the HTTP API is waiting on an answer, so it is not
+ * background work. But the person who typed /scan in Telegram is the one this
+ * bot exists for, and an integration that fans out fifty addresses must never
+ * be what makes their card slow. So an API request is served only when nothing
+ * interactive is queued, and it leaves a smaller reserve untouched than a
+ * backfill does, because it is somebody waiting rather than a walk that can
+ * resume tomorrow.
+ */
+export function api<T>(fn: () => Promise<T>): Promise<T> {
+  return priorityStore.run('api', fn);
 }
 
 class TokenBucket {
@@ -213,9 +241,22 @@ class TokenBucket {
    * reserve of tokens left untouched for whatever arrives next.
    */
   private bulkMayProceed(): boolean {
-    if (this.queue.some((q) => q.priority === 'interactive')) return false;
+    if (this.queue.some((q) => q.priority !== 'bulk')) return false;
     if (Date.now() - this.lastInteractiveAt < BULK_QUIET_MS) return false;
     return this.tokens >= 1 + this.capacity * BULK_RESERVE_FRACTION;
+  }
+
+  /**
+   * May an API request take a token right now?
+   *
+   * The ordering in pump() already puts every interactive request ahead of it.
+   * This is the second half of the same promise: a burst of API calls must not
+   * drain the bucket a moment before a scan arrives, so it stops short of a
+   * reserve. Smaller than the backfill's, because an API caller is waiting.
+   */
+  private apiMayProceed(): boolean {
+    if (this.queue.some((q) => q.priority === 'interactive')) return false;
+    return this.tokens >= 1 + this.capacity * API_RESERVE_FRACTION;
   }
 
   private pump(): void {
@@ -223,10 +264,17 @@ class TokenBucket {
     while (this.queue.length && this.tokens >= 1) {
       // Interactive requests are served first; bulk work fills the gaps -- and
       // only the gaps.
+      // Interactive first, then the API, then background work in the gaps --
+      // and background work only in the gaps.
       let idx = this.queue.findIndex((q) => q.priority === 'interactive');
       if (idx === -1) {
-        if (!this.bulkMayProceed()) break;
-        idx = 0;
+        idx = this.queue.findIndex((q) => q.priority === 'api');
+        if (idx !== -1) {
+          if (!this.apiMayProceed()) break;
+        } else {
+          if (!this.bulkMayProceed()) break;
+          idx = 0;
+        }
       }
       this.tokens -= 1;
       this.queue.splice(idx, 1)[0]!.resolve();

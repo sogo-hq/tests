@@ -1,0 +1,541 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "VITALS API",
+    "version": "v1",
+    "description": "Read-only facts about pons v2 launches on Robinhood Chain, read from the chain.\n\nTwo guarantees this API makes, and will keep:\n\n1. `state` is one of exactly three words: \"finding\", \"undetermined\", \"none\".\n   There is no score, no grade, no risk level and no \"safe\" field, and there\n   will not be one. A consumer who wants to rank launches decides for\n   themselves what matters; publishing the checks instead of a number is the\n   whole design.\n\n2. `state: \"none\"` means the check ran and found nothing. It is not an\n   all-clear and is never described as clean. `state: \"undetermined\"` means\n   the check could not be answered from the data available, and such a check\n   never carries a `value`.\n\nCheck `id`s are permanent. Adding a check is a compatible change; renaming or\nremoving one is not."
+  },
+  "servers": [
+    {
+      "url": "https://api.checkvitals.xyz/v1"
+    }
+  ],
+  "paths": {
+    "/launch/{address}": {
+      "get": {
+        "summary": "One launch, as structured checks",
+        "parameters": [
+          {
+            "name": "address",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^0x[a-fA-F0-9]{40}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "the launch",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Launch"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "not an address",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "the factory has no record of this token. `resolved_as` says what the address turned out to be, when it was something.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "rate limited. See Retry-After.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "the index is more than 500 blocks behind, or the chain could not be read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/launches": {
+      "post": {
+        "summary": "Up to 50 launches at once, with per-item errors",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "addresses"
+                ],
+                "properties": {
+                  "addresses": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 50,
+                    "items": {
+                      "type": "string",
+                      "pattern": "^0x[a-fA-F0-9]{40}$"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "one entry per address, in the order given. A failed item carries its error and does not fail the batch.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/BatchItem"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "malformed body, or more than the ceiling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "rate limited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "the index is lagging",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/stats": {
+      "get": {
+        "summary": "Index size and the exemption distribution",
+        "responses": {
+          "200": {
+            "description": "stats",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Stats"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/health": {
+      "get": {
+        "summary": "Index head and lag",
+        "responses": {
+          "200": {
+            "description": "health",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Health"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/openapi.json": {
+      "get": {
+        "summary": "This document",
+        "responses": {
+          "200": {
+            "description": "the document"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearer": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "partner keys: 60 rps"
+      },
+      "apiKey": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-API-Key",
+        "description": "public keys: 5 rps"
+      }
+    },
+    "schemas": {
+      "Check": {
+        "type": "object",
+        "required": [
+          "id",
+          "state",
+          "headline",
+          "value",
+          "reference",
+          "severity",
+          "source"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "enum": [
+              "snipe_tax_exemptions",
+              "creator_opening_buy",
+              "deployer_history",
+              "ticker_collision",
+              "ticker_vs_pair",
+              "creator_tax",
+              "buyback_vesting",
+              "pair_asset",
+              "holder_concentration",
+              "deployer_prior_peaks",
+              "deployer_prior_survival",
+              "launch_vs_declaration"
+            ],
+            "description": "the first 9 are the committed set and are permanent; the rest were added later and may be ignored"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "finding",
+              "undetermined",
+              "none"
+            ],
+            "description": "\"none\" means the check found nothing. It is not an all-clear."
+          },
+          "headline": {
+            "type": "string",
+            "description": "one sentence, never a verdict about the launch"
+          },
+          "value": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ],
+            "description": "null whenever state is \"undetermined\""
+          },
+          "reference": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "what the value is measured against: an index median with its sample size, a threshold, a denominator"
+          },
+          "severity": {
+            "type": "number",
+            "description": "ordering weight, higher first. Not a score, and not comparable between launches."
+          },
+          "source": {
+            "type": "string",
+            "description": "what this check was read from"
+          }
+        }
+      },
+      "Launch": {
+        "type": "object",
+        "required": [
+          "token",
+          "chain",
+          "launchpad",
+          "symbol",
+          "launch_block",
+          "launch_tx",
+          "age_seconds",
+          "pair",
+          "checks",
+          "summary",
+          "as_of",
+          "index"
+        ],
+        "properties": {
+          "token": {
+            "type": "string"
+          },
+          "chain": {
+            "type": "integer",
+            "const": 4663
+          },
+          "launchpad": {
+            "type": "string",
+            "const": "pons_v2"
+          },
+          "symbol": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "launch_block": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "launch_tx": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "age_seconds": {
+            "type": "integer"
+          },
+          "pair": {
+            "type": "object",
+            "required": [
+              "asset",
+              "address"
+            ],
+            "properties": {
+              "asset": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "address": {
+                "type": "string"
+              }
+            }
+          },
+          "checks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Check"
+            }
+          },
+          "summary": {
+            "type": "object",
+            "required": [
+              "checks_run",
+              "findings",
+              "undetermined"
+            ],
+            "properties": {
+              "checks_run": {
+                "type": "integer"
+              },
+              "findings": {
+                "type": "integer"
+              },
+              "undetermined": {
+                "type": "integer"
+              }
+            }
+          },
+          "as_of": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "index": {
+            "type": "object",
+            "required": [
+              "launches"
+            ],
+            "properties": {
+              "launches": {
+                "type": "integer"
+              }
+            }
+          }
+        }
+      },
+      "BatchItem": {
+        "type": "object",
+        "required": [
+          "address",
+          "ok"
+        ],
+        "properties": {
+          "address": {
+            "type": "string"
+          },
+          "ok": {
+            "type": "boolean"
+          },
+          "launch": {
+            "$ref": "#/components/schemas/Launch"
+          },
+          "error": {
+            "$ref": "#/components/schemas/Error"
+          }
+        }
+      },
+      "Error": {
+        "type": "object",
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "resolved_as": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "deployer",
+              "curve",
+              null
+            ],
+            "description": "on a 404, what the address turned out to be"
+          }
+        }
+      },
+      "Stats": {
+        "type": "object",
+        "required": [
+          "index",
+          "exemptions",
+          "declarations",
+          "as_of"
+        ],
+        "properties": {
+          "index": {
+            "type": "object",
+            "properties": {
+              "launches": {
+                "type": "integer"
+              },
+              "decoded": {
+                "type": "integer"
+              },
+              "read_from_curve_events": {
+                "type": "integer"
+              }
+            }
+          },
+          "exemptions": {
+            "type": "object",
+            "properties": {
+              "with_any": {
+                "type": "integer"
+              },
+              "beyond_deployer": {
+                "type": "integer"
+              },
+              "beyond_deployer_pct": {
+                "type": "number"
+              },
+              "median_count_beyond_deployer": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "description": "null below the publishing floor: no median is published on a small sample"
+              },
+              "median_sample": {
+                "type": "integer"
+              }
+            }
+          },
+          "declarations": {
+            "type": "integer"
+          },
+          "as_of": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "Health": {
+        "type": "object",
+        "required": [
+          "ok",
+          "head_block",
+          "indexed_to_block",
+          "lag_blocks",
+          "as_of"
+        ],
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "description": "false once lag exceeds 500 blocks"
+          },
+          "head_block": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "indexed_to_block": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "lag_blocks": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "null when either end could not be read, which is not zero"
+          },
+          "as_of": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      }
+    }
+  },
+  "x-rate-limits": {
+    "keyless": "1 rps, for evaluating the contract",
+    "public": "5 rps",
+    "partner": "60 rps",
+    "cache": "answers are reused for 30s per token"
+  }
+}

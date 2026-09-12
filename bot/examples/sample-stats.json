@@ -1,0 +1,16 @@
+{
+  "index": {
+    "launches": 18099,
+    "decoded": 3400,
+    "read_from_curve_events": 1
+  },
+  "exemptions": {
+    "with_any": 232,
+    "beyond_deployer": 1,
+    "beyond_deployer_pct": 100,
+    "median_count_beyond_deployer": null,
+    "median_sample": 1
+  },
+  "declarations": 0,
+  "as_of": "2026-09-12T10:44:57.964Z"
+}

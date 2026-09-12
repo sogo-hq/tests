@@ -1,0 +1,123 @@
+{
+  "token": "0xd384722f6adfe7d79e8e6623896df199afd31b76",
+  "chain": 4663,
+  "launchpad": "pons_v2",
+  "symbol": "CHIPPER",
+  "launch_block": 45790066,
+  "launch_tx": "0xf2185b971c3b2a996c62dbedeeed19f3fc562b9be50625f113a3ce2761461f43",
+  "age_seconds": 1542787,
+  "pair": {
+    "asset": "ETH",
+    "address": "0x0000000000000000000000000000000000000000"
+  },
+  "checks": [
+    {
+      "id": "snipe_tax_exemptions",
+      "state": "finding",
+      "headline": "9 wallets tax-free at launch, 1 of them the deployer, together 17.4% of supply",
+      "value": 9,
+      "reference": "17.4% of supply between them",
+      "severity": 917.3623,
+      "source": "the curve's own SnipeTaxExempted events, from the launch transaction receipt"
+    },
+    {
+      "id": "creator_opening_buy",
+      "state": "undetermined",
+      "headline": "creator opened with 1.0% of supply (no reference yet)",
+      "value": null,
+      "reference": null,
+      "severity": 150,
+      "source": "CurveBuy events over the first 40 blocks, against the index median"
+    },
+    {
+      "id": "holder_concentration",
+      "state": "undetermined",
+      "headline": "top 5 hold 92.9% (no reference yet)",
+      "value": null,
+      "reference": null,
+      "severity": 130,
+      "source": "the token's Transfer log, excluding the curve and the protocol"
+    },
+    {
+      "id": "deployer_prior_survival",
+      "state": "undetermined",
+      "headline": "no 24h history on this deployer's past tokens",
+      "value": null,
+      "reference": null,
+      "severity": 124,
+      "source": "this bot's own +24h rechecks of prior launches"
+    },
+    {
+      "id": "deployer_prior_peaks",
+      "state": "undetermined",
+      "headline": "no history yet on this deployer's past tokens",
+      "value": null,
+      "reference": null,
+      "severity": 122,
+      "source": "recorded peak market caps of this deployer's prior launches"
+    },
+    {
+      "id": "creator_tax",
+      "state": "none",
+      "headline": "creator takes nothing per trade",
+      "value": 0,
+      "reference": "index median 50 bps, n=3400",
+      "severity": 0,
+      "source": "the launch calldata, against the median of the indexed launches"
+    },
+    {
+      "id": "deployer_history",
+      "state": "none",
+      "headline": "deployer's only launch this week",
+      "value": 0,
+      "reference": "flagged above 2 other launches in 7 days",
+      "severity": 0,
+      "source": "the index of launches by this deployer"
+    },
+    {
+      "id": "ticker_collision",
+      "state": "none",
+      "headline": "no other token uses this ticker",
+      "value": 0,
+      "reference": "out of 18099 indexed launches",
+      "severity": 0,
+      "source": "indexed launch symbols and names, homoglyph-normalised"
+    },
+    {
+      "id": "ticker_vs_pair",
+      "state": "none",
+      "headline": "ticker differs from what it trades against",
+      "value": false,
+      "reference": "pair asset ticker: ETH",
+      "severity": 0,
+      "source": "the token symbol and the pair asset symbol, both read from the chain"
+    },
+    {
+      "id": "pair_asset",
+      "state": "none",
+      "headline": "priced in ETH",
+      "value": "ETH",
+      "reference": "the native asset",
+      "severity": 0,
+      "source": "pairToken from the TokenLaunched event"
+    },
+    {
+      "id": "buyback_vesting",
+      "state": "none",
+      "headline": "no buyback vest on this launch",
+      "value": false,
+      "reference": null,
+      "severity": 0,
+      "source": "buybackEnabled from the launch configuration"
+    }
+  ],
+  "summary": {
+    "checks_run": 11,
+    "findings": 1,
+    "undetermined": 4
+  },
+  "as_of": "2026-09-12T10:44:57.950Z",
+  "index": {
+    "launches": 18099
+  }
+}

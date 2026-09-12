@@ -238,10 +238,11 @@ CREATE TABLE IF NOT EXISTS token_peaks (
 -- and rejections. Deliberately separate from the scans table, which holds one
 -- row per distinct observation and must not be padded with duplicates.
 -- ---------------------------------------------------------------------------
+-- Rebuilt verbatim by migrateScanEventSource; see SCAN_EVENTS_DDL below.
 CREATE TABLE IF NOT EXISTS scan_events (
   id           INTEGER PRIMARY KEY AUTOINCREMENT,
   ts           INTEGER NOT NULL,
-  source       TEXT NOT NULL CHECK (source IN ('dm','group','inline','cli')),
+  source       TEXT NOT NULL CHECK (source IN ('dm','group','inline','cli','api')),
   chat_id      INTEGER,
   user_id      INTEGER,
   token        TEXT,
@@ -475,6 +476,52 @@ CREATE TABLE IF NOT EXISTS cursors (
   updated_at   INTEGER NOT NULL
 );
 `);
+
+const SCAN_EVENTS_DDL = `CREATE TABLE scan_events (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts           INTEGER NOT NULL,
+  source       TEXT NOT NULL CHECK (source IN ('dm','group','inline','cli','api')),
+  chat_id      INTEGER,
+  user_id      INTEGER,
+  token        TEXT,
+  cache_hit    INTEGER NOT NULL DEFAULT 0,
+  duration_ms  INTEGER NOT NULL,
+  outcome      TEXT NOT NULL,
+  scan_id      INTEGER
+);`;
+
+/**
+ * A CHECK constraint cannot be altered in place, so the table is rebuilt.
+ *
+ * scan_events.source gained 'api' when the HTTP API landed. Every API scan on
+ * an existing database was refused by the old constraint and logged, which cost
+ * nothing at the time -- the insert is wrapped -- but silently lost the usage
+ * telemetry the whole table exists for.
+ *
+ * Guarded on the constraint text rather than on a version number: it runs once
+ * on a database that predates the change and never again, and it is a no-op on
+ * a fresh one because the table is created with the new constraint above.
+ */
+function migrateScanEventSource(): void {
+  const row = db
+    .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'scan_events'")
+    .get() as { sql: string } | undefined;
+  if (!row?.sql || row.sql.includes("'api'")) return;
+
+  console.log('[db] rebuilding scan_events to accept the api source');
+  const columns = (db.prepare('PRAGMA table_info(scan_events)').all() as { name: string }[])
+    .map((c) => c.name)
+    .join(', ');
+  db.exec('PRAGMA foreign_keys = OFF');
+  db.transaction(() => {
+    db.exec(`ALTER TABLE scan_events RENAME TO scan_events_old`);
+    db.exec(SCAN_EVENTS_DDL);
+    db.exec(`INSERT INTO scan_events (${columns}) SELECT ${columns} FROM scan_events_old`);
+    db.exec('DROP TABLE scan_events_old');
+  })();
+  db.exec('PRAGMA foreign_keys = ON');
+}
+migrateScanEventSource();
 
 export function getCursor(name: string): bigint | null {
   const row = db.prepare('SELECT block_number FROM cursors WHERE name = ?').get(name) as

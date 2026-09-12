@@ -113,6 +113,10 @@ function classifyLogsError(err: any): { narrowable: boolean; rangeRefusal: boole
  */
 const MAX_PIECES: Record<string, number> = {
   interactive: Number(process.env.MAX_LOG_PIECES_INTERACTIVE || 64) || 64,
+  // The same budget as an interactive read: an API caller is waiting on a
+  // response too, and the honest early answer is as right for them as it is
+  // for somebody watching a card render.
+  api: Number(process.env.MAX_LOG_PIECES_API || 64) || 64,
   bulk: Number(process.env.MAX_LOG_PIECES_BULK || 100_000) || 100_000,
 };
 

@@ -46,6 +46,28 @@ export interface Flag {
    */
   declared?: string | null;
   /**
+   * What this check was read from, in one phrase.
+   *
+   * Carried on the flag rather than looked up by whatever renders it, because
+   * for one check it genuinely varies: the exemption count read from the
+   * curve's own events and the same count decoded from calldata are different
+   * quantities, and a consumer has to be able to tell which they were given.
+   * The API publishes this on every check.
+   */
+  source: string;
+  /**
+   * The measured quantity, and what it is measured against, kept apart.
+   *
+   * A card wants them joined into one sentence, because a reader needs them
+   * together. A consumer building their own sentence needs them apart, and
+   * splitting `plain` back up with a regex would make a published contract
+   * depend on the punctuation of a card. Null where the check is categorical or
+   * has nothing to measure; ALWAYS null where the check is undetermined, which
+   * is enforced where it is published rather than trusted here.
+   */
+  value?: string | number | boolean | null;
+  reference?: string | null;
+  /**
    * Where a number in this finding comes from, for /full only.
    *
    * Not on the quick card and not on the picture: both have a line budget and
@@ -142,6 +164,29 @@ const UNKNOWN_BAND: Record<string, number> = {
   deployer_rate: 120,
   collision: 110,
 };
+
+/**
+ * What each check was read from, in one phrase, published by the API.
+ *
+ * Here rather than in the API module so the phrase lives beside the code that
+ * does the reading: a check whose source changes and whose phrase does not is
+ * a check that lies about its provenance.
+ */
+const SOURCE = {
+  snipe_exemptions_logs: "the curve's own SnipeTaxExempted events, from the launch transaction receipt",
+  snipe_exemptions_calldata: 'the launch calldata, which omits the deployer the curve exempts itself',
+  snipe_exemptions_none: 'the launch transaction could not be read',
+  creator_open_buy: 'CurveBuy events over the first 40 blocks, against the index median',
+  creator_tax: 'the launch calldata, against the median of the indexed launches',
+  deployer_rate: 'the index of launches by this deployer',
+  deployer_peaks: "recorded peak market caps of this deployer's prior launches",
+  deployer_survival: "this bot's own +24h rechecks of prior launches",
+  collision: 'indexed launch symbols and names, homoglyph-normalised',
+  pair_ticker: 'the token symbol and the pair asset symbol, both read from the chain',
+  custom_pair: 'pairToken from the TokenLaunched event',
+  holder_concentration: "the token's Transfer log, excluding the curve and the protocol",
+  declaration_mismatch: 'the signed declaration, against the launch transaction',
+} as const;
 
 /**
  * How far past a declared dev buy counts as a different dev buy.
@@ -244,6 +289,9 @@ export function computeFlags(opts: {
       plain: exCount === null
         ? "couldn't read the launch, tax-free wallets unknown"
         : 'tax-free wallets: being re-counted from the launch itself',
+      source: exCount === null ? SOURCE.snipe_exemptions_none : SOURCE.snipe_exemptions_calldata,
+      value: null,
+      reference: null,
       severity: UNKNOWN_BAND.snipe_exemptions!,
     });
   } else if (exCount === 0) {
@@ -258,6 +306,9 @@ export function computeFlags(opts: {
       detail: 'none, the curve exempted no wallet from the opening tax',
       compactDetail: 'no pre-exempted wallets',
       plain: 'nobody got in tax-free at launch',
+      source: SOURCE.snipe_exemptions_logs,
+      value: 0,
+      reference: null,
       severity: 0,
     });
   } else if (exCount === 1) {
@@ -272,6 +323,9 @@ export function computeFlags(opts: {
       detail: 'the deployer only, and no other wallet',
       compactDetail: 'the deployer only',
       plain: 'tax-free at launch: the deployer only (the wallet that launched it)',
+      source: SOURCE.snipe_exemptions_logs,
+      value: 1,
+      reference: null,
       severity: 0,
     });
   } else {
@@ -304,9 +358,12 @@ export function computeFlags(opts: {
       // claim. A launch whose window was never measured falls back to its
       // count, which cannot overtake a measured share: an unmeasured 32 ranks
       // below a measured 40%.
+      source: SOURCE.snipe_exemptions_logs,
       severity: exShare === null
         ? sev(RAISED_BAND.snipe_exemptions, exCount, 40)
         : sev(RAISED_BAND.snipe_exemptions, exShare),
+      value: exCount,
+      reference: exShare === null ? null : `${exShare.toFixed(1)}% of supply between them`,
     });
   }
 
@@ -335,6 +392,9 @@ export function computeFlags(opts: {
       detail: "the opening window was not read, the creator's own buy is not known",
       compactDetail: 'creator opening buy undetermined',
       plain: "creator's opening buy: not read",
+      source: SOURCE.creator_open_buy,
+      value: null,
+      reference: null,
       severity: UNKNOWN_BAND.creator_open_buy!,
     });
   } else if (openMedian === null) {
@@ -349,6 +409,9 @@ export function computeFlags(opts: {
         `no index baseline yet (n=${openRows.length}, need ${MIN_BENCHMARK_SAMPLES})`,
       compactDetail: `creator opened with ${openShare.toFixed(1)}%, no baseline yet`,
       plain: `creator opened with ${openShare.toFixed(1)}% of supply (no reference yet)`,
+      source: SOURCE.creator_open_buy,
+      value: null,
+      reference: null,
       severity: UNKNOWN_BAND.creator_open_buy!,
     });
   } else {
@@ -368,6 +431,9 @@ export function computeFlags(opts: {
         ? `creator opened with ${openShare.toFixed(1)}% vs ${openMedian.toFixed(1)}% median`
         : `creator opened with ${openShare.toFixed(1)}%, at or below median`,
       plain: withBaseline,
+      source: SOURCE.creator_open_buy,
+      value: openShare,
+      reference: `index median ${openMedian.toFixed(1)}% of supply, n=${openRows.length}`,
       severity: raisedOpen ? sev(RAISED_BAND.creator_open_buy, openShare) : 0,
     });
   }
@@ -385,6 +451,9 @@ export function computeFlags(opts: {
       detail: taxMedian === null ? 'no indexed baseline yet' : coverageReason(cov),
       compactDetail: 'no creator-tax baseline yet',
       plain: "no baseline yet for the creator's cut",
+      source: SOURCE.creator_tax,
+      value: null,
+      reference: null,
       severity: UNKNOWN_BAND.creator_tax!,
     });
   } else {
@@ -418,9 +487,12 @@ export function computeFlags(opts: {
         : `creator tax ${opts.creatorTaxBps} bps, at or below median`,
       plain: withBaseline,
       // Ranked by how many times the median it is, not by how many bps above.
+      value: opts.creatorTaxBps,
+      reference: `index median ${taxMedian} bps, n=${taxRows.length}`,
       // A 50 bps gap means one thing against a 25 bps median and another
       // against a 500 bps one; the difference ranked those two the same.
       // 25x the median saturates the band, which no observed launch reaches.
+      source: SOURCE.creator_tax,
       severity: raised
         ? sev(RAISED_BAND.creator_tax, taxMedian > 0 ? (opts.creatorTaxBps / taxMedian - 1) * 4 : 99)
         : 0,
@@ -442,6 +514,9 @@ export function computeFlags(opts: {
       detail: coverageReason(cov),
       compactDetail: 'deployer history unavailable',
       plain: "can't check the deployer's other launches yet",
+      source: SOURCE.deployer_rate,
+      value: null,
+      reference: null,
       severity: UNKNOWN_BAND.deployer_rate!,
     });
   } else if (launches7d > 2) {
@@ -454,6 +529,9 @@ export function computeFlags(opts: {
       // The threshold that made this a finding. "7 tokens this week" is a
       // count; whether 7 is many is the question, and the rule answers it.
       plain: `deployer launched ${launches7d} tokens in 7d \u00b7 flag above 2`,
+      source: SOURCE.deployer_rate,
+      value: launches7d,
+      reference: 'flagged above 2 other launches in 7 days',
       severity: sev(RAISED_BAND.deployer_rate, launches7d, 29),
     });
   } else {
@@ -466,6 +544,9 @@ export function computeFlags(opts: {
       plain: launches7d === 0
         ? "deployer's only launch this week"
         : `deployer launched ${launches7d} tokens this week`,
+      source: SOURCE.deployer_rate,
+      value: launches7d,
+      reference: 'flagged above 2 other launches in 7 days',
       severity: 0,
     });
   }
@@ -493,6 +574,9 @@ export function computeFlags(opts: {
           : `only ${priorPeaks.length} prior launch with outcome data, too few to judge`,
       compactDetail: 'no prior outcomes for this deployer yet',
       plain: "no history yet on this deployer's past tokens",
+      source: SOURCE.deployer_peaks,
+      value: null,
+      reference: null,
       severity: UNKNOWN_BAND.deployer_peaks!,
     });
   } else if (deployerMedianPeak < globalMedianPeak) {
@@ -503,6 +587,9 @@ export function computeFlags(opts: {
       detail: `median peak mcap ${deployerMedianPeak.toFixed(3)} across ${priorPeaks.length} priors, below the ${globalMedianPeak.toFixed(3)} median of all tracked tokens`,
       compactDetail: `deployer's ${priorPeaks.length} prior tokens peaked below median`,
       plain: `deployer's last ${priorPeaks.length} tokens all stayed small`,
+      source: SOURCE.deployer_peaks,
+      value: deployerMedianPeak,
+      reference: `median peak market cap of all tracked tokens: ${globalMedianPeak}`,
       severity: sev(RAISED_BAND.deployer_peaks, 0, 29),
     });
   } else {
@@ -513,6 +600,9 @@ export function computeFlags(opts: {
       detail: `median peak mcap ${deployerMedianPeak.toFixed(3)} across ${priorPeaks.length} priors, at or above the tracked median`,
       compactDetail: `deployer's priors peaked at or above median`,
       plain: `deployer's past tokens did as well as most`,
+      source: SOURCE.deployer_peaks,
+      value: deployerMedianPeak,
+      reference: `median peak market cap of all tracked tokens: ${globalMedianPeak}`,
       severity: 0,
     });
   }
@@ -539,6 +629,9 @@ export function computeFlags(opts: {
           : `only ${withData.length} prior with +24h data, too few to judge`,
       compactDetail: 'no +24h history for this deployer yet',
       plain: "no 24h history on this deployer's past tokens",
+      source: SOURCE.deployer_survival,
+      value: null,
+      reference: null,
       severity: UNKNOWN_BAND.deployer_survival!,
     });
   } else if (survival < 0.5) {
@@ -550,6 +643,9 @@ export function computeFlags(opts: {
       compactDetail: `only ${(survival * 100).toFixed(0)}% of deployer's priors alive at +24h`,
       plain: `${withData.length - Math.round(survival * withData.length)} of deployer's last ${withData.length} tokens died in 24h`,
       // Within the band, the worse the survival rate the higher it ranks.
+      source: SOURCE.deployer_survival,
+      value: Math.round(survival * 100),
+      reference: `percent of ${withData.length} prior launches still trading at +24h, flagged below 50`,
       severity: sev(RAISED_BAND.deployer_survival, Math.round((0.5 - survival) * 58), 29),
     });
   } else {
@@ -560,6 +656,9 @@ export function computeFlags(opts: {
       detail: `${(survival * 100).toFixed(0)}% of ${withData.length} prior launches were still trading at +24h`,
       compactDetail: `${(survival * 100).toFixed(0)}% of deployer's priors alive at +24h`,
       plain: `${Math.round(survival * withData.length)} of deployer's last ${withData.length} still alive at 24h`,
+      source: SOURCE.deployer_survival,
+      value: Math.round(survival * 100),
+      reference: `percent of ${withData.length} prior launches still trading at +24h, flagged below 50`,
       severity: 0,
     });
   }
@@ -587,6 +686,9 @@ export function computeFlags(opts: {
       detail: coverageReason(cov),
       compactDetail: 'ticker collisions not checkable yet',
       plain: "can't check this ticker against other launches yet",
+      source: SOURCE.collision,
+      value: null,
+      reference: null,
       severity: UNKNOWN_BAND.collision!,
     });
   } else if (collisionCount > 0) {
@@ -609,6 +711,9 @@ export function computeFlags(opts: {
       // another in an index of 400,000, and the card had no way to tell them
       // apart.
       plain: `${collisionCount} of ${cov.indexed.toLocaleString()} indexed launches use this ticker`,
+      source: SOURCE.collision,
+      value: collisionCount,
+      reference: `out of ${cov.indexed} indexed launches`,
       severity: sev(RAISED_BAND.collision, collisionCount),
     });
   } else {
@@ -619,6 +724,9 @@ export function computeFlags(opts: {
       detail: 'no match against indexed pons tokens',
       compactDetail: 'no name or ticker collision',
       plain: 'no other token uses this ticker',
+      source: SOURCE.collision,
+      value: 0,
+      reference: `out of ${cov.indexed} indexed launches`,
       severity: 0,
     });
   }
@@ -653,6 +761,9 @@ export function computeFlags(opts: {
     // Above a plain name collision: colliding with some other launch is common
     // noise, whereas wearing the ticker of the asset on the other side of your
     // own pool is targeted at the person about to trade it.
+    source: SOURCE.pair_ticker,
+    value: impersonatesPair,
+    reference: `pair asset ticker: ${clamp(opts.pairSymbol ?? '?', MAX_TICKER)}`,
     severity: impersonatesPair ? RAISED_BAND.pair_ticker : 0,
   });
 
@@ -671,6 +782,9 @@ export function computeFlags(opts: {
     plain: custom
       ? `priced in ${clamp(opts.pairSymbol ?? 'a token', 12)}, not ETH. inherits its risk`
       : 'priced in ETH',
+    source: SOURCE.custom_pair,
+    value: clamp(opts.pairSymbol ?? opts.pairToken, MAX_TICKER),
+    reference: custom ? 'not the native asset' : 'the native asset',
     severity: custom ? RAISED_BAND.custom_pair : 0,
   });
 
@@ -702,6 +816,9 @@ export function computeFlags(opts: {
       detail: 'top 5 holder share could not be read',
       compactDetail: 'top 5 holder share undetermined',
       plain: 'top 5 wallet share undetermined',
+      source: SOURCE.holder_concentration,
+      value: null,
+      reference: null,
       severity: UNKNOWN_BAND.holder_concentration!,
     });
   } else if (conc.holders < MIN_HOLDERS_FOR_SHARE) {
@@ -714,6 +831,9 @@ export function computeFlags(opts: {
       detail: `${conc.holders} holder${conc.holders === 1 ? '' : 's'}, too few for a top-5 share to mean anything (it is 100% by arithmetic below ${MIN_HOLDERS_FOR_SHARE})`,
       compactDetail: `${conc.holders} holders, too few to measure concentration`,
       plain: `only ${conc.holders} holder${conc.holders === 1 ? '' : 's'} so far`,
+      source: SOURCE.holder_concentration,
+      value: null,
+      reference: null,
       severity: UNKNOWN_BAND.holder_concentration!,
     });
   } else if (!thr || thr.threshold === null || thr.thresholdShare === null) {
@@ -727,6 +847,9 @@ export function computeFlags(opts: {
       detail: `top 5 hold ${shareStr} of circulating, largest single wallet ${conc.top1Share.toFixed(1)}% (${conc.holders} holders, ${arithmeticFloor(conc.holders).toFixed(1)}% is the least ${conc.holders} wallets can hold), no threshold yet (n=${n}, need ${MIN_CONCENTRATION_SAMPLES})`,
       compactDetail: `top 5 hold ${shareStr}, no threshold yet (n=${n})`,
       plain: `top 5 hold ${shareStr}${conc.top1Share > 0 ? `, largest ${conc.top1Share.toFixed(0)}%` : ''} (no reference yet)`,
+      source: SOURCE.holder_concentration,
+      value: conc.top5Share,
+      reference: `top-5 share of circulating supply; no threshold yet (n=${thr?.n ?? 0}, need ${MIN_CONCENTRATION_SAMPLES})`,
       severity: UNKNOWN_BAND.holder_concentration!,
     });
   } else {
@@ -752,6 +875,9 @@ export function computeFlags(opts: {
       plain: over
         ? `top 5 hold ${conc.top5Share.toFixed(0)}% of supply${conc.top1Share > 0 ? `, largest ${conc.top1Share.toFixed(0)}%` : ''} \u00b7 ${conc.holders} holders`
         : `top 5 hold ${conc.top5Share.toFixed(0)}%${conc.top1Share > 0 ? `, largest ${conc.top1Share.toFixed(0)}%` : ''}`,
+      source: SOURCE.holder_concentration,
+      value: conc.top5Share,
+      reference: `top-5 share of circulating supply, flagged at ${thr.thresholdShare.toFixed(1)}% for ${conc.holders} holders (${thr.percentile}th percentile of ${thr.n} launches)`,
       severity: over ? sev(RAISED_BAND.holder_concentration, conc.top5Share) : 0,
     });
   }
@@ -807,6 +933,9 @@ export function computeFlags(opts: {
       plain: diffs.length
         ? `launch differs from declaration: ${diffs[0]}`
         : 'the launch did what it said it would',
+      source: SOURCE.declaration_mismatch,
+      value: diffs.length,
+      reference: diffs.length ? diffs.join('; ') : 'every declared figure matches the launch transaction',
       severity: diffs.length ? sev(RAISED_BAND.declaration_mismatch, diffs.length * 10) : 0,
     });
   }

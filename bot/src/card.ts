@@ -332,7 +332,7 @@ export function renderCard(r: ScanResult): string {
     L.push(`  graduation progress: ${num(k.progressPct, 3)}%`);
     L.push(`  progress velocity: ${num(w.progressVelocityPer10m, 3)}% per 10 min`);
     if (w.peakProgressPct > k.progressPct + 0.01)
-      L.push(`  peak progress in window: ${num(w.peakProgressPct, 3)}% (since retraced)`);
+      L.push(`  peak progress in window: ${num(w.peakProgressPct, 3)}% (now lower)`);
   }
   if (w.roundTrippers > 0)
     L.push(`  round-trippers: ${w.roundTrippers} of ${w.uniqueBuyers30m} buyers also sold`);
