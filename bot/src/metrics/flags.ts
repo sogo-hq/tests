@@ -61,12 +61,21 @@ export interface Flag {
    * A card wants them joined into one sentence, because a reader needs them
    * together. A consumer building their own sentence needs them apart, and
    * splitting `plain` back up with a regex would make a published contract
-   * depend on the punctuation of a card. Null where the check is categorical or
-   * has nothing to measure; ALWAYS null where the check is undetermined, which
-   * is enforced where it is published rather than trusted here.
+   * depend on the punctuation of a card.
+   *
+   * OBJECTS, never scalars and never prose. A consumer that has to parse "9" out
+   * of one check and "400 bps" out of the next has no contract at all, and a
+   * bare number cannot gain a second field later without breaking everyone. The
+   * shapes are per check and are part of the published v1 contract: see
+   * api/types.ts. Null where the check is categorical or has nothing to
+   * measure; ALWAYS null where the check is undetermined, which is enforced
+   * where it is published rather than trusted here.
+   *
+   * Read only by the API. The cards render `plain` and `detail`, as they did
+   * before these existed.
    */
-  value?: string | number | boolean | null;
-  reference?: string | null;
+  value?: Record<string, unknown> | null;
+  reference?: Record<string, unknown> | null;
   /**
    * Where a number in this finding comes from, for /full only.
    *
@@ -189,6 +198,27 @@ const SOURCE = {
 } as const;
 
 /**
+ * The protocol's ceiling on pre-exempted wallets.
+ *
+ * Published in the exemption check's value so a consumer can size a count
+ * against what was possible: nine of a possible thirty-two is a different
+ * sentence from nine of a possible nine. Measured on chain, and stated here
+ * rather than read per scan because it is a property of the factory, not of a
+ * launch.
+ */
+const EXEMPT_SLOTS = 32;
+
+/**
+ * How many other launches sharing a ticker make it a collision.
+ *
+ * One other launch out of hundreds of thousands is ticker reuse, which on this
+ * chain is ordinary; the finding is for a ticker being worn by a crowd. The
+ * count never includes the token being scanned -- it is excluded in SQL -- so
+ * this threshold is about other launches only.
+ */
+const MIN_COLLISION_MATCHES = 2;
+
+/**
  * How far past a declared dev buy counts as a different dev buy.
  *
  * A plan stated in advance against a figure measured from the chain, so an
@@ -307,7 +337,7 @@ export function computeFlags(opts: {
       compactDetail: 'no pre-exempted wallets',
       plain: 'nobody got in tax-free at launch',
       source: SOURCE.snipe_exemptions_logs,
-      value: 0,
+      value: { wallets: 0, beyond_deployer: 0, supply_share: 0, slots: EXEMPT_SLOTS },
       reference: null,
       severity: 0,
     });
@@ -324,7 +354,7 @@ export function computeFlags(opts: {
       compactDetail: 'the deployer only',
       plain: 'tax-free at launch: the deployer only (the wallet that launched it)',
       source: SOURCE.snipe_exemptions_logs,
-      value: 1,
+      value: { wallets: 1, beyond_deployer: 0, supply_share: exShare === null ? null : exShare / 100, slots: EXEMPT_SLOTS },
       reference: null,
       severity: 0,
     });
@@ -362,8 +392,8 @@ export function computeFlags(opts: {
       severity: exShare === null
         ? sev(RAISED_BAND.snipe_exemptions, exCount, 40)
         : sev(RAISED_BAND.snipe_exemptions, exShare),
-      value: exCount,
-      reference: exShare === null ? null : `${exShare.toFixed(1)}% of supply between them`,
+      value: { wallets: exCount, beyond_deployer: others, supply_share: exShare === null ? null : exShare / 100, slots: EXEMPT_SLOTS },
+      reference: null,
     });
   }
 
@@ -398,21 +428,35 @@ export function computeFlags(opts: {
       severity: UNKNOWN_BAND.creator_open_buy!,
     });
   } else if (openMedian === null) {
-    // A real measurement with nothing to measure it against. Printed as the
-    // number it is, never as an all-clear.
+    /**
+     * A measurement with nothing to measure it against is not undetermined.
+     *
+     * This branch used to report "unknown" while printing the share it had
+     * measured, which broke the guarantee the API publishes: an undetermined
+     * check carries no value. It was also the wrong word. The window WAS read;
+     * what is missing is an index median to compare it with, and a missing
+     * comparison does not unmeasure the thing compared.
+     *
+     * So the state is what the check found -- nothing to flag, because there is
+     * no threshold to clear -- and the missing baseline is said in the sentence
+     * instead of swallowing the number. `undetermined` is reserved for a window
+     * that was not read, which is the branch above.
+     */
     flags.push({
       key: 'creator_open_buy',
       label: 'Creator opening buy',
-      state: 'unknown',
+      state: 'clean',
       detail:
         `creator took ${openShare.toFixed(2)}% of supply in the opening window, ` +
-        `no index baseline yet (n=${openRows.length}, need ${MIN_BENCHMARK_SAMPLES})`,
-      compactDetail: `creator opened with ${openShare.toFixed(1)}%, no baseline yet`,
-      plain: `creator opened with ${openShare.toFixed(1)}% of supply (no reference yet)`,
+        `no index median yet, n=${openRows.length}, needs ${MIN_BENCHMARK_SAMPLES}`,
+      compactDetail: `creator opened with ${openShare.toFixed(1)}%, no index median yet`,
+      plain:
+        `creator opened with ${openShare.toFixed(1)}% of supply \u00b7 `
+        + `no index median yet, n=${openRows.length}, needs ${MIN_BENCHMARK_SAMPLES}`,
       source: SOURCE.creator_open_buy,
-      value: null,
+      value: { supply_share: openShare / 100 },
       reference: null,
-      severity: UNKNOWN_BAND.creator_open_buy!,
+      severity: 0,
     });
   } else {
     const raisedOpen = openShare > openMedian;
@@ -432,8 +476,8 @@ export function computeFlags(opts: {
         : `creator opened with ${openShare.toFixed(1)}%, at or below median`,
       plain: withBaseline,
       source: SOURCE.creator_open_buy,
-      value: openShare,
-      reference: `index median ${openMedian.toFixed(1)}% of supply, n=${openRows.length}`,
+      value: { supply_share: openShare / 100 },
+      reference: { median_share: openMedian / 100, n: openRows.length },
       severity: raisedOpen ? sev(RAISED_BAND.creator_open_buy, openShare) : 0,
     });
   }
@@ -452,7 +496,7 @@ export function computeFlags(opts: {
       compactDetail: 'no creator-tax baseline yet',
       plain: "no baseline yet for the creator's cut",
       source: SOURCE.creator_tax,
-      value: null,
+      value: { bps: opts.creatorTaxBps },
       reference: null,
       severity: UNKNOWN_BAND.creator_tax!,
     });
@@ -487,8 +531,8 @@ export function computeFlags(opts: {
         : `creator tax ${opts.creatorTaxBps} bps, at or below median`,
       plain: withBaseline,
       // Ranked by how many times the median it is, not by how many bps above.
-      value: opts.creatorTaxBps,
-      reference: `index median ${taxMedian} bps, n=${taxRows.length}`,
+      value: { bps: opts.creatorTaxBps },
+      reference: { median_bps: taxMedian, n: taxRows.length },
       // A 50 bps gap means one thing against a 25 bps median and another
       // against a 500 bps one; the difference ranked those two the same.
       // 25x the median saturates the band, which no observed launch reaches.
@@ -530,8 +574,8 @@ export function computeFlags(opts: {
       // count; whether 7 is many is the question, and the rule answers it.
       plain: `deployer launched ${launches7d} tokens in 7d \u00b7 flag above 2`,
       source: SOURCE.deployer_rate,
-      value: launches7d,
-      reference: 'flagged above 2 other launches in 7 days',
+      value: { launches_7d: launches7d },
+      reference: { flag_above: 2 },
       severity: sev(RAISED_BAND.deployer_rate, launches7d, 29),
     });
   } else {
@@ -543,10 +587,10 @@ export function computeFlags(opts: {
       compactDetail: launches7d === 0 ? 'no other launches by deployer in 7d' : `deployer launched ${launches7d} other in 7d`,
       plain: launches7d === 0
         ? "deployer's only launch this week"
-        : `deployer launched ${launches7d} tokens this week`,
+        : `deployer launched ${launches7d} other token${launches7d === 1 ? '' : 's'} this week`,
       source: SOURCE.deployer_rate,
-      value: launches7d,
-      reference: 'flagged above 2 other launches in 7 days',
+      value: { launches_7d: launches7d },
+      reference: { flag_above: 2 },
       severity: 0,
     });
   }
@@ -588,8 +632,8 @@ export function computeFlags(opts: {
       compactDetail: `deployer's ${priorPeaks.length} prior tokens peaked below median`,
       plain: `deployer's last ${priorPeaks.length} tokens all stayed small`,
       source: SOURCE.deployer_peaks,
-      value: deployerMedianPeak,
-      reference: `median peak market cap of all tracked tokens: ${globalMedianPeak}`,
+      value: { median_peak_mcap: deployerMedianPeak, priors: priorPeaks.length },
+      reference: { index_median_peak_mcap: globalMedianPeak },
       severity: sev(RAISED_BAND.deployer_peaks, 0, 29),
     });
   } else {
@@ -601,8 +645,8 @@ export function computeFlags(opts: {
       compactDetail: `deployer's priors peaked at or above median`,
       plain: `deployer's past tokens did as well as most`,
       source: SOURCE.deployer_peaks,
-      value: deployerMedianPeak,
-      reference: `median peak market cap of all tracked tokens: ${globalMedianPeak}`,
+      value: { median_peak_mcap: deployerMedianPeak, priors: priorPeaks.length },
+      reference: { index_median_peak_mcap: globalMedianPeak },
       severity: 0,
     });
   }
@@ -628,7 +672,7 @@ export function computeFlags(opts: {
           ? 'no prior launches rechecked at +24h yet'
           : `only ${withData.length} prior with +24h data, too few to judge`,
       compactDetail: 'no +24h history for this deployer yet',
-      plain: "no 24h history on this deployer's past tokens",
+      plain: "no first-day history on this deployer's past tokens",
       source: SOURCE.deployer_survival,
       value: null,
       reference: null,
@@ -644,8 +688,8 @@ export function computeFlags(opts: {
       plain: `${withData.length - Math.round(survival * withData.length)} of deployer's last ${withData.length} tokens died in 24h`,
       // Within the band, the worse the survival rate the higher it ranks.
       source: SOURCE.deployer_survival,
-      value: Math.round(survival * 100),
-      reference: `percent of ${withData.length} prior launches still trading at +24h, flagged below 50`,
+      value: { still_trading_share: Math.round(survival * 1000) / 1000, priors: withData.length },
+      reference: { flag_below: 0.5 },
       severity: sev(RAISED_BAND.deployer_survival, Math.round((0.5 - survival) * 58), 29),
     });
   } else {
@@ -657,15 +701,16 @@ export function computeFlags(opts: {
       compactDetail: `${(survival * 100).toFixed(0)}% of deployer's priors alive at +24h`,
       plain: `${Math.round(survival * withData.length)} of deployer's last ${withData.length} still alive at 24h`,
       source: SOURCE.deployer_survival,
-      value: Math.round(survival * 100),
-      reference: `percent of ${withData.length} prior launches still trading at +24h, flagged below 50`,
+      value: { still_trading_share: Math.round(survival * 1000) / 1000, priors: withData.length },
+      reference: { flag_below: 0.5 },
       severity: 0,
     });
   }
 
   // ---------------------------------------------------------------- flag 6
   // Collisions here are homoglyphs, not exact duplicates, so both sides are
-  // compared on a normalised key.
+  // compared on a normalised key. The token being scanned is excluded in SQL,
+  // so this counts OTHER launches only: a unique ticker counts zero.
   const symKey = normaliseKey(opts.symbol);
   const nameKey = normaliseKey(opts.name);
   const where =
@@ -691,7 +736,7 @@ export function computeFlags(opts: {
       reference: null,
       severity: UNKNOWN_BAND.collision!,
     });
-  } else if (collisionCount > 0) {
+  } else if (collisionCount >= MIN_COLLISION_MATCHES) {
     // Colliding tokens frequently share the same rendered symbol, so show
     // distinct spellings rather than the same glyph three times.
     const samples = db
@@ -705,15 +750,21 @@ export function computeFlags(opts: {
       key: 'collision',
       label: 'Name/ticker collision',
       state: 'raised',
-      detail: `matches ${collisionCount} existing pons token${collisionCount === 1 ? '' : 's'}${ex ? ` (${ex})` : ''} after homoglyph normalisation`,
-      compactDetail: `name collides with ${collisionCount} token${collisionCount === 1 ? '' : 's'} after homoglyph normalisation`,
-      // Out of how many. 59 collisions means one thing in an index of 400 and
-      // another in an index of 400,000, and the card had no way to tell them
-      // apart.
-      plain: `${collisionCount} of ${cov.indexed.toLocaleString()} indexed launches use this ticker`,
+      detail: `matches ${collisionCount} OTHER indexed pons token${collisionCount === 1 ? '' : 's'}${ex ? ` (${ex})` : ''} after homoglyph normalisation, out of ${cov.indexed.toLocaleString()}`,
+      compactDetail: `ticker shared with ${collisionCount} other launch${collisionCount === 1 ? '' : 'es'}`,
+      /**
+       * Said as "shared with N OTHER launches", never as "N of M use it".
+       *
+       * "1 of 384,587 indexed launches use this ticker" was read by a partner
+       * as "only one launch uses it, and it is this one" -- the opposite of
+       * what it meant. The token being scanned is one of those 384,587, so any
+       * sentence of that shape invites the reading. The count never included
+       * it, but the sentence did.
+       */
+      plain: `ticker shared with ${collisionCount} other launch${collisionCount === 1 ? '' : 'es'} of ${cov.indexed.toLocaleString()} indexed`,
       source: SOURCE.collision,
-      value: collisionCount,
-      reference: `out of ${cov.indexed} indexed launches`,
+      value: { matches: collisionCount },
+      reference: { indexed: cov.indexed, flag_at_or_above: MIN_COLLISION_MATCHES },
       severity: sev(RAISED_BAND.collision, collisionCount),
     });
   } else {
@@ -721,12 +772,18 @@ export function computeFlags(opts: {
       key: 'collision',
       label: 'Name/ticker collision',
       state: 'clean',
-      detail: 'no match against indexed pons tokens',
-      compactDetail: 'no name or ticker collision',
-      plain: 'no other token uses this ticker',
+      detail: collisionCount === 0
+        ? 'no other indexed pons token uses this name or ticker'
+        : `${collisionCount} other indexed token shares it, below the ${MIN_COLLISION_MATCHES} that make it a finding`,
+      compactDetail: collisionCount === 0
+        ? 'no other launch uses this ticker'
+        : `ticker shared with ${collisionCount} other launch`,
+      plain: collisionCount === 0
+        ? 'no other indexed launch uses this ticker'
+        : `ticker shared with ${collisionCount} other launch of ${cov.indexed.toLocaleString()} indexed`,
       source: SOURCE.collision,
-      value: 0,
-      reference: `out of ${cov.indexed} indexed launches`,
+      value: { matches: collisionCount },
+      reference: { indexed: cov.indexed, flag_at_or_above: MIN_COLLISION_MATCHES },
       severity: 0,
     });
   }
@@ -762,8 +819,8 @@ export function computeFlags(opts: {
     // noise, whereas wearing the ticker of the asset on the other side of your
     // own pool is targeted at the person about to trade it.
     source: SOURCE.pair_ticker,
-    value: impersonatesPair,
-    reference: `pair asset ticker: ${clamp(opts.pairSymbol ?? '?', MAX_TICKER)}`,
+    value: { differs: !impersonatesPair },
+    reference: { pair_symbol: opts.pairSymbol ?? null },
     severity: impersonatesPair ? RAISED_BAND.pair_ticker : 0,
   });
 
@@ -783,8 +840,8 @@ export function computeFlags(opts: {
       ? `priced in ${clamp(opts.pairSymbol ?? 'a token', 12)}, not ETH. inherits its risk`
       : 'priced in ETH',
     source: SOURCE.custom_pair,
-    value: clamp(opts.pairSymbol ?? opts.pairToken, MAX_TICKER),
-    reference: custom ? 'not the native asset' : 'the native asset',
+    value: { asset: opts.pairSymbol ?? null, address: opts.pairToken.toLowerCase() },
+    reference: { native: !custom },
     severity: custom ? RAISED_BAND.custom_pair : 0,
   });
 
@@ -805,6 +862,20 @@ export function computeFlags(opts: {
   // on a missing optional field is worse than one that omits it.
   const rawConc = opts.concentration ?? null;
   const conc = rawConc ? { ...rawConc, top1Share: Number(rawConc.top1Share) || 0 } : null;
+  /**
+   * Whether the largest-holder share was actually read.
+   *
+   * The zero above is a rendering default so a row written before the column
+   * existed does not crash a card, and the card already suppresses it. The
+   * published value must not inherit it: `largest_share: 0` alongside a top-5
+   * share of 92.9% states something impossible, and a consumer has no way to
+   * tell that zero from a measured one. Null says "not read", which is true.
+   *
+   * A real zero cannot occur here -- if anyone holds anything, the largest
+   * holder holds more than nothing -- so zero is unknown without ambiguity.
+   */
+  const top1Known = conc !== null && conc.top1Share > 0;
+  const largestShare = top1Known ? conc!.top1Share / 100 : null;
   const thr = conc ? concentrationThreshold(conc.holders, opts.token) : null;
   const shareStr = conc ? `${conc.top5Share.toFixed(1)}%` : null;
 
@@ -815,7 +886,7 @@ export function computeFlags(opts: {
       state: 'unknown',
       detail: 'top 5 holder share could not be read',
       compactDetail: 'top 5 holder share undetermined',
-      plain: 'top 5 wallet share undetermined',
+      plain: 'top five wallet share undetermined',
       source: SOURCE.holder_concentration,
       value: null,
       reference: null,
@@ -830,7 +901,7 @@ export function computeFlags(opts: {
       state: 'unknown',
       detail: `${conc.holders} holder${conc.holders === 1 ? '' : 's'}, too few for a top-5 share to mean anything (it is 100% by arithmetic below ${MIN_HOLDERS_FOR_SHARE})`,
       compactDetail: `${conc.holders} holders, too few to measure concentration`,
-      plain: `only ${conc.holders} holder${conc.holders === 1 ? '' : 's'} so far`,
+      plain: 'too few holders to measure concentration',
       source: SOURCE.holder_concentration,
       value: null,
       reference: null,
@@ -843,14 +914,14 @@ export function computeFlags(opts: {
     flags.push({
       key: 'holder_concentration',
       label: 'Holder concentration',
-      state: 'unknown',
+      state: 'clean',
       detail: `top 5 hold ${shareStr} of circulating, largest single wallet ${conc.top1Share.toFixed(1)}% (${conc.holders} holders, ${arithmeticFloor(conc.holders).toFixed(1)}% is the least ${conc.holders} wallets can hold), no threshold yet (n=${n}, need ${MIN_CONCENTRATION_SAMPLES})`,
       compactDetail: `top 5 hold ${shareStr}, no threshold yet (n=${n})`,
       plain: `top 5 hold ${shareStr}${conc.top1Share > 0 ? `, largest ${conc.top1Share.toFixed(0)}%` : ''} (no reference yet)`,
       source: SOURCE.holder_concentration,
-      value: conc.top5Share,
-      reference: `top-5 share of circulating supply; no threshold yet (n=${thr?.n ?? 0}, need ${MIN_CONCENTRATION_SAMPLES})`,
-      severity: UNKNOWN_BAND.holder_concentration!,
+      value: { top5_share: conc.top5Share / 100, largest_share: largestShare, holders: conc.holders },
+      reference: null,
+      severity: 0,
     });
   } else {
     // Judged on the excess, not the raw share. Reported as a share, because
@@ -876,8 +947,8 @@ export function computeFlags(opts: {
         ? `top 5 hold ${conc.top5Share.toFixed(0)}% of supply${conc.top1Share > 0 ? `, largest ${conc.top1Share.toFixed(0)}%` : ''} \u00b7 ${conc.holders} holders`
         : `top 5 hold ${conc.top5Share.toFixed(0)}%${conc.top1Share > 0 ? `, largest ${conc.top1Share.toFixed(0)}%` : ''}`,
       source: SOURCE.holder_concentration,
-      value: conc.top5Share,
-      reference: `top-5 share of circulating supply, flagged at ${thr.thresholdShare.toFixed(1)}% for ${conc.holders} holders (${thr.percentile}th percentile of ${thr.n} launches)`,
+      value: { top5_share: conc.top5Share / 100, largest_share: largestShare, holders: conc.holders },
+      reference: { flag_at_share: thr.thresholdShare / 100, percentile: thr.percentile, n: thr.n },
       severity: over ? sev(RAISED_BAND.holder_concentration, conc.top5Share) : 0,
     });
   }
@@ -934,8 +1005,8 @@ export function computeFlags(opts: {
         ? `launch differs from declaration: ${diffs[0]}`
         : 'the launch did what it said it would',
       source: SOURCE.declaration_mismatch,
-      value: diffs.length,
-      reference: diffs.length ? diffs.join('; ') : 'every declared figure matches the launch transaction',
+      value: { mismatches: diffs.length, fields: diffs },
+      reference: { declared_at_block: declaration.blockNumber },
       severity: diffs.length ? sev(RAISED_BAND.declaration_mismatch, diffs.length * 10) : 0,
     });
   }

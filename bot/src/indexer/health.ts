@@ -101,20 +101,49 @@ export function recordIndexFailure(message: string): FailureReport {
 export const HEALTH_CURSOR = 'launches_ok';
 
 /**
+ * The chain head as of the last successful pass.
+ *
+ * Separate from HEALTH_CURSOR, which records the block the pass REACHED. The
+ * two are the same only when the index is caught up, and the gap between them
+ * is the thing "is the index current" actually depends on: a tail pass covers
+ * at most TAIL_MAX_BLOCKS, so after downtime the index advances on every pass,
+ * never looks stalled, and is still days behind the chain.
+ */
+export const HEAD_CURSOR = 'launches_head';
+
+/**
  * A pass succeeded: the run of failures, whatever it was, is over.
  *
  * `head` is the block the pass reached, stored alongside the time so the two
  * facts -- when it last worked, and where it had got to -- stay together.
  */
-export function recordIndexAdvance(head?: bigint): void {
+export function recordIndexAdvance(reached?: bigint, head?: bigint): void {
   state.consecutive = 0;
   state.message = null;
   state.announced = false;
-  db.prepare(
+  const at = Math.floor(Date.now() / 1000);
+  const write = db.prepare(
     `INSERT INTO cursors (name, block_number, updated_at) VALUES (?, ?, ?)
      ON CONFLICT(name) DO UPDATE SET block_number = excluded.block_number,
                                      updated_at = excluded.updated_at`,
-  ).run(HEALTH_CURSOR, Number(head ?? 0n), Math.floor(Date.now() / 1000));
+  );
+  write.run(HEALTH_CURSOR, Number(reached ?? 0n), at);
+  // Only when the caller saw one. An absent head is not a head of zero, and
+  // writing one would read as "the chain has not started".
+  if (head !== undefined) write.run(HEAD_CURSOR, Number(head), at);
+}
+
+/**
+ * The chain head as of the last successful pass, or null if never recorded.
+ *
+ * Null is not zero and not "caught up": it means this index has no idea how far
+ * the chain has moved, which is a question the caller has to answer for itself.
+ */
+export function lastSeenHead(): number | null {
+  const row = db
+    .prepare('SELECT block_number FROM cursors WHERE name = ?')
+    .get(HEAD_CURSOR) as { block_number: number } | undefined;
+  return row?.block_number ?? null;
 }
 
 export interface IndexHealth {

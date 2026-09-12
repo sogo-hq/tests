@@ -51,8 +51,15 @@ function stateOf(f: Flag): CheckState {
  * middle dot, because a reader needs both in one line. A consumer building
  * their own sentence needs the first half alone, and gets the second half as a
  * structured `reference` rather than by cutting a string up.
+ *
+ * Only when there IS a structured reference, though. When there is none, the
+ * clause after the dot is not a restatement of `reference`, it is the sentence
+ * saying why `reference` is null -- "no index median yet, n=12, needs 30" --
+ * and cutting it leaves a bare measured number with nothing to read it against.
+ * That is the half the partner complained about.
  */
-function headlineOf(plain: string): string {
+function headlineOf(plain: string, hasReference: boolean): string {
+  if (!hasReference) return plain;
   const i = plain.indexOf(' \u00b7 ');
   return i === -1 ? plain : plain.slice(0, i);
 }
@@ -61,17 +68,18 @@ function checkFrom(f: Flag): ApiCheck | null {
   const id = ID_BY_FLAG[f.key];
   if (!id) return null;
   const state = stateOf(f);
+  const reference = state === 'undetermined' ? null : (f.reference ?? null);
   return {
     id,
     state,
-    headline: headlineOf(f.plain || f.compactDetail),
+    headline: headlineOf(f.plain || f.compactDetail, reference !== null),
     // Null whenever the check is undetermined, without exception and whatever
     // the flag happens to carry. That is one of the two guarantees this API
     // makes, and enforcing it in the one place every check passes through is
     // what makes it true of all of them rather than of the ones somebody
     // remembered.
     value: state === 'undetermined' ? null : (f.value ?? null),
-    reference: state === 'undetermined' ? null : (f.reference ?? null),
+    reference,
     severity: f.severity,
     source: f.source,
   };
@@ -94,7 +102,7 @@ function buybackCheck(r: ScanResult): ApiCheck {
     headline: on
       ? 'creator fees locked into a 5-year linear vest'
       : 'no buyback vest on this launch',
-    value: on,
+    value: { enabled: on },
     reference: null,
     severity: 0,
     source: 'buybackEnabled from the launch configuration',
@@ -108,11 +116,24 @@ function launchTxOf(token: string): string | null {
 }
 
 export function toApiLaunch(r: ScanResult, asOf = new Date()): ApiLaunch {
-  const checks = r.flags.flags
+  const built = r.flags.flags
     .map(checkFrom)
     .filter((c): c is ApiCheck => c !== null);
-  checks.push(buybackCheck(r));
-  checks.sort((a, b) => b.severity - a.severity);
+  built.push(buybackCheck(r));
+
+  /**
+   * Ordered on the exact severity, then published as an integer.
+   *
+   * The fraction used to carry the supply share, which is now a field of its
+   * own: a consumer sorting on severity needs an order, not a second copy of a
+   * measurement hidden in a decimal. Sorting first and rounding second means
+   * two neighbours that round to the same integer keep the order the cards
+   * would show them in, rather than whichever way a stable sort happened to
+   * leave them.
+   */
+  const checks = built
+    .sort((a, b) => b.severity - a.severity)
+    .map((c) => ({ ...c, severity: Math.round(c.severity) }));
 
   return {
     token: r.reads.token.toLowerCase(),

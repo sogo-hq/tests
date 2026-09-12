@@ -67,7 +67,7 @@
             }
           },
           "503": {
-            "description": "the index is more than 500 blocks behind, or the chain could not be read",
+            "description": "the index is more than 100000000 blocks behind, or the chain could not be read",
             "content": {
               "application/json": {
                 "schema": {
@@ -258,22 +258,22 @@
           },
           "value": {
             "type": [
-              "string",
-              "number",
-              "boolean",
+              "object",
               "null"
             ],
-            "description": "null whenever state is \"undetermined\""
+            "additionalProperties": true,
+            "description": "the measured quantity, as an object, or null. Never a bare number, string or boolean. Keys are per check id: snipe_tax_exemptions {wallets, beyond_deployer, supply_share, slots}, creator_opening_buy {supply_share}, creator_tax {bps}, deployer_history {launches_7d}, ticker_collision {matches}, ticker_vs_pair {differs}, pair_asset {asset, address}, buyback_vesting {enabled}, holder_concentration {top5_share, largest_share, holders}. Shares are FRACTIONS: 0.174 is 17.4% of supply. A key whose quantity was not read is null, never 0. The whole object is null whenever state is \"undetermined\"."
           },
           "reference": {
             "type": [
-              "string",
+              "object",
               "null"
             ],
-            "description": "what the value is measured against: an index median with its sample size, a threshold, a denominator"
+            "additionalProperties": true,
+            "description": "what the value is measured against, as an object, or null when there is nothing to measure it against yet: creator_tax {median_bps, n}, creator_opening_buy {median_share, n}, ticker_collision {indexed, flag_at_or_above}, deployer_history {flag_above}, holder_concentration {flag_at_share, percentile, n}. Always null when state is \"undetermined\"."
           },
           "severity": {
-            "type": "number",
+            "type": "integer",
             "description": "ordering weight, higher first. Not a score, and not comparable between launches."
           },
           "source": {
@@ -503,7 +503,7 @@
         "properties": {
           "ok": {
             "type": "boolean",
-            "description": "false once lag exceeds 500 blocks"
+            "description": "false once lag exceeds 100000000 blocks"
           },
           "head_block": {
             "type": [

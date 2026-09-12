@@ -327,9 +327,9 @@ export async function indexNew(opts: { lifecycle?: boolean } = {}) {
   // would otherwise act on a head it had already seen.
   const head = await client.getBlockNumber({ cacheTime: 0 });
   const cursor = getCursor(CURSOR);
-  if (!cursor) return backfill();
+  if (!cursor) return { ...(await backfill()), head };
   if (cursor >= head) {
-    return { launches: 0, fromBlock: cursor, toBlock: head, undecodable: 0, pendingDecode: 0, newTokens: [] };
+    return { launches: 0, fromBlock: cursor, toBlock: head, undecodable: 0, pendingDecode: 0, newTokens: [], head };
   }
 
   const from = cursor + 1n;
@@ -351,7 +351,10 @@ export async function indexNew(opts: { lifecycle?: boolean } = {}) {
   const after = (db
     .prepare('SELECT token FROM launches WHERE block_number >= ? AND block_number <= ?')
     .all(Number(from), Number(to)) as { token: string }[]).map((r) => r.token);
-  return { ...res, newTokens: after.filter((t) => !before.has(t)) };
+  // `head` travels with the result because the pass is bounded: `toBlock` is
+  // where this pass stopped, `head` is where the chain was. A caller that sees
+  // only the first cannot tell a caught-up index from one still catching up.
+  return { ...res, newTokens: after.filter((t) => !before.has(t)), head };
 }
 
 /**
@@ -471,7 +474,11 @@ export function startIndexLoop(intervalMs = 3_000, onNewLaunches?: NewLaunchHand
             `${before.behindSeconds === null ? '' : `, index was ${agoWords(before.behindSeconds)} behind`}`,
         );
       }
-      recordIndexAdvance(BigInt(res.toBlock));
+      // Both numbers: the block this pass reached, and the head it was aiming
+      // at. A pass is bounded, so those differ whenever the index is catching
+      // up, and that difference is what tells a scan whether it may assert a
+      // negative.
+      recordIndexAdvance(BigInt(res.toBlock), res.head);
       // Handed to whoever is listening, without awaiting: a slow alert pass
       // must not hold up the next index tick, which is what keeps a fresh
       // launch scannable within three seconds.

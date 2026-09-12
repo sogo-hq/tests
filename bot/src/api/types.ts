@@ -71,17 +71,45 @@ export interface ApiCheck {
   /** One sentence a person can read. Never a verdict about the launch. */
   headline: string;
   /**
-   * The measured quantity, when there is one.
+   * The measured quantity, as an OBJECT, or null.
    *
-   * Null whenever state is "undetermined": a check that could not be answered
-   * has no number, and a zero there would be read as a measurement.
+   * Never a scalar and never prose. A consumer that has to parse "9" out of one
+   * check and "400 bps" out of the next has no contract, and a bare number
+   * cannot gain a second field later without breaking every client. The keys
+   * are per check id and are part of this contract:
+   *
+   *   snipe_tax_exemptions  {wallets, beyond_deployer, supply_share, slots}
+   *   creator_opening_buy   {supply_share}
+   *   creator_tax           {bps}
+   *   deployer_history      {launches_7d}
+   *   ticker_collision      {matches}
+   *   ticker_vs_pair        {differs}
+   *   pair_asset            {asset, address}
+   *   buyback_vesting       {enabled}
+   *   holder_concentration  {top5_share, largest_share, holders}
+   *   deployer_prior_peaks  {median_peak_mcap, priors}
+   *   deployer_prior_survival {still_trading_share, priors}
+   *   launch_vs_declaration {mismatches, fields}
+   *
+   * Shares are FRACTIONS, not percentages: 0.174 is 17.4% of supply. Null
+   * whenever state is "undetermined", and whenever the check has nothing to
+   * measure.
    */
-  value: string | number | boolean | null;
+  value: Record<string, unknown> | null;
   /**
-   * What the value is measured against: an index median with its sample size, a
-   * threshold, a denominator. Null when the check is categorical.
+   * What the value is measured against, as an object, or null.
+   *
+   *   creator_tax           {median_bps, n}
+   *   creator_opening_buy   {median_share, n}
+   *   ticker_collision      {indexed, flag_at_or_above}
+   *   deployer_history      {flag_above}
+   *   ticker_vs_pair        {pair_symbol}
+   *   holder_concentration  {flag_at_share, percentile, n}
+   *
+   * Null when the check is categorical, when no index baseline exists yet, and
+   * always when the check is undetermined.
    */
-  reference: string | null;
+  reference: Record<string, unknown> | null;
   /**
    * Ordering weight, higher first. NOT a score and not comparable between
    * launches: it exists so a consumer can render the same order the cards do.

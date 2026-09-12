@@ -5,7 +5,7 @@
   "symbol": "CHIPPER",
   "launch_block": 45790066,
   "launch_tx": "0xf2185b971c3b2a996c62dbedeeed19f3fc562b9be50625f113a3ce2761461f43",
-  "age_seconds": 1557226,
+  "age_seconds": 1560163,
   "pair": {
     "asset": "ETH",
     "address": "0x0000000000000000000000000000000000000000"
@@ -15,19 +15,15 @@
       "id": "snipe_tax_exemptions",
       "state": "finding",
       "headline": "9 wallets tax-free at launch, 1 of them the deployer, together 17.4% of supply",
-      "value": 9,
-      "reference": "17.4% of supply between them",
-      "severity": 917.3623,
-      "source": "the curve's own SnipeTaxExempted events, from the launch transaction receipt"
-    },
-    {
-      "id": "creator_opening_buy",
-      "state": "undetermined",
-      "headline": "creator opened with 1.0% of supply (no reference yet)",
-      "value": null,
+      "value": {
+        "wallets": 9,
+        "beyond_deployer": 8,
+        "supply_share": 0.173623,
+        "slots": 32
+      },
       "reference": null,
-      "severity": 150,
-      "source": "CurveBuy events over the first 40 blocks, against the index median"
+      "severity": 917,
+      "source": "the curve's own SnipeTaxExempted events, from the launch transaction receipt"
     },
     {
       "id": "creator_tax",
@@ -39,18 +35,9 @@
       "source": "the launch calldata, against the median of the indexed launches"
     },
     {
-      "id": "holder_concentration",
-      "state": "undetermined",
-      "headline": "top 5 hold 92.9% (no reference yet)",
-      "value": null,
-      "reference": null,
-      "severity": 130,
-      "source": "the token's Transfer log, excluding the curve and the protocol"
-    },
-    {
       "id": "deployer_prior_survival",
       "state": "undetermined",
-      "headline": "no 24h history on this deployer's past tokens",
+      "headline": "no first-day history on this deployer's past tokens",
       "value": null,
       "reference": null,
       "severity": 124,
@@ -84,11 +71,26 @@
       "source": "indexed launch symbols and names, homoglyph-normalised"
     },
     {
+      "id": "creator_opening_buy",
+      "state": "none",
+      "headline": "creator opened with 1.0% of supply · no index median yet, n=1, needs 30",
+      "value": {
+        "supply_share": 0.010322
+      },
+      "reference": null,
+      "severity": 0,
+      "source": "CurveBuy events over the first 40 blocks, against the index median"
+    },
+    {
       "id": "ticker_vs_pair",
       "state": "none",
       "headline": "ticker differs from what it trades against",
-      "value": false,
-      "reference": "pair asset ticker: ETH",
+      "value": {
+        "differs": true
+      },
+      "reference": {
+        "pair_symbol": "ETH"
+      },
       "severity": 0,
       "source": "the token symbol and the pair asset symbol, both read from the chain"
     },
@@ -96,16 +98,36 @@
       "id": "pair_asset",
       "state": "none",
       "headline": "priced in ETH",
-      "value": "ETH",
-      "reference": "the native asset",
+      "value": {
+        "asset": "ETH",
+        "address": "0x0000000000000000000000000000000000000000"
+      },
+      "reference": {
+        "native": true
+      },
       "severity": 0,
       "source": "pairToken from the TokenLaunched event"
+    },
+    {
+      "id": "holder_concentration",
+      "state": "none",
+      "headline": "top 5 hold 92.9% (no reference yet)",
+      "value": {
+        "top5_share": 0.929,
+        "largest_share": null,
+        "holders": 9
+      },
+      "reference": null,
+      "severity": 0,
+      "source": "the token's Transfer log, excluding the curve and the protocol"
     },
     {
       "id": "buyback_vesting",
       "state": "none",
       "headline": "no buyback vest on this launch",
-      "value": false,
+      "value": {
+        "enabled": false
+      },
       "reference": null,
       "severity": 0,
       "source": "buybackEnabled from the launch configuration"
@@ -114,9 +136,9 @@
   "summary": {
     "checks_run": 11,
     "findings": 1,
-    "undetermined": 7
+    "undetermined": 5
   },
-  "as_of": "2026-09-12T14:45:36.961Z",
+  "as_of": "2026-09-12T15:34:31.915Z",
   "index": {
     "launches": 18100
   }

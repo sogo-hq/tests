@@ -143,3 +143,102 @@ test('recovery in progress withholds negatives even once rows exist', () => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// --------------------------------------------- advancing, and still far behind
+
+/**
+ * The gap the time-based rule cannot see.
+ *
+ * A tail pass covers at most 30,000 blocks, so an index restarted after
+ * downtime advances on every pass and never looks stalled while days of chain
+ * sit unread behind it. "Did it move recently" is liveness. "How much of the
+ * chain has it read" is coverage, and only the second one entitles a check to
+ * say nothing happened.
+ */
+function flagsAtLag(lagBlocks, t) {
+  if (!existsSync('pons.db')) return t.skip('no populated index available');
+  const dir = mkdtempSync(join(tmpdir(), 'vitals-lag-'));
+  try {
+    const dbFile = join(dir, 'lag.db');
+    copyFileSync('pons.db', dbFile);
+    withDb(dbFile, `
+      const { db, getCursor } = await import('${process.cwd()}/dist/db.js');
+      const { recordIndexAdvance } = await import('${process.cwd()}/dist/indexer/health.js');
+      const cursor = Number(getCursor('launches'));
+      // Advancing right now, which is the whole point: the timestamp is fresh,
+      // so the stall rule is satisfied and only the block gap can withhold.
+      recordIndexAdvance(BigInt(cursor), BigInt(cursor + ${lagBlocks}));
+    `);
+    return JSON.parse(withDb(dbFile, FLAGS).trim().split('\n').pop());
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+test('an index advancing but far behind head withholds its negatives', function (t) {
+  // 3,000,000 blocks is about three and a half days of chain at ~0.1s/block.
+  const flags = flagsAtLag(3_000_000, t);
+  if (!flags) return;
+  for (const key of ['collision', 'deployer_rate', 'creator_tax']) {
+    const f = flags.find((x) => x.key === key);
+    assert.equal(f.state, 'unknown',
+      `${key} asserted "${f.detail}" while 3,000,000 blocks were unread`);
+  }
+  const rate = flags.find((x) => x.key === 'deployer_rate');
+  assert.match(rate.detail, /blocks behind the chain/,
+    'the reason a negative is withheld is stated, not merely the withholding');
+  assert.doesNotMatch(rate.plain, /only launch this week/);
+});
+
+test('an index a few blocks behind head still answers', function (t) {
+  // 100 blocks is ten seconds. Refusing here would make the bot useless.
+  const flags = flagsAtLag(100, t);
+  if (!flags) return;
+  assert.equal(flags.find((x) => x.key === 'collision').state, 'clean');
+  assert.equal(flags.find((x) => x.key === 'deployer_rate').state, 'clean');
+});
+
+test('the block gap is reported alongside the time gap', function (t) {
+  if (!existsSync('pons.db')) return t.skip('no populated index available');
+  const dir = mkdtempSync(join(tmpdir(), 'vitals-cov-'));
+  try {
+    const dbFile = join(dir, 'cov.db');
+    copyFileSync('pons.db', dbFile);
+    const out = withDb(dbFile, `
+      const { getCursor } = await import('${process.cwd()}/dist/db.js');
+      const { recordIndexAdvance } = await import('${process.cwd()}/dist/indexer/health.js');
+      const { indexCoverage } = await import('${process.cwd()}/dist/coverage.js');
+      const cursor = Number(getCursor('launches'));
+      recordIndexAdvance(BigInt(cursor), BigInt(cursor + 12345));
+      const c = indexCoverage();
+      console.log(JSON.stringify({ lagBlocks: c.lagBlocks, behindHead: c.behindHead, stalled: c.stalled }));
+    `);
+    const c = JSON.parse(out.trim().split('\n').pop());
+    assert.equal(c.lagBlocks, 12345);
+    assert.equal(c.behindHead, true);
+    assert.equal(c.stalled, false, 'it is advancing, which is exactly why the time rule misses this');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('an unrecorded head is unknown, not caught up', function (t) {
+  if (!existsSync('pons.db')) return t.skip('no populated index available');
+  const dir = mkdtempSync(join(tmpdir(), 'vitals-nohead-'));
+  try {
+    const dbFile = join(dir, 'nohead.db');
+    copyFileSync('pons.db', dbFile);
+    const out = withDb(dbFile, `
+      const { recordIndexAdvance } = await import('${process.cwd()}/dist/indexer/health.js');
+      const { indexCoverage } = await import('${process.cwd()}/dist/coverage.js');
+      recordIndexAdvance(1n);
+      const c = indexCoverage();
+      console.log(JSON.stringify({ lagBlocks: c.lagBlocks, behindHead: c.behindHead }));
+    `);
+    const c = JSON.parse(out.trim().split('\n').pop());
+    assert.equal(c.lagBlocks, null, 'no head recorded is not a lag of zero');
+    assert.equal(c.behindHead, false, 'and an unknown gap is left to the time rule');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

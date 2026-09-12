@@ -19,7 +19,8 @@
     "decode": "node dist/index.js decode",
     "test": "node --test test/*.test.mjs",
     "test:live": "node test/handlers.mjs && node test/flags-live.mjs && node test/errors.mjs && node test/integration.mjs && node test/deadline.mjs && node test/properties.mjs && node test/early-live.mjs && node test/latency.mjs && node test/fresh-launch.mjs",
-    "build:fonts": "node scripts/build-fonts.mjs"
+    "build:fonts": "node scripts/build-fonts.mjs",
+    "examples": "node scripts/gen-examples.mjs"
   },
   "dependencies": {
     "@resvg/resvg-js": "^2.6.2",

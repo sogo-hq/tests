@@ -141,15 +141,30 @@ export function openapiDocument(publicUrl = process.env.API_PUBLIC_URL || 'https
             },
             headline: { type: 'string', description: 'one sentence, never a verdict about the launch' },
             value: {
-              type: ['string', 'number', 'boolean', 'null'],
-              description: 'null whenever state is "undetermined"',
+              type: ['object', 'null'],
+              additionalProperties: true,
+              description:
+                'the measured quantity, as an object, or null. Never a bare number, string or '
+                + 'boolean. Keys are per check id: snipe_tax_exemptions {wallets, beyond_deployer, '
+                + 'supply_share, slots}, creator_opening_buy {supply_share}, creator_tax {bps}, '
+                + 'deployer_history {launches_7d}, ticker_collision {matches}, ticker_vs_pair '
+                + '{differs}, pair_asset {asset, address}, buyback_vesting {enabled}, '
+                + 'holder_concentration {top5_share, largest_share, holders}. Shares are FRACTIONS: '
+                + '0.174 is 17.4% of supply. A key whose quantity was not read is null, never 0. '
+                + 'The whole object is null whenever state is "undetermined".',
             },
             reference: {
-              type: ['string', 'null'],
-              description: 'what the value is measured against: an index median with its sample size, a threshold, a denominator',
+              type: ['object', 'null'],
+              additionalProperties: true,
+              description:
+                'what the value is measured against, as an object, or null when there is nothing '
+                + 'to measure it against yet: creator_tax {median_bps, n}, creator_opening_buy '
+                + '{median_share, n}, ticker_collision {indexed, flag_at_or_above}, '
+                + 'deployer_history {flag_above}, holder_concentration {flag_at_share, percentile, '
+                + 'n}. Always null when state is "undetermined".',
             },
             severity: {
-              type: 'number',
+              type: 'integer',
               description: 'ordering weight, higher first. Not a score, and not comparable between launches.',
             },
             source: { type: 'string', description: 'what this check was read from' },

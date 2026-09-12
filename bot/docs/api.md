@@ -49,22 +49,67 @@ passed anything. It has four unanswered questions.
 A consumer keys their own logic off `check.id`. **Adding a check is a
 compatible change. Renaming or removing one is not**, and will not happen.
 
-The committed set, which is what a client should be written against:
+`summary.checks_run` is 11 on a launch with no declaration, and 12 on one with
+a declaration. Nine of those ids are the committed v1 set; the rest were added
+after v1 and a client written against the nine can ignore them.
 
-| id | what it reports |
+Every `value` and every `reference` is **an object or null** — never a number,
+a string or a boolean. A bare scalar cannot gain a second field later without
+breaking every client that read it. The keys below are part of the contract.
+
+**Shares are fractions, not percentages: `0.174` is 17.4% of supply.**
+
+| id | v1 | what it reports | `value` keys |
+|---|---|---|---|
+| `snipe_tax_exemptions` | ✓ | wallets pre-exempted from the opening tax, and their share of supply | `wallets`, `beyond_deployer`, `supply_share`, `slots` |
+| `creator_opening_buy` | ✓ | what the deployer took for itself in the opening window | `supply_share` |
+| `deployer_history` | ✓ | how often this wallet has launched recently | `launches_7d` |
+| `ticker_collision` | ✓ | **other** indexed launches using this ticker | `matches` |
+| `ticker_vs_pair` | ✓ | the token wearing the ticker of the asset it trades against | `differs` |
+| `creator_tax` | ✓ | the creator's cut per trade, against the index median | `bps` |
+| `buyback_vesting` | ✓ | whether creator fees are locked into a 5-year vest | `enabled` |
+| `pair_asset` | ✓ | what the launch is priced in | `asset`, `address` |
+| `holder_concentration` | ✓ | what the largest wallets hold | `top5_share`, `largest_share`, `holders` |
+| `deployer_prior_peaks` | added after v1 | how far this deployer's previous tokens got | `median_peak_mcap`, `priors` |
+| `deployer_prior_survival` | added after v1 | whether those tokens still traded a day later | `still_trading_share`, `priors` |
+| `launch_vs_declaration` | added after v1 | the chain against what the deployer declared beforehand, **present only on a declared launch** | `mismatches`, `fields` |
+
+The `reference` object is the thing the value is measured against, and is
+`null` whenever there is nothing to measure against yet:
+
+| id | `reference` keys |
 |---|---|
-| `snipe_tax_exemptions` | wallets pre-exempted from the opening tax, and their share of supply |
-| `creator_opening_buy` | what the deployer took for itself in the opening window |
-| `deployer_history` | how often this wallet has launched recently |
-| `ticker_collision` | other indexed launches using this ticker |
-| `ticker_vs_pair` | the token wearing the ticker of the asset it trades against |
-| `creator_tax` | the creator's cut per trade, against the index median |
-| `buyback_vesting` | whether creator fees are locked into a 5-year vest |
-| `pair_asset` | what the launch is priced in |
-| `holder_concentration` | what the largest wallets hold |
+| `creator_tax` | `median_bps`, `n` |
+| `creator_opening_buy` | `median_share`, `n` — null until the index has 30 measured launches |
+| `ticker_collision` | `indexed`, `flag_at_or_above` |
+| `deployer_history` | `flag_above` |
+| `deployer_prior_peaks` | `index_median_peak_mcap` |
+| `deployer_prior_survival` | `flag_below` |
+| `launch_vs_declaration` | `declared_at_block` |
+| `ticker_vs_pair` | `pair_symbol` |
+| `pair_asset` | `native` |
+| `holder_concentration` | `flag_at_share`, `percentile`, `n` — null until a distribution exists |
+| `snipe_tax_exemptions` | always null: the count is the finding, there is no baseline for it |
 
-Added since, and safe to ignore if you were written against the nine:
-`deployer_prior_peaks`, `deployer_prior_survival`, `launch_vs_declaration`.
+### A measurement with no reference is not undetermined
+
+If the window was read and the number is real, the check states it, with
+`reference: null` and the reason in the headline:
+
+```json
+{
+  "id": "creator_opening_buy",
+  "state": "none",
+  "headline": "creator opened with 1.0% of supply · no index median yet, n=12, needs 30",
+  "value": { "supply_share": 0.0103 },
+  "reference": null,
+  "severity": 0,
+  "source": "CurveBuy events over the first 40 blocks, against the index median"
+}
+```
+
+`undetermined` is reserved for a window that was **not read**. Such a check
+states no number at all, in any field, including the headline.
 
 ---
 
@@ -90,44 +135,96 @@ Abridged:
   "symbol": "CHIPPER",
   "launch_block": 45790066,
   "launch_tx": "0xf2185b971c3b2a996c62dbedeeed19f3fc562b9be50625f113a3ce2761461f43",
-  "age_seconds": 1542787,
-  "pair": { "asset": "ETH", "address": "0x0000000000000000000000000000000000000000" },
+  "age_seconds": 1560043,
+  "pair": {
+    "asset": "ETH",
+    "address": "0x0000000000000000000000000000000000000000"
+  },
   "checks": [
     {
       "id": "snipe_tax_exemptions",
       "state": "finding",
       "headline": "9 wallets tax-free at launch, 1 of them the deployer, together 17.4% of supply",
-      "value": 9,
-      "reference": "17.4% of supply between them",
-      "severity": 917.3623,
+      "value": {
+        "wallets": 9,
+        "beyond_deployer": 8,
+        "supply_share": 0.173623,
+        "slots": 32
+      },
+      "reference": null,
+      "severity": 917,
       "source": "the curve's own SnipeTaxExempted events, from the launch transaction receipt"
     },
     {
       "id": "creator_opening_buy",
+      "state": "none",
+      "headline": "creator opened with 1.0% of supply · no index median yet, n=1, needs 30",
+      "value": {
+        "supply_share": 0.010322
+      },
+      "reference": null,
+      "severity": 0,
+      "source": "CurveBuy events over the first 40 blocks, against the index median"
+    },
+    {
+      "id": "holder_concentration",
+      "state": "none",
+      "headline": "top 5 hold 92.9% (no reference yet)",
+      "value": {
+        "top5_share": 0.929,
+        "largest_share": null,
+        "holders": 9
+      },
+      "reference": null,
+      "severity": 0,
+      "source": "the token's Transfer log, excluding the curve and the protocol"
+    },
+    {
+      "id": "ticker_collision",
       "state": "undetermined",
-      "headline": "creator opened with 1.0% of supply (no reference yet)",
+      "headline": "can't check this ticker against other launches yet",
       "value": null,
       "reference": null,
-      "severity": 150,
-      "source": "CurveBuy events over the first 40 blocks, against the index median"
+      "severity": 110,
+      "source": "indexed launch symbols and names, homoglyph-normalised"
     }
   ],
-  "summary": { "checks_run": 11, "findings": 1, "undetermined": 4 },
-  "as_of": "2026-09-12T10:41:07.000Z",
-  "index": { "launches": 18099 }
+  "summary": {
+    "checks_run": 11,
+    "findings": 1,
+    "undetermined": 5
+  },
+  "as_of": "2026-09-12T15:32:29.797Z",
+  "index": {
+    "launches": 18100
+  }
 }
 ```
 
+Four of the eleven checks are shown. `examples/sample-response.json` in the
+repository is the full response, byte for byte as the endpoint returned it.
+
+**About this capture.** It was taken against an index that was a long way behind
+the chain head, which is why `ticker_collision` and the deployer checks come
+back `undetermined` rather than `none`: the index had not read the window those
+questions are about, so it does not answer them. That is the guarantee working,
+not a gap in the data, and against a current index those same checks resolve.
+Regenerate at any time with `node scripts/gen-examples.mjs`.
+
 Field notes:
 
-- **`value`** is the measured quantity, apart from the sentence: a count, a
-  percentage, a rate in bps, a boolean, a ticker. Use this, not `headline`.
-- **`reference`** is what the value is measured against — an index median with
-  its sample size, a threshold, a denominator. Null when the check is
-  categorical.
-- **`severity`** orders the checks, highest first. It is **not a score** and is
-  not comparable between launches; it exists so you can render the same order
-  the cards do.
+- **`value`** is the measured quantity, apart from the sentence, and is always
+  **an object or null** — never a bare number, string or boolean. Use this, not
+  `headline`. Keys are per check id and listed above. Shares are fractions:
+  `0.174` is 17.4% of supply. A key whose quantity was not read is `null`, never
+  `0`, because a zero there is indistinguishable from a measurement.
+- **`reference`** is what the value is measured against, also an object or null:
+  an index median with its sample size, a threshold, a denominator. Null when
+  there is nothing to measure against yet, in which case the headline says so.
+- **`severity`** orders the checks, highest first. It is an **integer**, it is
+  **not a score**, and it is not comparable between launches; it exists so you
+  can render the same order the cards do. The quantity that drove it is in
+  `value`, never encoded in the severity's own digits.
 - **`source`** is what the check was read from. It is published because it
   varies in a way that matters: an exemption count read from the curve's own
   events includes the deployer, one decoded from calldata does not, and they are

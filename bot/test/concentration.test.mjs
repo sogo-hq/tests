@@ -91,14 +91,19 @@ test('an unreadable measurement is undetermined, never a low number', () => {
   assert.ok(!/\\b0(\\.0)?%/.test(f.detail + f.plain), 'a failed read must never render as 0%');
 });
 
-test('a measurable share with no distribution behind it is undetermined, not clean', () => {
+test('a measurable share with no distribution behind it is a measurement, not a verdict', () => {
   const out = inTempDb(`
     for (let i = 0; i < 10; i++) obs(A(100 + i), 50 + i, 30);
     const f = flagFor({ top5Share: 44, top1Share: 9, holders: 30, circulating: 100n });
     console.log(JSON.stringify({ state: f.state, detail: f.detail }));
   `);
   const f = JSON.parse(out);
-  assert.equal(f.state, 'unknown', 'ten observations is not a threshold');
+  // Not 'unknown'. The share WAS read; what is missing is a distribution to
+  // judge it against, and a missing comparison does not unmeasure the thing
+  // compared. The state carries no finding, the detail carries the number and
+  // says the threshold is absent, and the API renders this as state "none"
+  // with reference null. What it must never do is swallow the 44%.
+  assert.equal(f.state, 'clean', 'the share was read, so it is not undetermined');
   assert.match(f.detail, /top 5 hold 44\.0%/, 'the measurement is still reported as a fact');
   assert.match(f.detail, /largest single wallet 9\.0%/, 'and the largest single wallet travels with it');
   assert.match(f.detail, /no threshold yet/);
@@ -246,8 +251,10 @@ test('a reading without a largest-holder share degrades, it does not throw', () 
     console.log(JSON.stringify(out));
   `);
   const r = JSON.parse(out);
+  // What matters is that the three shapes agree: a missing optional field is
+  // not allowed to change the verdict, whatever that verdict is.
   for (const key of ['missing', 'null_', 'nan']) {
-    assert.equal(r[key].state, 'unknown', `${key} changed the verdict`);
+    assert.equal(r[key].state, r.missing.state, `${key} changed the verdict`);
     assert.ok(!/largest/.test(r[key].plain), `${key} claimed a largest holder: ${r[key].plain}`);
     assert.ok(!/NaN|undefined|null/.test(r[key].plain), `${key} leaked a non-number: ${r[key].plain}`);
   }

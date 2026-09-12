@@ -13,6 +13,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { freshDb } from './tmpdb.mjs';
 
 process.env.DB_PATH = process.env.DB_PATH || freshDb('api');
@@ -355,4 +356,294 @@ test('the document names the public host from the environment only', () => {
   // Nothing else in the document resolves a host.
   const flat = JSON.stringify(doc);
   assert.ok(!/rpc\.mainnet/.test(flat), 'the document leaks the RPC host');
+});
+
+// ------------------------------------------- the structured value contract
+
+/**
+ * Every value and reference in every response is an object or null.
+ *
+ * Never a number, a string or a boolean. A consumer that has to parse "9" out
+ * of one check and "400 bps" out of the next has no contract at all, and a bare
+ * scalar cannot gain a second field later without breaking every client that
+ * read it. This is swept over every check of every response rather than
+ * asserted per check, because the way a scalar gets back in is that somebody
+ * adds one check that returns one.
+ */
+function assertStructured(label, checks) {
+  for (const c of checks) {
+    for (const field of ['value', 'reference']) {
+      const v = c[field];
+      if (v === null) continue;
+      assert.equal(typeof v, 'object',
+        `${label}: ${c.id}.${field} is a ${typeof v} (${JSON.stringify(v)}), not an object or null`);
+      assert.ok(!Array.isArray(v), `${label}: ${c.id}.${field} is an array`);
+      assert.ok(Object.keys(v).length > 0, `${label}: ${c.id}.${field} is an empty object`);
+    }
+  }
+}
+
+test('every value and reference is an object or null, never a scalar', () => {
+  assertStructured('GET /v1/launch', launch().checks);
+  // And on a launch where most checks come back undetermined, which is the
+  // shape most likely to carry a stray scalar.
+  const thin = toApiLaunch((() => {
+    const r = makeScan({ windowIndexed: false });
+    r.flags = computeFlags({
+      token: '0x' + '2'.repeat(40), deployer: '0x' + '3'.repeat(40),
+      name: null, symbol: null, creatorTaxBps: 0, buybackEnabled: false,
+      pairToken: PAIR, pairSymbol: 'ETH', scannedAt: 1_780_003_600,
+    });
+    r.reads.token = '0x' + '2'.repeat(40);
+    return r;
+  })(), new Date(NOW));
+  assertStructured('a mostly-undetermined launch', thin.checks);
+});
+
+test('the committed value shapes are the committed value shapes', () => {
+  const by = Object.fromEntries(launch().checks.map((c) => [c.id, c]));
+
+  // Shares are FRACTIONS, not percentages: 0.174 is 17.4% of supply.
+  const ex = by.snipe_tax_exemptions;
+  assert.deepEqual(Object.keys(ex.value).sort(),
+    ['beyond_deployer', 'slots', 'supply_share', 'wallets']);
+  assert.equal(ex.value.wallets, 5);
+  assert.equal(ex.value.beyond_deployer, 4);
+  assert.equal(ex.value.slots, 32);
+  assert.ok(Math.abs(ex.value.supply_share - 0.223) < 1e-9, ex.value.supply_share);
+  assert.equal(ex.reference, null);
+
+  assert.deepEqual(Object.keys(by.creator_tax.value), ['bps']);
+  assert.deepEqual(Object.keys(by.creator_tax.reference).sort(), ['median_bps', 'n']);
+  assert.equal(by.creator_tax.value.bps, 400);
+
+  assert.deepEqual(Object.keys(by.ticker_collision.value), ['matches']);
+  assert.deepEqual(Object.keys(by.ticker_collision.reference).sort(),
+    ['flag_at_or_above', 'indexed']);
+
+  assert.deepEqual(Object.keys(by.deployer_history.value), ['launches_7d']);
+  assert.deepEqual(by.deployer_history.reference, { flag_above: 2 });
+
+  assert.deepEqual(Object.keys(by.pair_asset.value).sort(), ['address', 'asset']);
+  assert.equal(by.pair_asset.value.asset, 'ETH');
+
+  assert.deepEqual(Object.keys(by.ticker_vs_pair.value), ['differs']);
+  assert.equal(typeof by.ticker_vs_pair.value.differs, 'boolean');
+
+  assert.deepEqual(by.buyback_vesting.value, { enabled: false });
+
+  assert.deepEqual(Object.keys(by.creator_opening_buy.value), ['supply_share']);
+  assert.deepEqual(Object.keys(by.holder_concentration.value).sort(),
+    ['holders', 'largest_share', 'top5_share']);
+});
+
+test('severity is an integer, and the order survives the rounding', () => {
+  const checks = launch().checks;
+  for (const c of checks) {
+    assert.ok(Number.isInteger(c.severity), `${c.id} severity is ${c.severity}`);
+  }
+  for (let i = 1; i < checks.length; i++) {
+    assert.ok(checks[i - 1].severity >= checks[i].severity, 'checks are out of order');
+  }
+  // The supply share is no longer hidden in the decimal; it is a field.
+  const ex = checks.find((c) => c.id === 'snipe_tax_exemptions');
+  assert.equal(ex.severity, 922);
+  assert.ok(ex.value.supply_share > 0);
+});
+
+// ----------------------------------------------- undetermined carries nothing
+
+test('no undetermined check states a number anywhere in its headline', () => {
+  // The guarantee is that undetermined carries no value. A headline reading
+  // "creator opened with 1.0% of supply" while the state says undetermined
+  // breaks it in the one field a human actually reads.
+  const shapes = [launch(), toApiLaunch((() => {
+    const r = makeScan({ windowIndexed: false });
+    r.flags = computeFlags({
+      token: '0x' + '2'.repeat(40), deployer: '0x' + '3'.repeat(40),
+      name: null, symbol: null, creatorTaxBps: 0, buybackEnabled: false,
+      pairToken: PAIR, pairSymbol: 'ETH', scannedAt: 1_780_003_600,
+    });
+    r.reads.token = '0x' + '2'.repeat(40);
+    return r;
+  })(), new Date(NOW))];
+
+  let seen = 0;
+  for (const l of shapes) {
+    for (const c of l.checks.filter((x) => x.state === 'undetermined')) {
+      seen++;
+      assert.doesNotMatch(c.headline, /\d/,
+        `${c.id} is undetermined and its headline states a number: "${c.headline}"`);
+      assert.equal(c.value, null);
+      assert.equal(c.reference, null);
+    }
+  }
+  assert.ok(seen > 0, 'no undetermined check in either fixture, so nothing was tested');
+});
+
+// -------------------------------------------------------- ticker collisions
+
+test('a unique ticker is not a collision', () => {
+  const unique = toApiLaunch((() => {
+    const r = makeScan({});
+    r.flags = computeFlags({
+      token: TOKEN, deployer: DEP, name: 'Wholly Unique', symbol: 'UNIQ7',
+      creatorTaxBps: 400, buybackEnabled: false, pairToken: PAIR, pairSymbol: 'ETH',
+      scannedAt: 1_780_003_600,
+    });
+    r.reads.token = TOKEN;
+    return r;
+  })(), new Date(NOW));
+  const c = unique.checks.find((x) => x.id === 'ticker_collision');
+  assert.equal(c.state, 'none', `a unique ticker was reported as ${c.state}`);
+  assert.equal(c.value.matches, 0);
+  assert.doesNotMatch(c.headline, /shared with/);
+});
+
+test('a genuine collision is a finding, and says how many OTHERS', () => {
+  // 60 launches in the fixture carry the ticker DUPE, and the token under scan
+  // is a 61st. The count is of the other sixty.
+  const c = launch().checks.find((x) => x.id === 'ticker_collision');
+  assert.equal(c.state, 'finding');
+  assert.equal(c.value.matches, 60);
+  assert.match(c.headline, /shared with 60 other launches/);
+  // Never the shape that reads as "only this one uses it".
+  assert.doesNotMatch(c.headline, /^\d+ of [\d,]+ indexed launches use/);
+});
+
+test('one other launch sharing a ticker is below the threshold', () => {
+  const one = '0x' + '5'.repeat(40);
+  insert.run(one, CURVE, one, PAIR, 90_001, '0x' + '5'.repeat(64), 1_780_000_000,
+    'Solo', 'SOLO1', 'solo', 'solo1', 1, 100, 0.5, 0.5);
+  const other = '0x' + '6'.repeat(40);
+  insert.run(other, CURVE, other, PAIR, 90_002, '0x' + '6'.repeat(64), 1_780_000_000,
+    'Solo', 'SOLO1', 'solo', 'solo1', 1, 100, 0.5, 0.5);
+
+  const r = makeScan({});
+  r.flags = computeFlags({
+    token: one, deployer: one, name: 'Solo', symbol: 'SOLO1',
+    creatorTaxBps: 100, buybackEnabled: false, pairToken: PAIR, pairSymbol: 'ETH',
+    scannedAt: 1_780_003_600,
+  });
+  r.reads.token = one;
+  const c = toApiLaunch(r, new Date(NOW)).checks.find((x) => x.id === 'ticker_collision');
+  assert.equal(c.value.matches, 1, 'the token itself was counted');
+  assert.equal(c.state, 'none', 'one other launch was reported as a collision');
+  assert.equal(c.reference.flag_at_or_above, 2);
+});
+
+// ------------------------------------------------------------- the documents
+
+test('docs/api.md lists every published check id, and invents none', () => {
+  // The mismatch the partner found was between the docs and the API, not
+  // inside either one. So the list is checked against the code, not re-typed.
+  const md = readFileSync(new URL('../docs/api.md', import.meta.url), 'utf8');
+  const documented = new Set(
+    [...md.matchAll(/^\| `([a-z_]+)` \| (?:✓|added after v1) \|/gm)].map((m) => m[1]),
+  );
+  const published = [...T.COMMITTED_CHECK_IDS, ...T.ADDITIONAL_CHECK_IDS];
+  for (const id of published) {
+    assert.ok(documented.has(id), `${id} is published and not in the id table`);
+  }
+  for (const id of documented) {
+    assert.ok(published.includes(id), `${id} is documented and does not exist`);
+  }
+  assert.equal(documented.size, published.length);
+
+  // And the v1 nine are marked as the v1 nine.
+  for (const id of T.COMMITTED_CHECK_IDS) {
+    assert.match(md, new RegExp(`^\\| \`${id}\` \\| ✓ \\|`, 'm'), `${id} lost its v1 mark`);
+  }
+  for (const id of T.ADDITIONAL_CHECK_IDS) {
+    assert.match(md, new RegExp(`^\\| \`${id}\` \\| added after v1 \\|`, 'm'),
+      `${id} is not marked as added after v1`);
+  }
+});
+
+test('checks_run counts what is actually in the array', () => {
+  const l = launch();
+  assert.equal(l.summary.checks_run, l.checks.length);
+  assert.equal(l.summary.findings, l.checks.filter((c) => c.state === 'finding').length);
+  assert.equal(l.summary.undetermined,
+    l.checks.filter((c) => c.state === 'undetermined').length);
+  // The documented count for an undeclared launch.
+  assert.equal(l.checks.length, 11);
+});
+
+test('the openapi document declares value and reference as object-or-null', () => {
+  const check = openapiDocument().components.schemas.Check.properties;
+  assert.deepEqual(check.value.type, ['object', 'null']);
+  assert.deepEqual(check.reference.type, ['object', 'null']);
+  assert.equal(check.severity.type, 'integer');
+  // And the enum is the full published set, in committed-first order.
+  assert.deepEqual(check.id.enum,
+    [...T.COMMITTED_CHECK_IDS, ...T.ADDITIONAL_CHECK_IDS]);
+});
+
+test('every json block in docs/api.md obeys the contract it documents', () => {
+  // The partner read the documents, not the code. A sample in the prose with a
+  // scalar value is the same defect as a scalar on the wire.
+  const md = readFileSync(new URL('../docs/api.md', import.meta.url), 'utf8');
+  const blocks = [...md.matchAll(/```json\n([\s\S]*?)```/g)].map((m) => m[1]);
+  assert.ok(blocks.length >= 3, `only ${blocks.length} json blocks found`);
+
+  let checked = 0;
+  for (const [i, block] of blocks.entries()) {
+    let parsed;
+    try {
+      parsed = JSON.parse(block);
+    } catch (err) {
+      // Blocks written with an elision are prose, not payloads.
+      if (block.includes('…') || block.includes('"...":')) continue;
+      assert.fail(`json block ${i} does not parse: ${err.message}`);
+    }
+    for (const c of collectChecks(parsed)) {
+      checked++;
+      for (const field of ['value', 'reference']) {
+        const v = c[field];
+        if (v === null) continue;
+        assert.equal(typeof v, 'object',
+          `docs json block ${i}: ${c.id}.${field} is a ${typeof v}`);
+      }
+      assert.ok(Number.isInteger(c.severity), `docs json block ${i}: ${c.id} severity`);
+      if (c.state === 'undetermined') {
+        assert.doesNotMatch(c.headline, /\d/,
+          `docs json block ${i}: ${c.id} is undetermined and states a number`);
+      }
+    }
+  }
+  assert.ok(checked > 0, 'no checks found in any documented sample');
+});
+
+function collectChecks(node, out = []) {
+  if (Array.isArray(node)) {
+    for (const n of node) collectChecks(n, out);
+  } else if (node && typeof node === 'object') {
+    if (typeof node.id === 'string' && 'state' in node && 'headline' in node) out.push(node);
+    for (const v of Object.values(node)) collectChecks(v, out);
+  }
+  return out;
+}
+
+test('the committed examples obey the contract too', () => {
+  for (const name of ['sample-response.json', 'sample-stats.json', 'openapi.json']) {
+    const text = readFileSync(new URL(`../examples/${name}`, import.meta.url), 'utf8');
+    JSON.parse(text); // parses at all
+  }
+  const sample = JSON.parse(
+    readFileSync(new URL('../examples/sample-response.json', import.meta.url), 'utf8'));
+  assert.equal(sample.summary.checks_run, sample.checks.length);
+  for (const c of sample.checks) {
+    for (const field of ['value', 'reference']) {
+      const v = c[field];
+      if (v === null) continue;
+      assert.equal(typeof v, 'object', `examples: ${c.id}.${field} is a ${typeof v}`);
+    }
+    assert.ok(Number.isInteger(c.severity), `examples: ${c.id} severity ${c.severity}`);
+    if (c.state === 'undetermined') {
+      assert.equal(c.value, null);
+      assert.doesNotMatch(c.headline, /\d/, `examples: ${c.id} undetermined with a number`);
+    }
+  }
+  assert.doesNotMatch(JSON.stringify(sample), /\bclean\b|\bsafe\b|verdict|grade|"score"/i);
 });

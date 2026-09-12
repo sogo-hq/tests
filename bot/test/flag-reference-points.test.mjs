@@ -91,8 +91,10 @@ test('the reference points are the real ones, not restatements', () => {
   assert.match(byKey['deployer_rate'].plain, /8 tokens in 7d · flag above 2/);
   // The deployer is the floor every launch has, so the count is stated against it.
   assert.match(byKey['snipe_exemptions'].plain, /^3 wallets tax-free at launch, 1 of them the deployer$/);
-  // The collision count against the index it was found in.
-  assert.match(byKey['collision'].plain, /60 of 1,50\d indexed launches/);
+  // The collision count against the index it was found in, and said as OTHER
+  // launches: "60 of 1,501 indexed launches use this ticker" reads as though
+  // the token being scanned were one of the sixty, which it never is.
+  assert.match(byKey['collision'].plain, /ticker shared with 60 other launches of 1,50\d indexed/);
 });
 
 test('no finding reads as a verdict about the deployer or the creator', () => {
