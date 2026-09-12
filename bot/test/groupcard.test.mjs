@@ -36,7 +36,7 @@ const FINDINGS = [
 
 const MARKET = {
   mcapQuote: 1.68, athQuote: 5.4, athMinutes: 42, liquidityQuote: 0.9,
-  vol5m: 0.12, vol1h: 3.4, change5m: 12.5, change1h: -8.25,
+  vol5m: 0.12, vol1h: 3.4,
   trades: 180, complete: true,
 };
 
@@ -129,10 +129,10 @@ test('a graduated launch says how long ago', () => {
   assert.match(text, /graduated 3h ago/);
 });
 
-test('the market block states both windows and both changes', () => {
+test('the market block states both windows as quantities', () => {
   const text = card().text;
   assert.match(text, /ath 5\.4 ETH at \+42 min · liquidity 0\.9 ETH/);
-  assert.match(text, /vol 5m 0\.12 · 1h 3\.4 ETH · \+12\.5% 5m · -8\.3% 1h/);
+  assert.match(text, /vol 5m 0\.12 · 1h 3\.4 ETH · 180 trades/);
 });
 
 test('a partial window says it is partial', () => {

@@ -31,12 +31,6 @@ function esc(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
-function pct(v: number | null): string {
-  if (v === null) return 'n/a';
-  const sign = v > 0 ? '+' : '';
-  return `${sign}${v.toFixed(1)}%`;
-}
-
 export interface GroupCardOptions {
   chatId?: number;
   botUsername?: string;
@@ -198,8 +192,10 @@ function marketLines(m: MarketSnapshot, quote: string, r: ScanResult): string[] 
     out.push(`liquidity ${compactAmount(m.liquidityQuote)} ${q}`);
   }
   out.push(
+    // How much traded, not which way it went. See the note in metrics/market.ts:
+    // a quantity is evidence and a direction is a signal.
     `vol 5m ${compactAmount(m.vol5m)} · 1h ${compactAmount(m.vol1h)} ${q}`
-    + ` · ${pct(m.change5m)} 5m · ${pct(m.change1h)} 1h`
+    + ` · ${m.trades.toLocaleString()} trades`
     // A window measured over less than it names is still a measurement, and
     // saying so is the difference between a partial hour and an hour.
     + (m.complete ? '' : ' (partial)'),

@@ -17,6 +17,14 @@ import { BLOCKS_PER_MINUTE } from '../config.js';
  * trades against. There is no dollar figure anywhere because there is no oracle
  * for one, and inventing a conversion would put a made-up number next to
  * measured ones.
+ *
+ * There is no price CHANGE here either, and that is a deliberate absence rather
+ * than a missing feature. A quantity of activity is evidence: how much traded,
+ * how many wallets, how much the top five hold. A direction over five minutes
+ * is a trading signal, and the moment a card carries one it stops being the
+ * thing no other bot does and becomes a worse version of all of them. Volume,
+ * market cap and the peak stay, because each of those is a size rather than a
+ * direction.
  */
 
 export interface MarketSnapshot {
@@ -33,9 +41,6 @@ export interface MarketSnapshot {
   liquidityQuote: number;
   vol5m: number;
   vol1h: number;
-  /** Percentage change over the window, or null when the window has no trades. */
-  change5m: number | null;
-  change1h: number | null;
   /** How many trades the figures above were taken over. */
   trades: number;
   /**
@@ -93,12 +98,6 @@ function priceOf(r: TradeRow): Price | null {
 
 function gt(a: Price, b: Price): boolean {
   return a.q * b.t > b.q * a.t;
-}
-
-/** (to/from - 1) * 100, to one decimal, without leaving the integers early. */
-function changePct(from: Price, to: Price): number {
-  const scaled = (to.q * from.t * 10_000n) / (to.t * from.q);
-  return Number(scaled - 10_000n) / 100;
 }
 
 export interface MarketInput {
@@ -170,7 +169,7 @@ function compute(
   const { mcapQuote, liquidityQuote } = input;
   const empty: MarketSnapshot = {
     mcapQuote, athQuote: null, athMinutes: null, liquidityQuote,
-    vol5m: 0, vol1h: 0, change5m: null, change1h: null,
+    vol5m: 0, vol1h: 0,
     trades: 0, complete: false,
   };
   if (!rows.length) return empty;
@@ -202,8 +201,6 @@ function compute(
   let vol5m = 0n;
   let vol1h = 0n;
   const unit = 10 ** input.pairDecimals;
-  let at5m: Price | null = null;
-  let at1h: Price | null = null;
   let last: Price | null = null;
   let counted = 0;
 
@@ -229,11 +226,6 @@ function compute(
       } catch (err) {
         // A row whose amount will not parse is not volume we can state.
       }
-      // The last price at or before the window opened is what the window is
-      // measured from. Tracked as "the earliest trade inside it" instead, which
-      // is the same number for any token that traded in the window and the only
-      // one available for a token that did not trade before it.
-      if (!at1h) at1h = p;
     }
     if (age <= 300) {
       try {
@@ -241,7 +233,6 @@ function compute(
       } catch (err) {
         // as above
       }
-      if (!at5m) at5m = p;
     }
   }
   flushMinute();
@@ -259,8 +250,6 @@ function compute(
     liquidityQuote,
     vol5m: Number(vol5m) / unit,
     vol1h: Number(vol1h) / unit,
-    change5m: at5m ? changePct(at5m, last) : null,
-    change1h: at1h ? changePct(at1h, last) : null,
     trades: counted,
     complete: reaches(token, input.currentBlock),
   };

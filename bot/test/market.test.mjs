@@ -52,8 +52,6 @@ test('no trades is not a zero, it is nothing to say', () => {
   M.resetMarketCache();
   const s = snap();
   assert.equal(s.athQuote, null);
-  assert.equal(s.change5m, null);
-  assert.equal(s.change1h, null);
   assert.equal(s.vol1h, 0);
   assert.equal(s.trades, 0);
   assert.equal(s.complete, false, 'a token with no trade log is not a complete reading');
@@ -72,27 +70,19 @@ test('volume is summed per window, in the quote asset', () => {
   assert.equal(s.trades, 4);
 });
 
-test('the change is measured from the first trade inside the window', () => {
-  M.resetMarketCache();
-  db.prepare('DELETE FROM trades WHERE token = ?').run(TOKEN);
-  // 1.0 an hour ago, 2.0 five minutes ago, 3.0 now: +50% over 5m, +200% over 1h.
-  trade(3000, 1n * E, 1n * E);
-  trade(200, 2n * E, 1n * E);
-  trade(30, 3n * E, 1n * E);
-  const s = snap();
-  assert.equal(s.change5m, 50);
-  assert.equal(s.change1h, 200);
-});
-
-test('a window with no trades in it has no change, not a zero', () => {
+test('a quiet window is a zero volume, and no direction at all', () => {
   M.resetMarketCache();
   db.prepare('DELETE FROM trades WHERE token = ?').run(TOKEN);
   trade(3000, 1n * E, 1n * E);
   trade(2000, 2n * E, 1n * E);
   const s = snap();
-  assert.equal(s.change5m, null, 'a quiet five minutes is not a flat five minutes');
   assert.equal(s.vol5m, 0);
-  assert.equal(s.change1h, 100);
+  assert.equal(s.vol1h, 3);
+  // There is no price direction in a snapshot at all. A quantity of activity is
+  // evidence; which way the price went is a trading signal, and a card carrying
+  // one stops being the thing no other bot does.
+  assert.ok(!('change5m' in s), 'the snapshot carries a price direction');
+  assert.ok(!('change1h' in s));
 });
 
 test('the ATH is the highest one-minute candle, not the highest wick', () => {
