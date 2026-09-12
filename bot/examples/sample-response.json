@@ -5,7 +5,7 @@
   "symbol": "CHIPPER",
   "launch_block": 45790066,
   "launch_tx": "0xf2185b971c3b2a996c62dbedeeed19f3fc562b9be50625f113a3ce2761461f43",
-  "age_seconds": 1542787,
+  "age_seconds": 1557226,
   "pair": {
     "asset": "ETH",
     "address": "0x0000000000000000000000000000000000000000"
@@ -28,6 +28,15 @@
       "reference": null,
       "severity": 150,
       "source": "CurveBuy events over the first 40 blocks, against the index median"
+    },
+    {
+      "id": "creator_tax",
+      "state": "undetermined",
+      "headline": "no baseline yet for the creator's cut",
+      "value": null,
+      "reference": null,
+      "severity": 140,
+      "source": "the launch calldata, against the median of the indexed launches"
     },
     {
       "id": "holder_concentration",
@@ -57,30 +66,21 @@
       "source": "recorded peak market caps of this deployer's prior launches"
     },
     {
-      "id": "creator_tax",
-      "state": "none",
-      "headline": "creator takes nothing per trade",
-      "value": 0,
-      "reference": "index median 50 bps, n=3400",
-      "severity": 0,
-      "source": "the launch calldata, against the median of the indexed launches"
-    },
-    {
       "id": "deployer_history",
-      "state": "none",
-      "headline": "deployer's only launch this week",
-      "value": 0,
-      "reference": "flagged above 2 other launches in 7 days",
-      "severity": 0,
+      "state": "undetermined",
+      "headline": "can't check the deployer's other launches yet",
+      "value": null,
+      "reference": null,
+      "severity": 120,
       "source": "the index of launches by this deployer"
     },
     {
       "id": "ticker_collision",
-      "state": "none",
-      "headline": "no other token uses this ticker",
-      "value": 0,
-      "reference": "out of 18099 indexed launches",
-      "severity": 0,
+      "state": "undetermined",
+      "headline": "can't check this ticker against other launches yet",
+      "value": null,
+      "reference": null,
+      "severity": 110,
       "source": "indexed launch symbols and names, homoglyph-normalised"
     },
     {
@@ -114,10 +114,10 @@
   "summary": {
     "checks_run": 11,
     "findings": 1,
-    "undetermined": 4
+    "undetermined": 7
   },
-  "as_of": "2026-09-12T10:44:57.950Z",
+  "as_of": "2026-09-12T14:45:36.961Z",
   "index": {
-    "launches": 18099
+    "launches": 18100
   }
 }

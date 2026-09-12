@@ -1,16 +1,16 @@
 {
   "index": {
-    "launches": 18099,
-    "decoded": 3400,
-    "read_from_curve_events": 1
+    "launches": 18100,
+    "decoded": 3401,
+    "read_from_curve_events": 2
   },
   "exemptions": {
-    "with_any": 232,
+    "with_any": 233,
     "beyond_deployer": 1,
-    "beyond_deployer_pct": 100,
+    "beyond_deployer_pct": 50,
     "median_count_beyond_deployer": null,
     "median_sample": 1
   },
   "declarations": 0,
-  "as_of": "2026-09-12T10:44:57.964Z"
+  "as_of": "2026-09-12T14:45:36.972Z"
 }
