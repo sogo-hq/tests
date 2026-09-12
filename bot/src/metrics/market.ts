@@ -80,8 +80,12 @@ interface TradeRow { q: string; t: string; bt: number; side: string }
  *
  * quote/token on a single trade, compared without ever becoming a float: two
  * prices a/b and c/d order by a*d against c*b, and both sides are wei-scale
- * integers, so the comparison is exact. Converted to a number only at the end,
- * for a percentage nobody will read past one decimal.
+ * integers, so the comparison is exact.
+ *
+ * Prices are compared here and never PUBLISHED here. The only thing that leaves
+ * this module having touched one is the all-time high, restated as a market cap
+ * by scaling the current one; the ratio itself is consumed on the way and never
+ * rendered. See the note at the top of the file for why.
  */
 interface Price { q: bigint; t: bigint }
 

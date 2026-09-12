@@ -64,7 +64,7 @@ export function makeScan(over = {}) {
               progressAt30m: 0,
               progressPct: 0,
               peakProgressPct: 0,
-              progressVelocityPer10m: 0,
+              progressVelocityPer10m: over.progressVelocity ?? 0,
               forwarderBuys: 0,
               roundTrippers: over.roundTrippers ?? 2,
               earlyBuyers: over.earlyBuyers ?? over.buyers ?? 2,

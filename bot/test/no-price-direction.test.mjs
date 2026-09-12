@@ -174,6 +174,50 @@ test('no leaderboard states a price direction', () => {
 
 // ------------------------------------------------------- the guard is honest
 
+test('the closest legitimate neighbour survives the guard', () => {
+  // "progress accruing at 2.41% per 10 min" is a percentage tied to a time
+  // window, which is the exact shape the guard bans. It is allowed: it is net
+  // quote into the CURVE as a share of the graduation threshold, per ten
+  // minutes, which is a quantity of activity and the same family as "vol 1h".
+  //
+  // This is the one line that would tell us the guard had been written too
+  // wide, so it is rendered deliberately rather than left at the fixture's
+  // zero, where it never appears and the guard is never tested against it.
+  resetSponsor();
+  const withVelocity = scan({ progressVelocity: 2.413 });
+  const full = C.renderCardText(withVelocity);
+  assert.match(full, /progress velocity: 2\.413% per 10 min/,
+    'the fixture no longer renders the line this test exists for');
+  assertNoDirection('the full card with progress velocity', full);
+  assertNoDirection('the quick card with progress velocity',
+    C.renderDefaultCard(withVelocity, 'vitalscheck_bot'));
+  assertNoDirection('the picture with progress velocity',
+    svgText(I.cardSvg(withVelocity, AT)));
+});
+
+test('the launch-room surfaces state no price direction either', async () => {
+  // Not a card, but the same rule and the same readers: the pinned countdown
+  // post and /ready carry a signed delta over a window. It is a count of
+  // registered wallets and the ETH they hold before the token exists, so it is
+  // allowed, and it is guarded here so a price delta cannot be added beside it.
+  const { totalsBlock } = await import('../dist/tge.js');
+  // yesterday's figure comes from the snapshot table, so the delta needs one.
+  const today = Math.floor(NOW / 86_400_000);
+  db.prepare('INSERT OR REPLACE INTO ready_snapshots (day, wallets, wei) VALUES (?,?,?)')
+    .run(today - 1, 39, '112500000000000000000');
+  const block = totalsBlock(
+    { members: 120, now: NOW, botUsername: 'vitalscheck_bot', updatedMinutesAgo: 3 },
+    { wallets: 42, wei: 125_000_000_000_000_000_000n, external: 0 },
+  );
+  assert.match(block, /\+3 wallets/, 'the fixture no longer renders the delta this test exists for');
+  // The delta is not a percentage and carries no unit of price, so the signed
+  // form is fine; what must never appear is a price moving.
+  for (const re of DIRECTION_WORDS) {
+    assert.doesNotMatch(block, re, `the totals block states a price direction: ${re}`);
+  }
+  assert.equal(WINDOWED_PCT.exec(block), null);
+});
+
 test('the percentages that are not price all still render', () => {
   // A guard that passed by banning every "%" would be worthless: it would have
   // deleted the exemption share, the holder spread, the creator tax and the
