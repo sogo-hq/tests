@@ -1,4 +1,5 @@
 import { db } from './db.js';
+import { coverageNote } from './coverage.js';
 import { MIN_BENCHMARK_SAMPLES } from './metrics/benchmark.js';
 import { compactAmount } from './card.js';
 import { clamp, MAX_TICKER } from './text.js';
@@ -180,11 +181,16 @@ export function topGraduatedByCurveVolume(
   key: TaxBracket['key'],
   now = Math.floor(Date.now() / 1000),
   limit = 10,
-): { rows: VolumeRow[]; excludedNonEth: number } {
+): { rows: VolumeRow[]; excludedNonEth: number; notRead: number; readInFull: number } {
   const since = now - SEVEN_DAYS;
-  // LEFT JOIN, so a graduated launch with no trade in the window is still a
-  // row: it is the thing the non-ETH count has to see, and it is dropped from
-  // the ranking below on its own zero rather than by never being read.
+  // The trades table is not a chain-wide index. It holds what was read per
+  // token: the first thirty minutes of the sampled population, whatever a
+  // scan fetched, and the full curve life of graduated launches as the
+  // background pass reaches them. A launch with no trade rows has usually
+  // simply not been read, and ranking it as "no volume" was the first version
+  // of this. So a launch is ranked only when its trades are indexed through
+  // the block its curve was swept at, which is where curve trades end; the
+  // rest are counted and said.
   const rows = db
     .prepare(
       `SELECT l.token AS token,
@@ -192,6 +198,10 @@ export function topGraduatedByCurveVolume(
               l.creator_tax_bps AS bps,
               l.pair_token AS pair,
               COALESCE(l.graduated_at, 0) AS graduatedAt,
+              CASE WHEN l.trades_indexed_to IS NOT NULL
+                    AND COALESCE(l.swept_at, l.graduated_at) IS NOT NULL
+                    AND l.trades_indexed_to >= COALESCE(l.swept_at, l.graduated_at)
+                   THEN 1 ELSE 0 END AS readInFull,
               COALESCE(SUM(CAST(t.quote_amount AS REAL)), 0) AS vol,
               COUNT(t.tx_hash) AS trades
          FROM launches l
@@ -202,10 +212,12 @@ export function topGraduatedByCurveVolume(
     )
     .all(since) as {
       token: string; symbol: string | null; bps: number; pair: string;
-      graduatedAt: number; vol: number; trades: number;
+      graduatedAt: number; readInFull: number; vol: number; trades: number;
     }[];
 
   let excludedNonEth = 0;
+  let notRead = 0;
+  let readInFull = 0;
   const ranked: VolumeRow[] = [];
   for (const r of rows) {
     if (bracketOf(r.bps)?.key !== key) continue;
@@ -213,7 +225,10 @@ export function topGraduatedByCurveVolume(
       excludedNonEth++;
       continue;
     }
-    // No trade inside the window is no observation, not a zero worth listing.
+    if (!r.readInFull) { notRead++; continue; }
+    readInFull++;
+    // Read in full and nothing inside the window: a real zero, and a launch
+    // whose curve trading ended before the window opened. Not listed.
     if (r.trades === 0) continue;
     ranked.push({
       token: r.token,
@@ -229,7 +244,7 @@ export function topGraduatedByCurveVolume(
   // built.
   ranked.sort((a, b) =>
     b.vol7dQuote - a.vol7dQuote || b.trades - a.trades || (a.token < b.token ? -1 : a.token > b.token ? 1 : 0));
-  return { rows: ranked.slice(0, Math.max(0, limit)), excludedNonEth };
+  return { rows: ranked.slice(0, Math.max(0, limit)), excludedNonEth, notRead, readInFull };
 }
 
 /**
@@ -285,33 +300,37 @@ function distributionLines(d: TaxDistribution): string[] {
  * launch is the part of its life that is over.
  */
 export function taxStatsText(now = Math.floor(Date.now() / 1000)): string {
-  const lines: string[] = [
+  const lines: string[] = [];
+  // An index that did not finish says so above every count taken from it.
+  const note = coverageNote();
+  if (note) lines.push(note);
+  lines.push(
     ...distributionLines(taxDistribution('all')),
     ...distributionLines(taxDistribution('graduated')),
-  ];
+  );
 
   for (const b of TAX_BRACKETS) {
-    const { rows, excludedNonEth } = topGraduatedByCurveVolume(b.key, now);
+    const { rows, excludedNonEth, notRead, readInFull } = topGraduatedByCurveVolume(b.key, now);
+    const plural = (n: number) => `${n.toLocaleString()} graduated launch${n === 1 ? '' : 'es'}`;
     if (rows.length) {
-      lines.push(`top by curve volume, last 7d, ETH pairs, ${b.label} tax:`);
+      lines.push(`top by curve volume, last 7d, ETH pairs, ${b.label} tax (${readInFull.toLocaleString()} read in full):`);
       for (const r of rows) {
         lines.push(
           `  ${ticker(r)} · ${compactAmount(r.vol7dQuote)} ETH · ` +
           `${r.trades.toLocaleString()} trade${r.trades === 1 ? '' : 's'}`,
         );
       }
+    } else if (readInFull > 0) {
+      // A negative, and one the index can support: every launch it is about
+      // was read to the end of its curve.
+      lines.push(`top by curve volume, ${b.label} tax: none of the ${readInFull.toLocaleString()} read in full traded on the curve in 7d`);
     } else {
-      lines.push(`top by curve volume, ${b.label} tax: none traded on the curve in 7d`);
+      lines.push(`top by curve volume, ${b.label} tax: none read in full yet`);
     }
-    // Printed in both states: "none traded" with two launches on a WETH pair
-    // left out of the count would be a claim about launches the ranking never
-    // looked at.
-    if (excludedNonEth > 0) {
-      lines.push(
-        `  ${excludedNonEth.toLocaleString()} graduated launch${excludedNonEth === 1 ? '' : 'es'} ` +
-        'on other pairs not ranked',
-      );
-    }
+    // Both counts, in every state: a ranking that left launches out says how
+    // many, or it reads as complete.
+    if (notRead > 0) lines.push(`  ${plural(notRead)} not read in full, not ranked`);
+    if (excludedNonEth > 0) lines.push(`  ${plural(excludedNonEth)} on other pairs not ranked`);
   }
 
   lines.push(POOL_TRADES_NOTE);

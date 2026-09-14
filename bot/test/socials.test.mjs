@@ -70,3 +70,55 @@ test('stored: null until read, then what was read', () => {
   assert.equal(S.socialsPresent({ x: '', tg: '', web: 'site', readAt: 5 }), false, 'a website alone is not X or Telegram');
   assert.equal(S.socialsPresent(null), false);
 });
+
+test('a successful read stores what the token says, trimmed, and marks it read', async () => {
+  // The real read goes through the chain client; here the client answers with
+  // the shape getTokenInfo returns, so a field-name mismatch would show up as
+  // an empty store rather than pass unnoticed.
+  const { client } = await import('../dist/chain.js');
+  const orig = client.readContract;
+  const T = '0x' + 'b'.repeat(40);
+  db.prepare(
+    `INSERT INTO launches (token, curve, deployer, pair_token, launch_config_id, graduation_threshold,
+       block_number, tx_hash, launched_at) VALUES (?,?,?,?,0,'0',1,?,1)`,
+  ).run(T, ZERO, ZERO, ZERO, '0x' + 'b'.repeat(64));
+  let asked = 0;
+  client.readContract = async (args) => {
+    asked++;
+    assert.equal(args.functionName, 'getTokenInfo');
+    assert.equal(args.address.toLowerCase(), T);
+    return {
+      tokenDeployer: ZERO, logo: '', description: '',
+      socials: { twitter: '  @chipper ', telegram: '', discord: 'd', website: 'chipper.xyz', farcaster: '' },
+    };
+  };
+  try {
+    const s = await S.socialsFor(T);
+    assert.deepEqual({ x: s.x, tg: s.tg, web: s.web }, { x: '@chipper', tg: '', web: 'chipper.xyz' });
+    assert.ok(s.readAt > 0);
+    assert.equal(asked, 1);
+    // Stored: the next call is answered from the row, not the chain.
+    const again = await S.socialsFor(T);
+    assert.equal(asked, 1, 'a stored reading was read from chain again');
+    assert.deepEqual(S.storedSocials(T), again);
+  } finally {
+    client.readContract = orig;
+  }
+});
+
+test('a failed read stores nothing and returns null', async () => {
+  const { client } = await import('../dist/chain.js');
+  const orig = client.readContract;
+  const T = '0x' + 'c'.repeat(40);
+  db.prepare(
+    `INSERT INTO launches (token, curve, deployer, pair_token, launch_config_id, graduation_threshold,
+       block_number, tx_hash, launched_at) VALUES (?,?,?,?,0,'0',1,?,1)`,
+  ).run(T, ZERO, ZERO, ZERO, '0x' + 'c'.repeat(64));
+  client.readContract = async () => { throw new Error('rpc down'); };
+  try {
+    assert.equal(await S.fillSocials(T), null);
+    assert.equal(S.storedSocials(T), null, 'a transient error became a permanent fact');
+  } finally {
+    client.readContract = orig;
+  }
+});

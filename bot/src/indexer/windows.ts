@@ -387,6 +387,84 @@ export function sampleCeilingReached(): boolean {
   );
 }
 
+/**
+ * Graduated launches whose curve life is not read to its end.
+ *
+ * The opening-window sample reads the first thirty minutes of a launch, which
+ * is what every card figure is defined over. A curve that graduated traded
+ * for hours, and /stats tax ranks graduated launches by what traded on the
+ * curve: over the first thirty minutes that ranking would be an accident of
+ * which launches were sampled. So the curve life of a graduated launch is
+ * read to the block it was swept at, newest first, a few per pass, at the
+ * same bulk priority as everything else here. The sweep is where curve trades
+ * stop, so a launch read to it is read in full and stays so.
+ */
+const GRADUATED_PER_PASS = Number(process.env.WINDOW_GRADUATED_BATCH || 3) || 3;
+
+interface GraduatedCandidate {
+  token: string;
+  curve: string;
+  block_number: number;
+  trades_indexed_to: number | null;
+  curve_end: number;
+}
+
+function unreadGraduated(limit: number): GraduatedCandidate[] {
+  return db
+    .prepare(
+      `SELECT token, curve, block_number, trades_indexed_to,
+              COALESCE(swept_at, graduated_at) AS curve_end
+         FROM launches
+        WHERE phase = 2
+          AND COALESCE(swept_at, graduated_at) IS NOT NULL
+          AND (trades_indexed_to IS NULL OR trades_indexed_to < COALESCE(swept_at, graduated_at))
+        ORDER BY COALESCE(swept_at, graduated_at) DESC
+        LIMIT ?`,
+    )
+    .all(limit) as GraduatedCandidate[];
+}
+
+/** How many graduated launches still lack their full curve life. */
+export function graduatedUnreadCount(): number {
+  return (db
+    .prepare(
+      `SELECT COUNT(*) AS n FROM launches
+        WHERE phase = 2 AND COALESCE(swept_at, graduated_at) IS NOT NULL
+          AND (trades_indexed_to IS NULL OR trades_indexed_to < COALESCE(swept_at, graduated_at))`,
+    )
+    .get() as { n: number }).n;
+}
+
+export interface GraduatedPass { attempted: number; read: number; trades: number; failed: number; yielded: boolean }
+
+/** Read the rest of a few graduated launches' curve lives. */
+export async function indexGraduatedCurves(limit = GRADUATED_PER_PASS): Promise<GraduatedPass> {
+  const pass: GraduatedPass = { attempted: 0, read: 0, trades: 0, failed: 0, yielded: false };
+  if (spareCapacity() <= 0) { pass.yielded = true; return pass; }
+  const targets = unreadGraduated(Math.max(1, limit));
+  pass.attempted = targets.length;
+  if (!targets.length) return pass;
+  const head = Number(await bulk(() => client.getBlockNumber()));
+  for (const t of targets) {
+    if (spareCapacity() <= 0) { pass.yielded = true; break; }
+    // Resumes where the opening window left off. Capped at head so a sweep the
+    // node has not reached yet is read next time rather than recorded as read.
+    const from = Math.max(t.block_number, (t.trades_indexed_to ?? t.block_number - 1) + 1);
+    const to = Math.min(t.curve_end, head);
+    if (to < from) continue;
+    try {
+      pass.trades += await bulk(() => indexOneCurve(t.curve, t.token, BigInt(from), BigInt(to)));
+      markWindowIndexed(t.token, t.block_number, to);
+      pass.read++;
+    } catch (err) {
+      pass.failed++;
+      console.warn(`[windows] curve life of ${t.token} unreadable:`, String((err as Error)?.message ?? err).slice(0, 120));
+      if (isRateLimit(err)) break;
+    }
+  }
+  return pass;
+}
+
 export function windowBacklog(): { exempt: number; total: number } {
   const q = (where: string) =>
     (db
@@ -412,6 +490,17 @@ export function startWindowLoop(intervalMs = 15_000, batch = BATCH): NodeJS.Time
     running = true;
     try {
       const pass = await indexWindows(batch);
+      // After the sample, never instead of it: the opening windows are what
+      // every card figure is defined over, and the curve lives serve one
+      // ranking in /stats tax.
+      const grad = await indexGraduatedCurves();
+      if (grad.read || grad.failed) {
+        console.log(
+          `[windows] ${grad.read} graduated curve ${grad.read === 1 ? 'life' : 'lives'} read in full, ` +
+            `${grad.trades.toLocaleString()} trades${grad.failed ? `, ${grad.failed} unreadable` : ''}, ` +
+            `${graduatedUnreadCount().toLocaleString()} left`,
+        );
+      }
       if (!pass.attempted && sampleCeilingReached() && !ceilingReported) {
         ceilingReported = true;
         console.log(

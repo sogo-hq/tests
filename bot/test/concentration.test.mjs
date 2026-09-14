@@ -260,3 +260,28 @@ test('a reading without a largest-holder share degrades, it does not throw', () 
   }
   assert.equal(r.recorded.top1_share, 0, 'stored as zero, which the renderers treat as absent');
 });
+
+// ------------------------------------------- a partial first read is not a reading
+
+/**
+ * A refresh that stops early on a token with no row yet writes the row, because
+ * the balances it read are what the next attempt resumes from. It writes it
+ * with measured_at = 0, and no reader may see that as a holder count: it was
+ * going out through /scout as a finished one.
+ */
+test('a snapshot with measured_at = 0 is invisible to every reader of holder counts', () => {
+  const out = inTempDb(`
+    // A finished reading, and a partial first row beside it.
+    for (let i = 0; i < 40; i++) obs(A(100 + i), 50 + i, 30);
+    db.prepare(\`INSERT INTO holder_snapshots (token, top5_share, top1_share, holders, excess, measured_at, balances, read_to_block)
+                VALUES (?, 99, 40, 300, 0.99, 0, '{}', 12345)\`).run(A(7));
+    const stored = C.readStoredConcentration(A(7));
+    const coverage = C.concentrationCoverage();
+    const t = C.concentrationThreshold(20, A(999));
+    console.log(JSON.stringify({ stored, coverage, n: t?.n ?? null, threshold: t?.thresholdShare ?? null }));
+  `);
+  const r = JSON.parse(out);
+  assert.equal(r.stored, null, 'a partial row read back as a holder count');
+  assert.equal(r.coverage, 40, 'a partial row counted toward the threshold sample');
+  assert.equal(r.n, 40, 'a partial row entered the threshold distribution');
+});

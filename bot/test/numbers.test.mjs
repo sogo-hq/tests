@@ -72,7 +72,7 @@ test('a fresh database counts nothing, and says its index has never advanced', (
   assert.equal(n.indexSize, 0);
   // Never having advanced is a stall by design: a database that has indexed
   // nothing cannot vouch for a count any more than one that stopped.
-  assert.equal(n.indexNote, 'index stalled, counts may be behind');
+  assert.equal(n.indexNote, 'index has never advanced, counts incomplete');
 });
 
 test('the day is the Bratislava day, and a scan at 23:30 UTC belongs to tomorrow', () => {
@@ -184,7 +184,7 @@ test('the card carries every label, the day, and the line that says what it is n
 test('the six values are on the card, formatted, and the note only when there is one', () => {
   const n = {
     day: '2026-09-11', tz: 'Europe/Bratislava', scansToday: 1234, exemptWalletsCaught: 56,
-    groups: 7, launchRoomsLive: 1, declared: 89, indexSize: 1234567, indexNote: null,
+    groups: 7, launchRoomsLive: 1, declared: 89, indexSize: 1234567, exemptionsRead: 400, indexNote: null,
   };
   const b = bodies(N.numbersCardSvg(n, AT));
   for (const v of [1234, 56, 7, 1, 89, 1234567]) {
@@ -192,14 +192,15 @@ test('the six values are on the card, formatted, and the note only when there is
   }
   assert.ok(!b.some((s) => /counts may be behind|counts incomplete|blocks behind/.test(s)));
 
-  const noted = bodies(N.numbersCardSvg({ ...n, indexNote: 'index stalled, counts may be behind' }, AT));
-  assert.ok(noted.includes('index stalled, counts may be behind'));
+  const noted = bodies(N.numbersCardSvg({ ...n, indexNote: 'index has never advanced, counts incomplete' }, AT));
+  assert.ok(noted.includes('index has never advanced, counts incomplete'));
 });
 
 test('nothing on the card is drawn over anything else, even with seven figures in every cell', () => {
   const n = {
     day: '2026-09-11', tz: 'Europe/Bratislava', scansToday: 1234567, exemptWalletsCaught: 1234567,
     groups: 1234567, launchRoomsLive: 1, declared: 1234567, indexSize: 1234567,
+    exemptionsRead: 1234567,
     indexNote: 'index 1,234,567 blocks behind the chain',
   };
   const svg = N.numbersCardSvg(n, AT, 'vitalscheck_bot');
@@ -248,6 +249,6 @@ test('the caption says the same six things as the card, and nothing the card doe
   assert.equal(lines.at(-1), "counts from this bot's own index. not a score, and not advice.");
   assert.ok(!lines.some((l) => l.includes(EM)), 'em dash in the caption');
 
-  const noted = N.numbersText({ ...n, indexNote: 'index stalled, counts may be behind' }).split('\n');
-  assert.equal(noted.at(-2), 'index stalled, counts may be behind');
+  const noted = N.numbersText({ ...n, indexNote: 'index has never advanced, counts incomplete' }).split('\n');
+  assert.equal(noted.at(-2), 'index has never advanced, counts incomplete');
 });

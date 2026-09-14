@@ -277,7 +277,7 @@ export function concentrationThreshold(
   if (holders < MIN_HOLDERS_FOR_SHARE) return null;
 
   const rows = db
-    .prepare('SELECT excess AS e FROM holder_snapshots WHERE token <> ? ORDER BY excess ASC')
+    .prepare('SELECT excess AS e FROM holder_snapshots WHERE token <> ? AND measured_at > 0 ORDER BY excess ASC')
     .all((excludeToken ?? '').toLowerCase()) as { e: number }[];
 
   const n = rows.length;
@@ -301,7 +301,7 @@ export function concentrationThreshold(
 
 /** How many holder distributions the threshold has behind it. */
 export function concentrationCoverage(): number {
-  return (db.prepare('SELECT COUNT(*) AS n FROM holder_snapshots').get() as { n: number }).n;
+  return (db.prepare('SELECT COUNT(*) AS n FROM holder_snapshots WHERE measured_at > 0').get() as { n: number }).n;
 }
 
 /**
@@ -335,7 +335,7 @@ export interface StoredConcentration extends Concentration {
  */
 export function readStoredConcentration(token: string, now?: number): StoredConcentration | null {
   const row = db
-    .prepare('SELECT top5_share, top1_share, holders, measured_at FROM holder_snapshots WHERE token = ?')
+    .prepare('SELECT top5_share, top1_share, holders, measured_at FROM holder_snapshots WHERE token = ? AND measured_at > 0')
     .get(token.toLowerCase()) as
     | { top5_share: number; top1_share: number | null; holders: number; measured_at: number }
     | undefined;
@@ -539,12 +539,17 @@ export async function refreshConcentration(
     // block in the middle of a token's life is not the distribution now, and
     // stamping it with the current time would be exactly the quiet lie this
     // product exists not to tell.
+    //
+    // On a token with no row yet this INSERT is the whole row, and the columns
+    // it has to fill are the published ones. They are written with
+    // measured_at = 0, which every reader treats as "no reading": a partial
+    // walk's holder count was going out through /scout as a finished one.
     db.prepare(
       `INSERT INTO holder_snapshots (token, top5_share, top1_share, holders, excess, measured_at, balances, read_to_block)
-       VALUES (?,?,?,?,?,?,?,?)
+       VALUES (?,?,?,?,?,0,?,?)
        ON CONFLICT(token) DO UPDATE SET
          balances = excluded.balances, read_to_block = excluded.read_to_block`,
-    ).run(token.toLowerCase(), concentration.top5Share, concentration.top1Share, concentration.holders, excess ?? 0, now, JSON.stringify(keep), Number(readTo));
+    ).run(token.toLowerCase(), concentration.top5Share, concentration.top1Share, concentration.holders, excess ?? 0, JSON.stringify(keep), Number(readTo));
   }
 
   if (pendingDeployerActivity) storeDeployerActivity(token, pendingDeployerActivity);

@@ -242,3 +242,20 @@ test('an unrecorded head is unknown, not caught up', function (t) {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// ------------------------------------------------------- the shared note
+
+test('coverageNote names the earliest cause, in the same words on every surface', async () => {
+  const { coverageNote } = await import(`${process.cwd()}/dist/coverage.js`);
+  const base = {
+    indexed: 1, decoded: 1, stalenessSeconds: 0, recovering: false, stalled: false,
+    behindSeconds: 10, lagBlocks: 0, behindHead: false,
+    trustNegatives: { collision: true, deployerHistory: true, taxBaseline: true },
+  };
+  assert.equal(coverageNote(base), null);
+  assert.equal(coverageNote({ ...base, behindHead: true, lagBlocks: 36000 }), 'index 36,000 blocks behind the chain');
+  assert.equal(coverageNote({ ...base, stalled: true, behindSeconds: 7200, behindHead: true, lagBlocks: 36000 }),
+    'index stalled 2h ago, counts may be behind');
+  assert.equal(coverageNote({ ...base, stalled: true, behindSeconds: null }), 'index has never advanced, counts incomplete');
+  assert.equal(coverageNote({ ...base, recovering: true, stalled: true, behindSeconds: null }), 'index rebuilding, counts incomplete');
+});

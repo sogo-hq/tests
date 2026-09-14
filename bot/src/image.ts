@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import type { ScanResult } from './scan.js';
 import { measure, wrap, fitSize, hasGlyph } from './fontmetrics.js';
 import { windowLabel } from './card.js';
+import { BENCHMARK_LADDER_MINUTES } from './metrics/benchmark.js';
 import { shortAge as age } from './text.js';
 import { sponsorLine } from './sponsor.js';
 import { launchNotice } from './launchnotice.js';
@@ -221,20 +222,25 @@ export function heroOf(r: ScanResult): HeroContent {
   }
   const w = r.traction.window;
   const median = r.benchmark.median;
+  // The count is over the token's own window and is labelled with it. The
+  // median is over a rung of the ladder, which can be a shorter window, and
+  // when the two label differently the reference names its own: a headline
+  // that labelled the count with the rung's window described a measurement
+  // that was never made.
+  const own = windowLabel(r.traction.windowMinutes);
+  const rung = windowLabel(r.benchmark.windowMinutes);
   if (w && median !== null && median > 0) {
-    // The benchmark window is a rung of the ladder, so it can be a fraction of
-    // a minute; the label is shared with the text card so both say "30s".
-    const label = r.benchmark.measuredAtAge ? 'at this age' : `in the first ${windowLabel(r.benchmark.windowMinutes)}`;
-    return {
-      headline: `${w.uniqueBuyers30m.toLocaleString()} buyers ${label}`,
-      reference: `index median ${median.toLocaleString()} over ${r.benchmark.n.toLocaleString()} launches`,
-      marked: 'none',
-    };
+    const sameLabel = own === rung;
+    const headline = `${w.uniqueBuyers30m.toLocaleString()} buyers in the first ${own}`;
+    const reference = sameLabel
+      ? `index median ${median.toLocaleString()}${r.benchmark.measuredAtAge ? ' at this age' : ''} over ${r.benchmark.n.toLocaleString()} launches`
+      : `index median ${median.toLocaleString()} over the first ${rung}, ${r.benchmark.n.toLocaleString()} launches`;
+    return { headline, reference, marked: 'none' };
   }
   if (w) {
     return {
-      headline: `${w.uniqueBuyers30m.toLocaleString()} buyers in the first ${Math.round(r.traction.windowMinutes)} min`,
-      reference: 'no index median yet at this age',
+      headline: `${w.uniqueBuyers30m.toLocaleString()} buyers in the first ${own}`,
+      reference: r.benchmark.windowMinutes === 0 ? `index median from ${windowLabel(BENCHMARK_LADDER_MINUTES[0]!)}` : 'no index median yet at this age',
       marked: 'none',
     };
   }
@@ -282,7 +288,9 @@ export function measuresOf(r: ScanResult): Measure[] {
     value: w.uniqueBuyers30m.toLocaleString(),
     reference: r.benchmark.median === null
       ? null
-      : `index median ${r.benchmark.median.toLocaleString()} (n=${r.benchmark.n.toLocaleString()})`,
+      : windowLabel(r.benchmark.windowMinutes) === windowLabel(r.traction.windowMinutes)
+        ? `index median ${r.benchmark.median.toLocaleString()} (n=${r.benchmark.n.toLocaleString()})`
+        : `index median ${r.benchmark.median.toLocaleString()} over first ${windowLabel(r.benchmark.windowMinutes)} (n=${r.benchmark.n.toLocaleString()})`,
   });
   /**
    * The two counts, not their quotient.

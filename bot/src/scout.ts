@@ -1,6 +1,8 @@
 import { InputFile, type Api } from 'grammy';
 import { db } from './db.js';
 import { CREW_CHAT_ID, BLOCK_TIME_SECONDS } from './config.js';
+import { coverageNote } from './coverage.js';
+import { clamp, TELEGRAM_MAX_MESSAGE } from './text.js';
 import { envNumber } from './launch.js';
 import { getSetting, setSetting } from './ready.js';
 import { localDayHour } from './tge.js';
@@ -31,6 +33,8 @@ export const SCOUT_DAILY_HOUR = envNumber('SCOUT_DAILY_HOUR', 10);
 export const SCOUT_TZ = process.env.SCOUT_TZ || 'Europe/Bratislava';
 
 /** Rows the message carries before it points at the CSV for the rest. */
+/** Longest a social is printed in the message; the CSV carries it whole. */
+const MAX_SOCIAL = 48;
 const MESSAGE_ROWS = 16;
 /** Longest ticker a message line will carry; the card clamps at the same point. */
 const MAX_TICKER = 16;
@@ -52,7 +56,8 @@ export interface ScoutWithheld {
   exemptionsUndetermined: number;
   devBuyUndetermined: number;
   holdersNotRead: number;
-  socialsUnreadable: number;
+  socialsUnreadable: number;  /** Graduated, launched before the window, graduation block not yet indexed. */
+  graduationUnplaced: number;
 }
 
 export interface ScoutResult {
@@ -61,7 +66,8 @@ export interface ScoutResult {
   graduatedInWindow: number;
   withheld: ScoutWithheld;
   /** Unix seconds: the instant the window and every age were measured against. */
-  now: number;
+  now: number;  /** Why the index may not hold the whole week, or null. */
+  indexNote: string | null;
 }
 
 interface Candidate {
@@ -98,15 +104,29 @@ type Passed = Omit<Candidate, 'holders'> & { holders: number };
  */
 const GRADUATED_TS = 'l.launched_at + (l.graduated_at - l.block_number) * ?';
 
+/**
+ * A scan writes phase 2 from getLaunchedToken without a graduation block; the
+ * lifecycle sweep fills it in later. Until it does, such a launch graduated at
+ * an unknown time after its launch: inside the window when the launch itself
+ * is, and unplaceable when the launch is older than the window. The first is
+ * a candidate placed by its launch time; the second is counted as withheld,
+ * because "not in this week" would be a claim about a time nobody read.
+ */
 const candidates = db.prepare(
   `SELECT l.token, l.symbol, l.deployer, l.launched_at, l.block_number,
-          ${GRADUATED_TS} AS graduated_ts,
+          CASE WHEN l.graduated_at IS NULL THEN l.launched_at ELSE ${GRADUATED_TS} END AS graduated_ts,
           l.snipe_exemption_count, l.exemption_source, l.creator_open_pct,
           h.holders
      FROM launches l
-     LEFT JOIN holder_snapshots h ON h.token = l.token
-    WHERE l.phase = 2 AND l.graduated_at IS NOT NULL AND ${GRADUATED_TS} >= ?
+     LEFT JOIN holder_snapshots h ON h.token = l.token AND h.measured_at > 0
+    WHERE l.phase = 2
+      AND ((l.graduated_at IS NOT NULL AND ${GRADUATED_TS} >= ?) OR (l.graduated_at IS NULL AND l.launched_at >= ?))
     ORDER BY graduated_ts DESC, l.token`,
+);
+
+const graduationUnplaced = db.prepare(
+  `SELECT COUNT(*) AS n FROM launches
+    WHERE phase = 2 AND graduated_at IS NULL AND launched_at < ?`,
 );
 
 type Check = 'pass' | 'fail' | 'unread';
@@ -122,7 +142,10 @@ type Check = 'pass' | 'fail' | 'unread';
  */
 function exemptionsCheck(c: Candidate): Check {
   if (c.snipe_exemption_count === null) return 'unread';
-  if (c.exemption_source === 'logs') return c.snipe_exemption_count === 1 ? 'pass' : 'fail';
+  // From the curve's own events a count of 0 is nobody at all and 1 is the
+  // deployer alone: measured, a third of launches exempt nobody, and the
+  // first version of this treated that third as having exempted somebody.
+  if (c.exemption_source === 'logs') return c.snipe_exemption_count <= 1 ? 'pass' : 'fail';
   if (c.exemption_source === 'calldata') return c.snipe_exemption_count === 0 ? 'pass' : 'fail';
   return 'unread';
 }
@@ -137,9 +160,11 @@ function exemptionsCheck(c: Candidate): Check {
  * withheld partition the window, and the reader can add them back up.
  */
 export async function scout(now = Math.floor(Date.now() / 1000)): Promise<ScoutResult> {
-  const all = candidates.all(BLOCK_TIME_SECONDS, BLOCK_TIME_SECONDS, now - SCOUT_DAYS * 86_400) as Candidate[];
+  const since = now - SCOUT_DAYS * 86_400;
+  const all = candidates.all(BLOCK_TIME_SECONDS, BLOCK_TIME_SECONDS, since, since) as Candidate[];
   const withheld: ScoutWithheld = {
     exemptionsUndetermined: 0, devBuyUndetermined: 0, holdersNotRead: 0, socialsUnreadable: 0,
+    graduationUnplaced: (graduationUnplaced.get(since) as { n: number }).n,
   };
 
   const passed: Passed[] = [];
@@ -172,7 +197,7 @@ export async function scout(now = Math.floor(Date.now() / 1000)): Promise<ScoutR
     });
   }
   rows.sort((a, b) => b.holders - a.holders || b.graduatedAt - a.graduatedAt || a.token.localeCompare(b.token));
-  return { rows, graduatedInWindow: all.length, withheld, now };
+  return { rows, graduatedInWindow: all.length, withheld, now, indexNote: coverageNote() };
 }
 
 // ------------------------------------------------------------------ output
@@ -229,16 +254,23 @@ export function scoutMessage(r: ScoutResult): string {
     `no exempt wallets beyond the deployer, dev buy at or under ${SCOUT_MAX_DEV_BUY_PCT}%, ` +
       `${SCOUT_MIN_HOLDERS}+ holders, socials given`,
   ];
-  for (const row of r.rows.slice(0, MESSAGE_ROWS)) {
+  // An index that did not finish says so before any count from it, and the
+  // line takes a row's place so the message stays at twenty.
+  if (r.indexNote) lines.push(`${r.indexNote}, launches since are not in this digest`);
+  const rowsShown = MESSAGE_ROWS - (r.indexNote ? 1 : 0);
+  for (const row of r.rows.slice(0, rowsShown)) {
+    // The social is deployer-written and unbounded; clamped so sixteen rows
+    // cannot outgrow a Telegram message. The CSV carries it whole.
     lines.push(
-      `${ticker(row)} · ${row.holders} holders · ${age(row.ageSeconds)} · ${plain(row.x) || plain(row.tg)}`,
+      `${ticker(row)} · ${row.holders} holders · ${age(row.ageSeconds)} · ${clamp(plain(row.x) || plain(row.tg), MAX_SOCIAL)}`,
     );
   }
-  if (k > MESSAGE_ROWS) lines.push(`+${k - MESSAGE_ROWS} more in the csv`);
+  if (k > rowsShown) lines.push(`+${k - rowsShown} more in the csv`);
   const w = r.withheld;
   lines.push(
     `not checked: ${w.exemptionsUndetermined} exemptions undetermined, ${w.devBuyUndetermined} dev buy unread, ` +
-      `${w.holdersNotRead} holders unread, ${w.socialsUnreadable} socials unreadable`,
+      `${w.holdersNotRead} holders unread, ${w.socialsUnreadable} socials unreadable, ` +
+      `${w.graduationUnplaced} graduation time unread`,
   );
   return lines.join('\n');
 }
@@ -354,17 +386,28 @@ export function markScoutPosted(now: number): void {
  * `now` is milliseconds, as the interval loop and the ready tick pass it.
  */
 export async function scoutDailyTick(api: Api, opts: { now?: number } = {}): Promise<boolean> {
-  if (CREW_CHAT_ID === null) return false;
   const now = opts.now ?? Date.now();
-  // Decided before any chain read: a tick that answers "no" 1,439 times a
-  // day must cost nothing to answer.
+  // Decided before any chain read, and before the chat is looked at: a tick
+  // that answers "no" 1,439 times a day must cost nothing, and the first-run
+  // mark is adopted the day the bot comes up whether or not a chat is set.
   if (!scoutDailyDue(now)) return false;
+  if (CREW_CHAT_ID === null) return false;
 
   const r = await scout(Math.floor(now / 1000));
   const { day } = localDayHour(now, SCOUT_TZ);
+  // The two sends carry their own marks. Marking only after both meant a CSV
+  // Telegram kept refusing re-sent the message every minute for the rest of
+  // the day; now a part that went out stays out, and only the part that did
+  // not is tried again.
   try {
-    await api.sendMessage(CREW_CHAT_ID, scoutMessage(r), { link_preview_options: { is_disabled: true } });
-    await api.sendDocument(CREW_CHAT_ID, new InputFile(Buffer.from(scoutCsv(r), 'utf8'), `vitals-scout-${day}.csv`));
+    if (getSetting('scout_msg_day') !== day) {
+      await api.sendMessage(CREW_CHAT_ID, clamp(scoutMessage(r), TELEGRAM_MAX_MESSAGE), { link_preview_options: { is_disabled: true } });
+      setSetting('scout_msg_day', day);
+    }
+    if (r.rows.length && getSetting('scout_csv_day') !== day) {
+      await api.sendDocument(CREW_CHAT_ID, new InputFile(Buffer.from(scoutCsv(r), 'utf8'), `vitals-scout-${day}.csv`));
+      setSetting('scout_csv_day', day);
+    }
   } catch (err) {
     console.warn('[scout] daily post failed:', String((err as Error)?.message ?? err).slice(0, 160));
     return false;

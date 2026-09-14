@@ -122,7 +122,12 @@ export function renderGroupCard(r: ScanResult, opts: GroupCardOptions = {}): Gro
       `${w.uniqueBuyers30m.toLocaleString()} buyers in first ${windowLabel(r.traction.windowMinutes)}`
       + (median === null
         ? ' · no index median yet'
-        : ` · index median ${median.toLocaleString()} (n=${r.benchmark.n.toLocaleString()})`),
+        // The median is over a rung of the ladder; when that is a shorter
+        // window than the count's, the line says so rather than setting two
+        // figures from different windows side by side as one comparison.
+        : windowLabel(r.benchmark.windowMinutes) === windowLabel(r.traction.windowMinutes)
+          ? ` · index median ${median.toLocaleString()} (n=${r.benchmark.n.toLocaleString()})`
+          : ` · index median ${median.toLocaleString()} over first ${windowLabel(r.benchmark.windowMinutes)} (n=${r.benchmark.n.toLocaleString()})`),
     );
   }
   L.push('');

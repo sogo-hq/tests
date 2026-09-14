@@ -30,6 +30,8 @@ const { db } = await import('../dist/db.js');
 const { client } = await import('../dist/chain.js');
 const R = await import('../dist/ready.js');
 const S = await import('../dist/scout.js');
+const { recordIndexAdvance } = await import('../dist/indexer/health.js');
+recordIndexAdvance(1n);
 const { age } = await import('../dist/card.js');
 const { InputFile } = await import('grammy');
 
@@ -91,18 +93,18 @@ function launch(o = {}) {
   return token;
 }
 
-const withheldSum = (w) => w.exemptionsUndetermined + w.devBuyUndetermined + w.holdersNotRead + w.socialsUnreadable;
-const NONE = { exemptionsUndetermined: 0, devBuyUndetermined: 0, holdersNotRead: 0, socialsUnreadable: 0 };
+const withheldSum = (w) => w.exemptionsUndetermined + w.devBuyUndetermined + w.holdersNotRead + w.socialsUnreadable + w.graduationUnplaced;
+const NONE = { exemptionsUndetermined: 0, devBuyUndetermined: 0, holdersNotRead: 0, socialsUnreadable: 0, graduationUnplaced: 0 };
 
 // ------------------------------------------------------------------ selection
 
 test('nothing graduated: nothing matched, nothing withheld, and the message still says so', async () => {
   reset();
   const r = await S.scout(NOW);
-  assert.deepEqual(r, { rows: [], graduatedInWindow: 0, withheld: NONE, now: NOW });
+  assert.deepEqual(r, { rows: [], graduatedInWindow: 0, withheld: NONE, now: NOW, indexNote: null });
   const lines = S.scoutMessage(r).split('\n');
   assert.equal(lines[0], 'scout · 0 of 0 launches graduated in 7d match');
-  assert.equal(lines.at(-1), 'not checked: 0 exemptions undetermined, 0 dev buy unread, 0 holders unread, 0 socials unreadable');
+  assert.equal(lines.at(-1), 'not checked: 0 exemptions undetermined, 0 dev buy unread, 0 holders unread, 0 socials unreadable, 0 graduation time unread');
   assert.equal(lines.length, 3);
 });
 
@@ -125,10 +127,20 @@ test('the window: phase 2, a graduation time, and inside the last seven days', a
   launch({ graduatedAt: NOW - 7 * DAY - 1 });
   launch({ phase: 0, graduatedAt: null });
   launch({ phase: 1, graduatedAt: NOW - DAY });
-  launch({ phase: 2, graduatedAt: null });
+  // Phase 2 with no graduation block: a scan wrote the phase from the chain
+  // and the lifecycle sweep has not filled the block in. Launched inside the
+  // window, it graduated inside the window, and is a candidate placed by its
+  // launch time.
+  const unplacedInside = launch({ phase: 2, graduatedAt: null });
+  // Launched before the window with no graduation block: it may have
+  // graduated this week or last, nobody read which, so it is withheld
+  // rather than counted out.
+  launch({ phase: 2, graduatedAt: null, launchedAt: NOW - 10 * DAY });
   const r = await S.scout(NOW);
-  assert.equal(r.graduatedInWindow, 1, 'only the launch on the edge is in the window');
-  assert.deepEqual(r.rows.map((x) => x.token), [edge]);
+  assert.equal(r.graduatedInWindow, 2, 'the edge, and the unplaced launch that launched this week');
+  assert.deepEqual(r.rows.map((x) => x.token).sort(), [edge, unplacedInside].sort());
+  assert.equal(r.withheld.graduationUnplaced, 1);
+  assert.match(S.scoutMessage(r), /, 1 graduation time unread$/);
 });
 
 test('exemptions: the logs count includes the deployer, the calldata count does not', async () => {
@@ -251,7 +263,7 @@ test('the message: header, one line per match, and the withheld line with all fo
     'scout · 1 of 1 launches graduated in 7d match',
     'no exempt wallets beyond the deployer, dev buy at or under 5%, 100+ holders, socials given',
     '$GOOD · 150 holders · 3.0d · https://x.com/good',
-    'not checked: 0 exemptions undetermined, 0 dev buy unread, 0 holders unread, 0 socials unreadable',
+    'not checked: 0 exemptions undetermined, 0 dev buy unread, 0 holders unread, 0 socials unreadable, 0 graduation time unread',
   ]);
 });
 
@@ -449,8 +461,12 @@ test('the tick: not due before the hour, adopts on first run, posts once, and a 
   assert.deepEqual(c.map((x) => x.method), ['sendMessage', 'sendDocument']);
   assert.equal(R.getSetting('scout_day'), '2026-09-14', 'a post that did not fully arrive is not a sent one');
   failing.document = false;
+  // The message went out and is marked as such; only the CSV is tried again.
+  // Re-sending the message every minute until a refused CSV went through was
+  // the first version of this.
+  assert.equal(R.getSetting('scout_msg_day'), '2026-09-15', 'the part that arrived is marked');
   assert.equal(await S.scoutDailyTick(api, { now: Date.parse('2026-09-15T08:01:00Z') }), true);
-  assert.deepEqual(drain().map((x) => x.method), ['sendMessage', 'sendDocument']);
+  assert.deepEqual(drain().map((x) => x.method), ['sendDocument']);
   assert.equal(R.getSetting('scout_day'), '2026-09-15');
 
   // The message itself failing sends no document and marks nothing.
@@ -496,4 +512,85 @@ test('the loop ticks on its interval, never overlaps itself, and does not hold t
   assert.ok(t.hasRef ? !t.hasRef() : true, 'the timer is unref-ed');
   await new Promise((resolve) => setTimeout(resolve, 30));
   clearInterval(t);
+});
+
+// --------------------------------------------- what the review found wrong
+
+test('a curve that exempted nobody at all passes the exemption check', async () => {
+  // From the curve's own events a count of 0 is "no wallet exempted, deployer
+  // included": measured, a third of launches. The first version of this check
+  // treated 0 from the logs as a fail, so a third of clean-on-this-count
+  // launches were dropped as if they had exempted someone, and the withheld
+  // line said every exemption figure had been determined.
+  reset();
+  const nobody = launch({ source: 'logs', exemptions: 0 });
+  const deployerOnly = launch({ source: 'logs', exemptions: 1 });
+  launch({ source: 'logs', exemptions: 2 });
+  const r = await S.scout(NOW);
+  assert.deepEqual(r.rows.map((x) => x.token).sort(), [nobody, deployerOnly].sort());
+  assert.deepEqual(r.withheld, NONE);
+});
+
+test('an index that did not finish says so in the digest, and the note takes a row', async () => {
+  reset();
+  for (let i = 0; i < 20; i++) launch({ holders: 200 + i });
+  // Stall the index: the health cursor last moved a day ago.
+  db.prepare("UPDATE cursors SET updated_at = ? WHERE name = 'launches_ok'").run(NOW - 86_400);
+  try {
+    const r = await S.scout(NOW);
+    assert.match(r.indexNote, /^index stalled .* ago, counts may be behind$/);
+    const lines = S.scoutMessage(r).split('\n');
+    assert.equal(lines.length, 20, 'the note does not push the message past twenty lines');
+    assert.match(lines[2], /^index stalled .* ago, counts may be behind, launches since are not in this digest$/);
+    assert.equal(lines.filter((l) => l.startsWith('$GOOD')).length, 15, 'one row fewer, to make room');
+    assert.match(lines[18], /^\+5 more in the csv$/);
+  } finally {
+    recordIndexAdvance(1n);
+  }
+  const r2 = await S.scout(NOW);
+  assert.equal(r2.indexNote, null);
+  assert.equal(S.scoutMessage(r2).split('\n').filter((l) => l.startsWith('$GOOD')).length, 16);
+});
+
+test('a deployer-written social cannot outgrow the message; the csv keeps it whole', async () => {
+  reset();
+  const long = 'https://x.com/' + 'a'.repeat(3000);
+  for (let i = 0; i < 16; i++) launch({ x: long });
+  const r = await S.scout(NOW);
+  const msg = S.scoutMessage(r);
+  assert.ok(msg.length < 4096, `message is ${msg.length} chars`);
+  for (const line of msg.split('\n').filter((l) => l.startsWith('$GOOD'))) {
+    assert.ok(line.length < 120, line.length);
+    assert.ok(line.endsWith('…'), 'a clamped social ends in an ellipsis');
+  }
+  assert.ok(S.scoutCsv(r).includes(long), 'the csv is the full record');
+});
+
+test('two ticks in flight at once post once', async () => {
+  reset();
+  launch({});
+  R.setSetting('scout_day', '2026-09-13');
+  const calls = [];
+  const api = {
+    sendMessage: async (chat, text, opts) => {
+      calls.push('m');
+      await new Promise((res) => setTimeout(res, 60));
+      return { message_id: 1 };
+    },
+    sendDocument: async () => { calls.push('d'); return { message_id: 2 }; },
+  };
+  // The loop's guard is what is under test, so the loop itself is started,
+  // on a short interval, with a send slower than the interval.
+  const t = S.startScoutLoop(api, 5);
+  // scoutDailyTick reads Date.now(); make "now" be after the hour on a day past the mark.
+  const realNow = Date.now;
+  Date.now = () => Date.parse('2026-09-14T08:00:00Z');
+  try {
+    await new Promise((res) => setTimeout(res, 200));
+  } finally {
+    clearInterval(t);
+    Date.now = realNow;
+  }
+  assert.deepEqual(calls, ['m', 'd'], `posted ${calls.length} parts across overlapping ticks`);
+  assert.equal(R.getSetting('scout_day'), '2026-09-14');
 });

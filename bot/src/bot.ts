@@ -15,7 +15,7 @@ import { isFilterKey, filterDef, filterRates, rateLine } from './filters.js';
 import { LEGEND, claimLegend } from './legend.js';
 import { launchNotice, claimLaunchNotice } from './launchnotice.js';
 import { age } from './card.js';
-import { clampMessage } from './text.js';
+import { clamp, TELEGRAM_MAX_MESSAGE } from './text.js';
 import {
   tierOf, atLeast, thresholds, setThreshold, setVitalsToken, vitalsToken,
   grant, revokeGrant, linkedWallet, effectiveTier, type Tier,
@@ -2257,7 +2257,7 @@ export function createBot(token = TELEGRAM_BOT_TOKEN): Bot {
     // flood cap as /stats itself and is not a second free way in.
     const sub = (ctx.match ?? '').toString().trim().toLowerCase();
     if (sub === 'tax') {
-      await ctx.reply(clampMessage(taxStatsText()));
+      await ctx.reply(clamp(taxStatsText(), TELEGRAM_MAX_MESSAGE));
       return;
     }
     await ctx.reply(statsText());
@@ -2282,11 +2282,11 @@ export function createBot(token = TELEGRAM_BOT_TOKEN): Bot {
     if (!isAdmin(ctx.from?.id) || ctx.chat?.type !== 'private') return;
     const sub = (ctx.match ?? '').toString().trim().toLowerCase();
     if (sub === 'serial') {
-      await ctx.reply(clampMessage(scoutSerialMessage(scoutSerial())));
+      await ctx.reply(clamp(scoutSerialMessage(scoutSerial()), TELEGRAM_MAX_MESSAGE));
       return;
     }
     const r = await scout();
-    await ctx.reply(clampMessage(scoutMessage(r)));
+    await ctx.reply(clamp(scoutMessage(r), TELEGRAM_MAX_MESSAGE));
     if (r.rows.length) {
       await ctx.replyWithDocument(new InputFile(Buffer.from(scoutCsv(r), 'utf8'), `vitals-scout-${r.rows.length}.csv`));
     }

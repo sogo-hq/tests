@@ -19,6 +19,9 @@ process.env.DB_PATH = process.env.DB_PATH || freshDb('taxstats');
 const { db } = await import('../dist/db.js');
 const { MIN_BENCHMARK_SAMPLES } = await import('../dist/metrics/benchmark.js');
 const T = await import('../dist/taxstats.js');
+const { recordIndexAdvance } = await import('../dist/indexer/health.js');
+// The index is current here; a never-advanced index puts a note above the counts.
+recordIndexAdvance(1n);
 
 const A = (n) => '0x' + String(n).padStart(40, '0');
 const ETH = A(0);
@@ -28,13 +31,19 @@ const DAY = 86_400;
 const EM = String.fromCharCode(0x2014);
 
 let tx = 0;
-const launch = (n, { tax, phase = 0, pair = ETH, symbol = null, graduatedAt = null } = {}) => {
+// graduatedAt is a BLOCK, as the lifecycle indexer stores it. A graduated
+// launch is seeded as read in full (its trades indexed through the sweep
+// block, which is where curve trades end) unless a test says otherwise: the
+// ranking only looks at launches read in full, and says how many it left out.
+const launch = (n, { tax, phase = 0, pair = ETH, symbol = null, graduatedAt = null, readInFull = true } = {}) => {
+  const sweptAt = phase === 2 ? graduatedAt : null;
+  const indexedTo = phase === 2 && readInFull ? graduatedAt : null;
   db.prepare(
     `INSERT INTO launches (token, curve, deployer, pair_token, launch_config_id,
         graduation_threshold, block_number, tx_hash, launched_at, symbol,
-        creator_tax_bps, phase, graduated_at)
-      VALUES (?,?,?,?,0,'0',1000,?,?,?,?,?,?)`,
-  ).run(A(n), A(99), A(98), pair, '0xtx' + n, NOW - 10 * DAY, symbol, tax, phase, graduatedAt);
+        creator_tax_bps, phase, graduated_at, swept_at, trades_indexed_to)
+      VALUES (?,?,?,?,0,'0',1000,?,?,?,?,?,?,?,?)`,
+  ).run(A(n), A(99), A(98), pair, '0xtx' + n, NOW - 10 * DAY, symbol, tax, phase, graduatedAt, sweptAt, indexedTo);
 };
 /** A curve trade of `eth` whole ETH on the token, at a unix time. */
 const trade = (n, side, eth, blockTime) => db.prepare(
@@ -153,22 +162,32 @@ test('the window is seven days from now, inclusive at the edge', () => {
 });
 
 test('the text: distribution, rankings with their filters named, and the pool disclaimer', () => {
+  // One graduated 0% launch whose curve life is not read in full: it traded
+  // inside the window, and the ranking must neither list it nor call the band
+  // empty, but say it was left out.
+  launch(14, { tax: 0, phase: 2, symbol: 'fourteen', graduatedAt: 5000, readInFull: false });
+  trade(14, 'buy', 9, INSIDE);
   const text = T.taxStatsText(NOW);
+  db.prepare('DELETE FROM trades WHERE token = ?').run(A(14));
+  db.prepare('DELETE FROM launches WHERE token = ?').run(A(14));
   const lines = text.split('\n');
   assert.deepEqual(lines, [
-    'creator tax, all launches (n=11, 2 undecoded)',
-    '  0% 3 (27.3%) · 1-2% 4 (36.4%) · 3-5% 1 (9.1%) · 6-10% 3 (27.3%)',
-    '  median and p90 not published under 30 observations (n=11)',
-    'creator tax, graduated launches (n=7, 1 undecoded)',
-    '  0% 1 (14.3%) · 1-2% 2 (28.6%) · 3-5% 1 (14.3%) · 6-10% 3 (42.9%)',
-    '  median and p90 not published under 30 observations (n=7)',
-    'top by curve volume, last 7d, ETH pairs, 0% tax:',
+    'creator tax, all launches (n=12, 2 undecoded)',
+    '  0% 4 (33.3%) · 1-2% 4 (33.3%) · 3-5% 1 (8.3%) · 6-10% 3 (25%)',
+    '  median and p90 not published under 30 observations (n=12)',
+    'creator tax, graduated launches (n=8, 1 undecoded)',
+    '  0% 2 (25%) · 1-2% 2 (25%) · 3-5% 1 (12.5%) · 6-10% 3 (37.5%)',
+    '  median and p90 not published under 30 observations (n=8)',
+    'top by curve volume, last 7d, ETH pairs, 0% tax (1 read in full):',
     '  $TEN · 0.25 ETH · 1 trade',
-    'top by curve volume, 1-2% tax: none traded on the curve in 7d',
+    '  1 graduated launch not read in full, not ranked',
+    // Launch eight was read in full and traded only before the window: a
+    // real zero, and the one negative here the index can support.
+    'top by curve volume, 1-2% tax: none of the 1 read in full traded on the curve in 7d',
     '  1 graduated launch on other pairs not ranked',
-    'top by curve volume, last 7d, ETH pairs, 3-5% tax:',
+    'top by curve volume, last 7d, ETH pairs, 3-5% tax (1 read in full):',
     '  0x0000…0003 · 2 ETH · 2 trades',
-    'top by curve volume, last 7d, ETH pairs, 6-10% tax:',
+    'top by curve volume, last 7d, ETH pairs, 6-10% tax (2 read in full):',
     '  $FIVE · 5 ETH · 3 trades',
     '  $FOUR · 3 ETH · 1 trade',
     '  1 graduated launch on other pairs not ranked',

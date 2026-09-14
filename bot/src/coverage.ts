@@ -116,6 +116,26 @@ export function indexCoverage(): IndexCoverage {
   };
 }
 
+/**
+ * One line for a surface that prints counts from the index, or null.
+ *
+ * Same precedence as coverageReason: a rebuild explains a stall and a stall
+ * explains a lag, so the earliest cause is the one named. Shared by every
+ * surface that reports from the index rather than about one launch, so that
+ * the daily numbers, the scout digest and /stats tax describe the same
+ * unfinished index in the same words.
+ */
+export function coverageNote(c: IndexCoverage = indexCoverage()): string | null {
+  if (c.recovering) return 'index rebuilding, counts incomplete';
+  if (c.stalled) {
+    return c.behindSeconds === null
+      ? 'index has never advanced, counts incomplete'
+      : `index stalled ${agoWords(c.behindSeconds)} ago, counts may be behind`;
+  }
+  if (c.behindHead) return `index ${c.lagBlocks!.toLocaleString()} blocks behind the chain`;
+  return null;
+}
+
 /** One line explaining why a negative is being withheld. */
 export function coverageReason(c: IndexCoverage): string {
   if (c.recovering) return 'index still rebuilding after a restart';

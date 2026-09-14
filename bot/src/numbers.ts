@@ -3,7 +3,7 @@ import { localDayHour } from './tge.js';
 import { zonedToUtcMs } from './launch.js';
 import { groupsBotIsIn } from './chats.js';
 import { guardActive } from './launchday.js';
-import { indexCoverage } from './coverage.js';
+import { indexCoverage, coverageNote } from './coverage.js';
 import { BRAND, text, utcStamp, rasterise, drawable } from './image.js';
 
 /**
@@ -31,6 +31,8 @@ export interface DailyNumbers {
   tz: string;
   scansToday: number;
   exemptWalletsCaught: number;
+  /** Launches whose exemptions were read on a known scale, the count's denominator. */
+  exemptionsRead: number;
   groups: number;
   launchRoomsLive: number;
   declared: number;
@@ -83,6 +85,14 @@ export function dailyNumbers(now = Date.now()): DailyNumbers {
        FROM launches`,
   );
 
+  // The denominator. The sum above is over launches whose exemptions were read
+  // on a known scale; the card prints it as a total, and a total that is
+  // silent about how much of the index it covers is a number nobody can weigh.
+  const exemptionsRead = count(
+    `SELECT COUNT(*) AS n FROM launches
+      WHERE exemption_source IN ('logs', 'calldata') AND snipe_exemption_count IS NOT NULL`,
+  );
+
   // groups: what Telegram last said about the bot's membership. It can fall,
   // which is the property that keeps it from being a vanity number.
   const groups = groupsBotIsIn();
@@ -100,6 +110,7 @@ export function dailyNumbers(now = Date.now()): DailyNumbers {
 
   return {
     day, tz, scansToday, exemptWalletsCaught, groups, launchRoomsLive, declared, indexSize,
+    exemptionsRead,
     indexNote: indexNote(),
   };
 }
@@ -112,12 +123,13 @@ export function dailyNumbers(now = Date.now()): DailyNumbers {
  * index reads as stalled, which is right: a fresh database has not counted
  * anything either.
  */
+/** What the exempt-wallet sum covers. Printed beside it, every time. */
+function readNote(n: DailyNumbers): string {
+  return `exempt wallets counted on ${n.exemptionsRead.toLocaleString()} of ${n.indexSize.toLocaleString()} launches read`;
+}
+
 function indexNote(): string | null {
-  const c = indexCoverage();
-  if (c.recovering) return 'index rebuilding, counts incomplete';
-  if (c.stalled) return 'index stalled, counts may be behind';
-  if (c.behindHead) return `index ${c.lagBlocks!.toLocaleString()} blocks behind the chain`;
-  return null;
+  return coverageNote(indexCoverage());
 }
 
 // ----------------------------------------------------------------- the render
@@ -184,7 +196,10 @@ export function numbersCardSvg(n: DailyNumbers, renderedAt = new Date(), botUser
 
   // A count from an index that did not finish is not a fact about the chain,
   // so the reason sits under the counts whenever there is one.
-  if (n.indexNote) p.push(text(PAD, 546, drawable(n.indexNote), { size: 22, fill: DIM }));
+  // The count's denominator sits under the grid in the same dim line as the
+  // index note: what the sum covers, then whether the index finished.
+  const notes = [readNote(n), n.indexNote].filter((x): x is string => x !== null);
+  notes.forEach((line, i) => p.push(text(PAD, 544 + i * 28, drawable(line), { size: 22, fill: DIM })));
 
   const footY = H - PAD - 52;
   p.push(rule(PAD, footY - 24, CW));
@@ -213,6 +228,7 @@ export function renderNumbersPng(n: DailyNumbers, renderedAt = new Date(), botUs
 export function numbersText(n: DailyNumbers): string {
   const lines = [`${n.day} · daily numbers`];
   for (const [label, value] of cells(n)) lines.push(`${label}: ${value.toLocaleString()}`);
+  lines.push(readNote(n));
   if (n.indexNote) lines.push(n.indexNote);
   lines.push(NOT_A_SCORE);
   return lines.join('\n');
