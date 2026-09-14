@@ -190,7 +190,9 @@ export function topGraduatedByCurveVolume(
   // simply not been read, and ranking it as "no volume" was the first version
   // of this. So a launch is ranked only when its trades are indexed through
   // the block its curve was swept at, which is where curve trades end; the
-  // rest are counted and said.
+  // rest are counted and said. Either read counts: the opening-window sample
+  // or a scan can reach the sweep on a short curve, and the curve-life pass
+  // records its own column so as not to touch the benchmark's population.
   const rows = db
     .prepare(
       `SELECT l.token AS token,
@@ -198,9 +200,9 @@ export function topGraduatedByCurveVolume(
               l.creator_tax_bps AS bps,
               l.pair_token AS pair,
               COALESCE(l.graduated_at, 0) AS graduatedAt,
-              CASE WHEN l.trades_indexed_to IS NOT NULL
-                    AND COALESCE(l.swept_at, l.graduated_at) IS NOT NULL
-                    AND l.trades_indexed_to >= COALESCE(l.swept_at, l.graduated_at)
+              CASE WHEN COALESCE(l.swept_at, l.graduated_at) IS NOT NULL
+                    AND MAX(COALESCE(l.trades_indexed_to, 0), COALESCE(l.curve_indexed_to, 0))
+                        >= COALESCE(l.swept_at, l.graduated_at)
                    THEN 1 ELSE 0 END AS readInFull,
               COALESCE(SUM(CAST(t.quote_amount AS REAL)), 0) AS vol,
               COUNT(t.tx_hash) AS trades

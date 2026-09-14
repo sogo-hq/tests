@@ -229,7 +229,9 @@ export function heroOf(r: ScanResult): HeroContent {
   // that was never made.
   const own = windowLabel(r.traction.windowMinutes);
   const rung = windowLabel(r.benchmark.windowMinutes);
-  if (w && median !== null && median > 0) {
+  // A median of zero is a median: the reference for a launch that had no
+  // buyers, on an index where half of them had none either.
+  if (w && median !== null) {
     const sameLabel = own === rung;
     const headline = `${w.uniqueBuyers30m.toLocaleString()} buyers in the first ${own}`;
     const reference = sameLabel

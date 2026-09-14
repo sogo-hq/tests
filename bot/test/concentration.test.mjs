@@ -285,3 +285,21 @@ test('a snapshot with measured_at = 0 is invisible to every reader of holder cou
   assert.equal(r.coverage, 40, 'a partial row counted toward the threshold sample');
   assert.equal(r.n, 40, 'a partial row entered the threshold distribution');
 });
+
+test('a partial first row is not a finished walk: the scan gate and the group card do not see it', () => {
+  const out = inTempDb(`
+    db.prepare(\`INSERT INTO holder_snapshots (token, top5_share, top1_share, holders, excess, measured_at, balances, read_to_block)
+                VALUES (?, 99, 40, 300, 0.99, 0, ?, 12345)\`).run(A(8), JSON.stringify({ [A(1)]: '100', [A(2)]: '50' }));
+    db.prepare(\`INSERT INTO holder_snapshots (token, top5_share, top1_share, holders, excess, measured_at, balances, read_to_block)
+                VALUES (?, 60, 40, 2, 0.5, 777, ?, 12345)\`).run(A(9), JSON.stringify({ [A(1)]: '100', [A(2)]: '50' }));
+    console.log(JSON.stringify({
+      partialStored: C.hasStoredBalances(A(8)), partialBreakdown: C.holderBreakdown(A(8), A(99)),
+      finishedStored: C.hasStoredBalances(A(9)), finishedBreakdown: C.holderBreakdown(A(9), A(99)),
+    }));
+  `);
+  const r = JSON.parse(out);
+  assert.equal(r.partialStored, false, 'a walk that stopped early read as a finished one');
+  assert.equal(r.partialBreakdown, null, 'a top-ten from the middle of the token\'s life');
+  assert.equal(r.finishedStored, true);
+  assert.equal(r.finishedBreakdown.holders, 2);
+});

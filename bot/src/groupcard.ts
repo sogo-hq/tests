@@ -1,6 +1,7 @@
 import type { ScanResult } from './scan.js';
 import { clamp, shortAge as age, MAX_NAME, MAX_TICKER } from './text.js';
 import { compactAmount, GROUP_HANDLE, windowLabel } from './card.js';
+import { BENCHMARK_LADDER_MINUTES } from './metrics/benchmark.js';
 import { marketSnapshot, type MarketSnapshot } from './metrics/market.js';
 import { holderBreakdown } from './metrics/concentration.js';
 import { firstCallOf } from './firstcall.js';
@@ -121,7 +122,9 @@ export function renderGroupCard(r: ScanResult, opts: GroupCardOptions = {}): Gro
       // them states a measurement that was never made.
       `${w.uniqueBuyers30m.toLocaleString()} buyers in first ${windowLabel(r.traction.windowMinutes)}`
       + (median === null
-        ? ' · no index median yet'
+        ? r.benchmark.windowMinutes === 0
+          ? ` · index median from ${windowLabel(BENCHMARK_LADDER_MINUTES[0]!)}`
+          : ' · no index median yet'
         // The median is over a rung of the ladder; when that is a shorter
         // window than the count's, the line says so rather than setting two
         // figures from different windows side by side as one comparison.

@@ -216,6 +216,10 @@ export interface HolderBreakdown {
  * wallet would be reporting the pool as a whale on every graduated launch.
  */
 export function holderBreakdown(token: string, curve: string): HolderBreakdown | null {
+  // Only from a finished walk. The balance map of a read that stopped early is
+  // kept for the resume, and a top-ten computed from it is a distribution at
+  // some block in the middle of the token's life, printed as the one now.
+  if (!hasStoredBalances(token)) return null;
   const stored = loadBalances(token);
   if (!stored) return null;
   const excluded = new Set([...PROTOCOL_EXCLUDED, curve.toLowerCase(), token.toLowerCase()]);
@@ -371,10 +375,18 @@ interface StoredBalances {
   readToBlock: number;
 }
 
-/** Does this token have a balance map to update, or does it need a first read? */
+/**
+ * Has a whole-life walk of this token finished and stored its balances?
+ *
+ * A partial first read stores balances too, with measured_at = 0, so the next
+ * attempt can resume: that row is for loadBalances, which is the resume path,
+ * and for nobody else. Answering true for it here sent the scan path into the
+ * rest of a whole-life walk inline at interactive priority, and told /full the
+ * walk had failed when it was pending.
+ */
 export function hasStoredBalances(token: string): boolean {
   const row = db
-    .prepare('SELECT read_to_block FROM holder_snapshots WHERE token = ? AND balances IS NOT NULL')
+    .prepare('SELECT read_to_block FROM holder_snapshots WHERE token = ? AND balances IS NOT NULL AND measured_at > 0')
     .get(token.toLowerCase()) as { read_to_block: number | null } | undefined;
   return row?.read_to_block != null;
 }

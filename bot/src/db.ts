@@ -632,6 +632,11 @@ for (const [table, column, decl] of [
   ['launches', 'social_tg', 'TEXT'],
   ['launches', 'social_web', 'TEXT'],
   ['launches', 'socials_read_at', 'INTEGER'],
+  // The block a graduated launch's curve trades are read through by the
+  // curve-life pass. Separate from trades_indexed_to on purpose: that column
+  // is the buyer benchmark's population key, and this read must not enrol
+  // launches in it by outcome.
+  ['launches', 'curve_indexed_to', 'INTEGER'],
 ] as const) {
   if (!columnsOf(table).includes(column)) {
     db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${decl}`);

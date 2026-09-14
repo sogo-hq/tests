@@ -244,3 +244,39 @@ test('an even sample averages the two middle rates, and a half-percent prints as
   assert.equal(g.p90Bps, 900, 'ceil(0.9 * 38) = 35, still a 900');
   assert.equal(T.taxStatsText(NOW).split('\n')[5], '  median 4.5% · p90 9%');
 });
+
+test('a band with nothing read in full says so, and never "none traded"', () => {
+  // Un-read every graduated launch in the 6-10% band, whatever earlier tests
+  // seeded there: their curve lives are now unknown.
+  const band = db.prepare('SELECT token, pair_token FROM launches WHERE phase = 2 AND creator_tax_bps >= 550').all();
+  const eth = band.filter((r) => r.pair_token === ETH).length;
+  const other = band.length - eth;
+  db.prepare('UPDATE launches SET trades_indexed_to = NULL, curve_indexed_to = NULL WHERE phase = 2 AND creator_tax_bps >= 550').run();
+  try {
+    const lines = T.taxStatsText(NOW).split('\n');
+    const i = lines.findIndex((l) => l.startsWith('top by curve volume, 6-10% tax'));
+    assert.equal(lines[i], 'top by curve volume, 6-10% tax: none read in full yet');
+    assert.equal(lines[i + 1], `  ${eth} graduated launches not read in full, not ranked`);
+    assert.equal(lines[i + 2], `  ${other} graduated launch${other === 1 ? '' : 'es'} on other pairs not ranked`);
+    assert.ok(!lines.some((l) => /none traded/.test(l) && /6-10/.test(l)), 'a negative about launches the index never read');
+  } finally {
+    db.prepare('UPDATE launches SET trades_indexed_to = graduated_at WHERE phase = 2 AND creator_tax_bps >= 550').run();
+  }
+});
+
+test('the curve-life pass counts as read in full through its own column', () => {
+  db.prepare('UPDATE launches SET trades_indexed_to = NULL, curve_indexed_to = graduated_at WHERE token IN (?, ?)').run(A(4), A(5));
+  try {
+    const r = T.topGraduatedByCurveVolume('6-10', NOW);
+    assert.deepEqual(r.rows.map((x) => x.symbol), ['five', 'four']);
+    assert.ok(r.readInFull >= 2);
+    assert.equal(r.notRead, 0);
+    // One short of the sweep is not read in full.
+    db.prepare('UPDATE launches SET curve_indexed_to = graduated_at - 1 WHERE token = ?').run(A(4));
+    const r2 = T.topGraduatedByCurveVolume('6-10', NOW);
+    assert.deepEqual(r2.rows.map((x) => x.symbol), ['five']);
+    assert.equal(r2.notRead, 1);
+  } finally {
+    db.prepare('UPDATE launches SET trades_indexed_to = graduated_at, curve_indexed_to = NULL WHERE token IN (?, ?)').run(A(4), A(5));
+  }
+});

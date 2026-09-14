@@ -59,3 +59,13 @@ test('group card: the count names its window and the median names a shorter rung
   const g2 = renderGroupCard(scan(128, { windowMinutes: 2, median: 4, n: 2031, measuredAtAge: true }));
   assert.match(g2.text.split('\n').find((l) => /buyers in first/.test(l)), /^13 buyers in first 2 min · index median 4 \(n=2,031\)$/);
 });
+
+test('hero: a median of zero is a median, not a missing one', () => {
+  const h = heroOf(scan(128, { windowMinutes: 2, median: 0, n: 368, measuredAtAge: true }));
+  assert.equal(h.reference, 'index median 0 at this age over 368 launches');
+});
+
+test('group card: under the first rung it says from when, like the other surfaces', () => {
+  const g = renderGroupCard(scan(20, { windowMinutes: 0, median: null, n: 0 }));
+  assert.match(g.text.split('\n').find((l) => /buyers in first/.test(l)), /^13 buyers in first 20s · index median from 30s$/);
+});

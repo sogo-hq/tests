@@ -332,21 +332,23 @@ export async function indexWindows(limit = BATCH): Promise<WindowPass> {
           // Through the same incremental path as the refresher, so this read
           // stores its balances too and every later read of the token is a
           // delta rather than another whole-life scan.
-          const c = (await bulk(() =>
+          const res = await bulk(() =>
             refreshConcentration(t.token, t.curve, BigInt(t.block_number), BigInt(head), () => !interactivelyBusy()),
-          )).concentration;
-          // Marked as read whatever came back. Most launches on this chain have
-          // fewer than six holders, where the top-five share is forced and
-          // records nothing -- without this the loop would pick the same
-          // launches every pass, forever, and never reach one that counts.
-          db.prepare('UPDATE launches SET holders_read_at = ? WHERE token = ?')
-            .run(Math.floor(Date.now() / 1000), t.token.toLowerCase());
-          // excessConcentration is what decides whether the observation is
-          // recordable at all, so asking it directly beats counting the table
-          // twice per launch to find out.
-          // refreshConcentration stores the reading itself; this only counts
-          // the ones that are usable observations for the threshold.
-          if (excessConcentration(c) !== null) pass.concentration++;
+          );
+          // Marked as read whatever the reading was worth, once the walk
+          // FINISHED. Most launches on this chain have fewer than six holders,
+          // where the top-five share is forced and records nothing -- without
+          // the mark the loop would pick the same launches every pass, forever.
+          // A walk that stopped early to stay out of a scan's way is not one of
+          // those: it stored where it got to, and the next pass resumes it.
+          if (res.complete) {
+            db.prepare('UPDATE launches SET holders_read_at = ? WHERE token = ?')
+              .run(Math.floor(Date.now() / 1000), t.token.toLowerCase());
+            // excessConcentration is what decides whether the observation is
+            // recordable at all, so asking it directly beats counting the table
+            // twice per launch to find out.
+            if (excessConcentration(res.concentration) !== null) pass.concentration++;
+          }
         } catch (err) {
           if (isRateLimit(err)) throw err;   // handled once, below
           console.warn(`[windows] ${t.token} holder read failed:`, String((err as any)?.shortMessage ?? (err as Error)?.message ?? err).slice(0, 100));
@@ -401,23 +403,45 @@ export function sampleCeilingReached(): boolean {
  */
 const GRADUATED_PER_PASS = Number(process.env.WINDOW_GRADUATED_BATCH || 3) || 3;
 
-interface GraduatedCandidate {
+/**
+ * Recorded in its OWN column, never in trades_indexed_to.
+ *
+ * trades_indexed_to is the buyer benchmark's population key: every launch with
+ * it set far enough is in the "index median" the cards print. The first
+ * version of this pass stamped it, which enrolled every graduated launch it
+ * read into that population by outcome rather than by the age-ordered sample
+ * -- measured, the graduated share of the 30-second rung went from 0.7% to
+ * 21.5% and the median moved up, the direction benchmark.ts names as the wrong
+ * one. So the curve-life read is its own fact, curve_indexed_to, and the only
+ * thing that reads it is the /stats tax gate.
+ */
+export function markCurveIndexed(token: string, indexedTo: number): void {
+  db.prepare(
+    `UPDATE launches SET curve_indexed_to = MAX(COALESCE(curve_indexed_to, 0), ?) WHERE token = ?`,
+  ).run(indexedTo, token.toLowerCase());
+}
+
+export interface GraduatedCandidate {
   token: string;
   curve: string;
   block_number: number;
   trades_indexed_to: number | null;
+  curve_indexed_to: number | null;
   curve_end: number;
 }
 
-function unreadGraduated(limit: number): GraduatedCandidate[] {
+const UNREAD_GRADUATED_WHERE =
+  `phase = 2
+   AND COALESCE(swept_at, graduated_at) IS NOT NULL
+   AND (curve_indexed_to IS NULL OR curve_indexed_to < COALESCE(swept_at, graduated_at))`;
+
+export function unreadGraduated(limit: number): GraduatedCandidate[] {
   return db
     .prepare(
-      `SELECT token, curve, block_number, trades_indexed_to,
+      `SELECT token, curve, block_number, trades_indexed_to, curve_indexed_to,
               COALESCE(swept_at, graduated_at) AS curve_end
          FROM launches
-        WHERE phase = 2
-          AND COALESCE(swept_at, graduated_at) IS NOT NULL
-          AND (trades_indexed_to IS NULL OR trades_indexed_to < COALESCE(swept_at, graduated_at))
+        WHERE ${UNREAD_GRADUATED_WHERE}
         ORDER BY COALESCE(swept_at, graduated_at) DESC
         LIMIT ?`,
     )
@@ -427,12 +451,21 @@ function unreadGraduated(limit: number): GraduatedCandidate[] {
 /** How many graduated launches still lack their full curve life. */
 export function graduatedUnreadCount(): number {
   return (db
-    .prepare(
-      `SELECT COUNT(*) AS n FROM launches
-        WHERE phase = 2 AND COALESCE(swept_at, graduated_at) IS NOT NULL
-          AND (trades_indexed_to IS NULL OR trades_indexed_to < COALESCE(swept_at, graduated_at))`,
-    )
+    .prepare(`SELECT COUNT(*) AS n FROM launches WHERE ${UNREAD_GRADUATED_WHERE}`)
     .get() as { n: number }).n;
+}
+
+/**
+ * The blocks a pass reads for one graduated launch, or null when there is
+ * nothing to read yet. Resumes past whatever either read has covered, and stops
+ * at head: a sweep the node has not reached is read next time rather than
+ * recorded as read.
+ */
+export function graduatedReadRange(t: GraduatedCandidate, head: number): { from: number; to: number } | null {
+  const covered = Math.max(t.trades_indexed_to ?? -1, t.curve_indexed_to ?? -1);
+  const from = Math.max(t.block_number, covered + 1);
+  const to = Math.min(t.curve_end, head);
+  return to < from ? null : { from, to };
 }
 
 export interface GraduatedPass { attempted: number; read: number; trades: number; failed: number; yielded: boolean }
@@ -447,14 +480,11 @@ export async function indexGraduatedCurves(limit = GRADUATED_PER_PASS): Promise<
   const head = Number(await bulk(() => client.getBlockNumber()));
   for (const t of targets) {
     if (spareCapacity() <= 0) { pass.yielded = true; break; }
-    // Resumes where the opening window left off. Capped at head so a sweep the
-    // node has not reached yet is read next time rather than recorded as read.
-    const from = Math.max(t.block_number, (t.trades_indexed_to ?? t.block_number - 1) + 1);
-    const to = Math.min(t.curve_end, head);
-    if (to < from) continue;
+    const range = graduatedReadRange(t, head);
+    if (!range) continue;
     try {
-      pass.trades += await bulk(() => indexOneCurve(t.curve, t.token, BigInt(from), BigInt(to)));
-      markWindowIndexed(t.token, t.block_number, to);
+      pass.trades += await bulk(() => indexOneCurve(t.curve, t.token, BigInt(range.from), BigInt(range.to)));
+      markCurveIndexed(t.token, range.to);
       pass.read++;
     } catch (err) {
       pass.failed++;
