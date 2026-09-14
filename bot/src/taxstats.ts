@@ -250,7 +250,7 @@ function pctOfBps(bps: number): string {
   return pct(bps / 100);
 }
 
-const CONTROL_RE = /[ -]/g;
+const CONTROL_RE = /[\x00-\x1f\x7f]/g;
 
 /**
  * The ticker as the default card prints it, or the token shortened when the

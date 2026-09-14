@@ -15,6 +15,7 @@ import { isFilterKey, filterDef, filterRates, rateLine } from './filters.js';
 import { LEGEND, claimLegend } from './legend.js';
 import { launchNotice, claimLaunchNotice } from './launchnotice.js';
 import { age } from './card.js';
+import { clampMessage } from './text.js';
 import {
   tierOf, atLeast, thresholds, setThreshold, setVitalsToken, vitalsToken,
   grant, revokeGrant, linkedWallet, effectiveTier, type Tier,
@@ -59,6 +60,9 @@ import {
   everAnswered, AUTOSCAN_DEDUPE_MS,
 } from './autoscan.js';
 import { recordBotChat, seedBotChatsFromActivity, type BotChatStatus } from './chats.js';
+import { scout, scoutCsv, scoutMessage, scoutSerial, scoutSerialMessage, startScoutLoop } from './scout.js';
+import { dailyNumbers, renderNumbersPng, numbersText } from './numbers.js';
+import { taxStatsText } from './taxstats.js';
 import {
   recordFirstCall, firstCallOf, renderLeaderboard, leaderboard,
   LEADERBOARD_WINDOWS,
@@ -2248,7 +2252,67 @@ export function createBot(token = TELEGRAM_BOT_TOKEN): Bot {
         return;
       }
     }
+    // /stats tax: the creator-tax distribution and, per bracket, what traded
+    // on the curve. Several aggregate queries, so it sits behind the same
+    // flood cap as /stats itself and is not a second free way in.
+    const sub = (ctx.match ?? '').toString().trim().toLowerCase();
+    if (sub === 'tax') {
+      await ctx.reply(clampMessage(taxStatsText()));
+      return;
+    }
     await ctx.reply(statsText());
+  });
+
+  // ---------------------------------------------------------------- scout
+
+  /**
+   * /scout: graduated launches of the last week that exempted nobody beyond
+   * the deployer, opened small, have holders, and gave socials.
+   *
+   * Admin and DM only. It is a list of launches to look at, not a list of
+   * launches to buy: the criteria are the four facts named in the second line
+   * of the message, and a launch that clears all four has cleared exactly
+   * those and nothing else. The CSV carries the deployer address; the message
+   * does not, so the same text can be posted into the crew chat unchanged.
+   *
+   * /scout serial: deployers with three or more launches and at least one
+   * graduated. A count, stated as a count.
+   */
+  bot.command('scout', async (ctx) => {
+    if (!isAdmin(ctx.from?.id) || ctx.chat?.type !== 'private') return;
+    const sub = (ctx.match ?? '').toString().trim().toLowerCase();
+    if (sub === 'serial') {
+      await ctx.reply(clampMessage(scoutSerialMessage(scoutSerial())));
+      return;
+    }
+    const r = await scout();
+    await ctx.reply(clampMessage(scoutMessage(r)));
+    if (r.rows.length) {
+      await ctx.replyWithDocument(new InputFile(Buffer.from(scoutCsv(r), 'utf8'), `vitals-scout-${r.rows.length}.csv`));
+    }
+  });
+
+  // -------------------------------------------------------------- numbers
+
+  /**
+   * /numbers: the day's counts as a picture, for the daily post.
+   *
+   * Admin only. Six counts from the bot's own index and nothing derived from
+   * them: no growth figure, no comparison to yesterday, because a number that
+   * only ever goes up is a marketing number and these are meant to be checked.
+   * The index line on the card says when the counts come from an index that
+   * had not finished.
+   */
+  bot.command('numbers', async (ctx) => {
+    if (!isAdmin(ctx.from?.id)) return;
+    const n = dailyNumbers();
+    try {
+      const png = renderNumbersPng(n, new Date(), usernameOf(ctx));
+      await ctx.replyWithPhoto(new InputFile(png, `vitals-numbers-${n.day}.png`), { caption: numbersText(n) });
+    } catch (err) {
+      console.error('[numbers] render failed:', err);
+      await ctx.reply(numbersText(n));
+    }
   });
 
   // -------------------------------------------------------------- declare
@@ -2822,6 +2886,9 @@ export async function startBot(existing?: Bot): Promise<void> {
 
   startReadyAutoPost(bot.api, me.username);
   startLaunchLoop(bot.api, me.username);
+  // The daily scout digest. No CREW_CHAT_ID, no post; the tick still runs so
+  // the first-run mark is adopted the day the id is set rather than a day late.
+  startScoutLoop(bot.api);
   startFeedLoop(bot.api);
   // Reads whole blocks, so it is inert unless a link challenge or a payment is
   // outstanding. See the comment in inbound.ts.
