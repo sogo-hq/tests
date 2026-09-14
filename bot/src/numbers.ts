@@ -66,14 +66,21 @@ export function dailyNumbers(now = Date.now()): DailyNumbers {
     dayStart,
   );
 
-  // exemptWalletsCaught: wallets the exemption logs named besides the deployer,
-  // all time. A 'logs' count INCLUDES the deployer, so 1 is the floor and the
-  // count less one is the number of other wallets. Only 'logs': a 'calldata'
-  // count omits the deployer and is not on the same scale, and NULL means the
-  // launch could not be decoded, which is not zero and is not summed.
+  // exemptWalletsCaught: wallets exempted from the opening tax besides the
+  // deployer, all time. The two sources count on different scales and are
+  // brought to one: a 'logs' count INCLUDES the deployer, so 1 is the floor
+  // and the count less one is the other wallets; a 'calldata' count OMITS the
+  // deployer and is the other wallets as it stands. A NULL source is a row
+  // decoded before the source was recorded, whose scale is not known, and NULL
+  // count means the launch could not be decoded: neither is zero, neither is
+  // summed. The same rule /scout applies when it asks "nobody beyond the
+  // deployer".
   const exemptWalletsCaught = count(
-    `SELECT COALESCE(SUM(snipe_exemption_count - 1), 0) AS n FROM launches
-      WHERE exemption_source = 'logs' AND snipe_exemption_count > 1`,
+    `SELECT COALESCE(SUM(CASE
+              WHEN exemption_source = 'logs' AND snipe_exemption_count > 1 THEN snipe_exemption_count - 1
+              WHEN exemption_source = 'calldata' AND snipe_exemption_count > 0 THEN snipe_exemption_count
+              ELSE 0 END), 0) AS n
+       FROM launches`,
   );
 
   // groups: what Telegram last said about the bot's membership. It can fall,

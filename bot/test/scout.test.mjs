@@ -76,7 +76,11 @@ function launch(o = {}) {
        social_x, social_tg, social_web, socials_read_at)
      VALUES (?,?,?,?,0,'0',1,?,?,?,?,?,?,?,?,?,?,?,?)`,
   ).run(
-    token, A(1), row.deployer, A(0), '0xtx' + token, row.launchedAt, row.symbol, row.phase, row.graduatedAt,
+    // graduated_at is a BLOCK, as the lifecycle indexer stores it. The helper
+    // takes a timestamp because that is what a test reasons in, and converts
+    // at the chain's block time from the row's own launch block (1).
+    token, A(1), row.deployer, A(0), '0xtx' + token, row.launchedAt, row.symbol, row.phase,
+    row.graduatedAt === null ? null : 1 + Math.round((row.graduatedAt - row.launchedAt) / 0.1),
     row.exemptions, row.source, row.openPct,
     row.x, row.tg, row.web, row.socialsRead ? NOW - DAY : null,
   );

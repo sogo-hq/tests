@@ -1,6 +1,6 @@
 import { InputFile, type Api } from 'grammy';
 import { db } from './db.js';
-import { CREW_CHAT_ID } from './config.js';
+import { CREW_CHAT_ID, BLOCK_TIME_SECONDS } from './config.js';
 import { envNumber } from './launch.js';
 import { getSetting, setSetting } from './ready.js';
 import { localDayHour } from './tge.js';
@@ -69,7 +69,9 @@ interface Candidate {
   symbol: string | null;
   deployer: string;
   launched_at: number;
-  graduated_at: number;
+  block_number: number;
+  /** Derived, unix seconds. See GRADUATED_TS. */
+  graduated_ts: number;
   snipe_exemption_count: number | null;
   exemption_source: string | null;
   creator_open_pct: number | null;
@@ -84,14 +86,27 @@ type Passed = Omit<Candidate, 'holders'> & { holders: number };
  * LEFT JOIN so that "no snapshot" arrives as NULL and can be withheld, rather
  * than dropping the row before anyone counts it.
  */
+/**
+ * graduated_at is a BLOCK NUMBER, whatever its name says: the lifecycle
+ * indexer stores the block of the PoolGraduated event, and swept_at likewise.
+ * Compared against a unix timestamp it is a date in 1971 and the window is
+ * empty forever, which is how the first run of this found nothing. So the
+ * time is derived from the launch's own pair of (launched_at, block_number),
+ * which the index does hold as a timestamp and a block, at the chain's block
+ * time. Graduation is hours after launch at most, so the drift of that
+ * estimate is seconds against a window of days.
+ */
+const GRADUATED_TS = 'l.launched_at + (l.graduated_at - l.block_number) * ?';
+
 const candidates = db.prepare(
-  `SELECT l.token, l.symbol, l.deployer, l.launched_at, l.graduated_at,
+  `SELECT l.token, l.symbol, l.deployer, l.launched_at, l.block_number,
+          ${GRADUATED_TS} AS graduated_ts,
           l.snipe_exemption_count, l.exemption_source, l.creator_open_pct,
           h.holders
      FROM launches l
      LEFT JOIN holder_snapshots h ON h.token = l.token
-    WHERE l.phase = 2 AND l.graduated_at IS NOT NULL AND l.graduated_at >= ?
-    ORDER BY l.graduated_at DESC, l.token`,
+    WHERE l.phase = 2 AND l.graduated_at IS NOT NULL AND ${GRADUATED_TS} >= ?
+    ORDER BY graduated_ts DESC, l.token`,
 );
 
 type Check = 'pass' | 'fail' | 'unread';
@@ -122,7 +137,7 @@ function exemptionsCheck(c: Candidate): Check {
  * withheld partition the window, and the reader can add them back up.
  */
 export async function scout(now = Math.floor(Date.now() / 1000)): Promise<ScoutResult> {
-  const all = candidates.all(now - SCOUT_DAYS * 86_400) as Candidate[];
+  const all = candidates.all(BLOCK_TIME_SECONDS, BLOCK_TIME_SECONDS, now - SCOUT_DAYS * 86_400) as Candidate[];
   const withheld: ScoutWithheld = {
     exemptionsUndetermined: 0, devBuyUndetermined: 0, holdersNotRead: 0, socialsUnreadable: 0,
   };
@@ -153,7 +168,7 @@ export async function scout(now = Math.floor(Date.now() / 1000)): Promise<ScoutR
     rows.push({
       token: c.token, symbol: c.symbol, deployer: c.deployer, x: s.x, tg: s.tg,
       holders: c.holders, ageSeconds: now - c.launched_at,
-      launchedAt: c.launched_at, graduatedAt: c.graduated_at,
+      launchedAt: c.launched_at, graduatedAt: c.graduated_ts,
     });
   }
   rows.sort((a, b) => b.holders - a.holders || b.graduatedAt - a.graduatedAt || a.token.localeCompare(b.token));
@@ -255,7 +270,8 @@ export interface SerialRow {
 const serialQuery = db.prepare(
   `SELECT deployer,
           COUNT(*) AS launches,
-          SUM(CASE WHEN phase = 2 AND graduated_at IS NOT NULL AND graduated_at <= ? THEN 1 ELSE 0 END) AS graduated,
+          SUM(CASE WHEN phase = 2 AND graduated_at IS NOT NULL
+                    AND launched_at + (graduated_at - block_number) * ? <= ? THEN 1 ELSE 0 END) AS graduated,
           MAX(launched_at) AS latestAt
      FROM launches
     WHERE launched_at <= ?
@@ -270,7 +286,7 @@ const serialQuery = db.prepare(
  * same list production would have seen then.
  */
 export function scoutSerial(now = Math.floor(Date.now() / 1000)): SerialRow[] {
-  return serialQuery.all(now, now, SERIAL_MIN_LAUNCHES, SERIAL_MIN_GRADUATED) as SerialRow[];
+  return serialQuery.all(BLOCK_TIME_SECONDS, now, now, SERIAL_MIN_LAUNCHES, SERIAL_MIN_GRADUATED) as SerialRow[];
 }
 
 function utcDay(unixSeconds: number): string {

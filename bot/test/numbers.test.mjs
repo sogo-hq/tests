@@ -95,15 +95,16 @@ test('the day is the Bratislava day, and a scan at 23:30 UTC belongs to tomorrow
   assert.equal(N.dailyNumbers(Date.UTC(2026, 8, 10, 21, 30)).day, '2026-09-10');
 });
 
-test('exempt wallets are counted from the logs alone, less the deployer each', () => {
-  launch(A(11), 'logs', 4);        // deployer and three others
-  launch(A(12), 'logs', 1);        // deployer only, the floor
-  launch(A(13), 'logs', 2);        // deployer and one other
-  launch(A(14), 'calldata', 2);    // a different scale: omits the deployer
+test('exempt wallets are counted on one scale: logs less the deployer, calldata as is', () => {
+  launch(A(11), 'logs', 4);        // deployer and three others -> 3
+  launch(A(12), 'logs', 1);        // deployer only, the floor -> 0
+  launch(A(13), 'logs', 2);        // deployer and one other -> 1
+  launch(A(14), 'calldata', 2);    // omits the deployer already -> 2
   launch(A(15), null, null);       // could not be decoded: not zero
+  launch(A(16), null, 3);          // decoded before the source was recorded: scale unknown, not summed
   const n = N.dailyNumbers(NOW);
-  assert.equal(n.exemptWalletsCaught, 4);
-  assert.equal(n.indexSize, 5, 'every launch is indexed whatever its exemption count');
+  assert.equal(n.exemptWalletsCaught, 6);
+  assert.equal(n.indexSize, 6, 'every launch is indexed whatever its exemption count');
 });
 
 test('groups are what Telegram last said, so a group that removed the bot is not counted', () => {
@@ -238,11 +239,11 @@ test('the caption says the same six things as the card, and nothing the card doe
   assert.equal(lines[0], '2026-09-11 · daily numbers');
   assert.deepEqual(lines.slice(1, 7), [
     'scans today: 2',
-    'exempt wallets caught: 4',
+    'exempt wallets caught: 6',
     'groups: 2',
     'launch rooms live: 0',
     'declared launches: 2',
-    'launches indexed: 5',
+    'launches indexed: 6',
   ]);
   assert.equal(lines.at(-1), "counts from this bot's own index. not a score, and not advice.");
   assert.ok(!lines.some((l) => l.includes(EM)), 'em dash in the caption');
