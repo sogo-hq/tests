@@ -923,6 +923,8 @@ Tables: `launches`, `trades`, `scans`, `rechecks`, `token_peaks`, `cursors`.
 | `SCANS_PER_MINUTE` | `10` | per-user quota |
 | `SCANS_PER_HOUR` | `100` | per-user quota |
 | `MAX_CONCURRENT_SCANS` | `5` | global scan slots |
+| `CREW_CHAT_ID` | — | chat that receives the daily `/scout` digest at 10:00 Europe/Bratislava; unset, nothing is posted |
+| `SCOUT_DAILY_HOUR` | `10` | local hour the digest posts |
 
 The RPC and explorer hosts are hardcoded in `src/config.ts` and are never
 resolved from search results — lookalike RPCs and fake explorers exist for this

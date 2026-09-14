@@ -303,3 +303,86 @@ test('a zero-length window publishes nothing', () => {
   assert.equal(b.median, null);
   assert.equal(b.n, 0);
 });
+
+// ------------------------------------------------------------- the ladder
+
+/**
+ * Deterministic for a given age.
+ *
+ * Two launches from the same deployer seconds apart printed "index median 2
+ * (n=2,040)", "index median 4 (n=2,023)" and "no index median (n=0)" in turn,
+ * because the comparison was measured over each token's exact age in blocks and
+ * both the population filter and the count window moved with it. The window is
+ * a rung of a ladder now: every age between two rungs gets the same one.
+ */
+test('every age between two rungs of the ladder gets the same benchmark', () => {
+  const out = inTempDb(`
+    const { ladderWindow, BENCHMARK_LADDER_MINUTES } = await import('${CWD}/dist/metrics/benchmark.js');
+    // 40 launches, each with one buyer at +30s and one at +2m30s, so a window
+    // of exactly two minutes counts one buyer and a window of three counts two.
+    for (let i = 1; i <= 40; i++) {
+      launch(A(i), 86400);
+      buy(A(i), A(2000 + i), 0.5);
+      buy(A(i), A(3000 + i), 2.5);
+    }
+    const at = (seconds) => {
+      const b = buyerBenchmark({ ageSeconds: seconds, windowMinutes: seconds / 60, excludeToken: A(999), now: NOW });
+      return { median: b.median, n: b.n, w: b.windowMinutes, atAge: b.measuredAtAge };
+    };
+    console.log(JSON.stringify({
+      s121: at(121), s125: at(125), s129: at(129), s179: at(179),
+      s180: at(180), s181: at(181),
+      s29: at(29), s30: at(30), s31: at(31),
+      s1900: at(1900),
+      ladder: BENCHMARK_LADDER_MINUTES, l0: ladderWindow(0.49), l1: ladderWindow(0.5), l2: ladderWindow(2.99),
+    }));
+  `);
+  const r = JSON.parse(out);
+  // Seconds apart inside the same rung: identical, field for field.
+  assert.deepEqual(r.s121, r.s125);
+  assert.deepEqual(r.s125, r.s129);
+  assert.deepEqual(r.s129, r.s179);
+  assert.equal(r.s121.w, 2);
+  assert.equal(r.s121.median, 1, 'a two-minute window sees the +30s buyer only');
+  assert.equal(r.s121.n, 40);
+  assert.equal(r.s121.atAge, true);
+  // The next rung is a different window and may be a different answer, and
+  // every age on that rung agrees with itself too.
+  assert.equal(r.s180.w, 3);
+  assert.equal(r.s180.median, 2, 'a three-minute window sees both buyers');
+  assert.deepEqual(r.s180, r.s181);
+  // Below the first rung there is no comparison yet, said the same way at
+  // every age below it, and the first rung starts at thirty seconds.
+  assert.equal(r.s29.w, 0);
+  assert.equal(r.s29.median, null);
+  assert.equal(r.s29.n, 0);
+  assert.equal(r.s30.w, 0.5);
+  assert.deepEqual(r.s30, r.s31);
+  // Past the cap the window is thirty minutes and "at this age" is false.
+  assert.equal(r.s1900.w, 30);
+  assert.equal(r.s1900.atAge, false);
+  assert.deepEqual(r.ladder, [0.5, 1, 2, 3, 5, 10, 15, 20, 30]);
+  assert.equal(r.l0, 0);
+  assert.equal(r.l1, 0.5);
+  assert.equal(r.l2, 2, 'the rung is the largest step at or below the window, never above it');
+});
+
+test('the population is filtered by the rung, so n cannot drift between adjacent ages', () => {
+  const out = inTempDb(`
+    // 35 launches indexed for a full 30 minutes and 5 indexed for only 2m10s.
+    // A window of 2m03s and one of 2m08s used to admit the second group and
+    // one of 2m12s used to exclude it; on the ladder all three are the
+    // two-minute rung and all three admit it.
+    for (let i = 1; i <= 35; i++) { launch(A(i), 86400, 30); buy(A(i), A(2000 + i), 1); }
+    for (let i = 36; i <= 40; i++) { launch(A(i), 86400, 2 + 10 / 60); buy(A(i), A(2000 + i), 1); }
+    const n = (s) => buyerBenchmark({ ageSeconds: s, windowMinutes: s / 60, excludeToken: A(999), now: NOW }).n;
+    console.log(JSON.stringify({ a: n(123), b: n(128), c: n(132), d: n(180) }));
+  `);
+  const r = JSON.parse(out);
+  assert.equal(r.a, 40);
+  assert.equal(r.b, 40);
+  assert.equal(r.c, 40);
+  // The three-minute rung genuinely needs three minutes of history, so the
+  // five short launches drop out there, at the rung and not at a random second.
+  assert.equal(r.d, 35);
+});

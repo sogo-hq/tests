@@ -181,6 +181,18 @@ export const PHASE = ['NotGraduated', 'Swept', 'PoolCreated', 'Rescued'] as cons
 export const DB_PATH = process.env.DB_PATH || './pons.db';
 
 /**
+ * Where the daily /scout digest goes. Unset means the digest is not posted,
+ * and /scout in a DM still works: a chat id that is not configured is not a
+ * chat to guess at.
+ */
+export const CREW_CHAT_ID: number | null = (() => {
+  const raw = (process.env.CREW_CHAT_ID ?? '').trim();
+  if (!raw) return null;
+  const n = Number(raw);
+  return Number.isFinite(n) && n !== 0 ? n : null;
+})();
+
+/**
  * Hard ceiling on a scan, request to reply.
  *
  * A degen decides in about ten seconds; a card that lands after that is worth

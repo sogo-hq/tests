@@ -58,6 +58,7 @@ import {
   autoscanEnabled, setAutoscan, autoscanSetting, addressesIn, claimAutoReply,
   everAnswered, AUTOSCAN_DEDUPE_MS,
 } from './autoscan.js';
+import { recordBotChat, seedBotChatsFromActivity, type BotChatStatus } from './chats.js';
 import {
   recordFirstCall, firstCallOf, renderLeaderboard, leaderboard,
   LEADERBOARD_WINDOWS,
@@ -2053,6 +2054,20 @@ export function createBot(token = TELEGRAM_BOT_TOKEN): Bot {
     );
   });
 
+  /**
+   * The bot's own membership, recorded.
+   *
+   * This update was already being requested for the launch guard and then
+   * dropped on the floor, so "groups the bot is in" had no source. One row per
+   * chat with the last status Telegram reported; a status of left or kicked is
+   * as much a fact as one of member, and is the reason the count can go down.
+   */
+  bot.on('my_chat_member', (ctx) => {
+    const u = ctx.myChatMember;
+    const status = u.new_chat_member.status as BotChatStatus;
+    recordBotChat(u.chat.id, u.chat.type, 'title' in u.chat ? u.chat.title ?? null : null, status, u.date);
+  });
+
   bot.on('chat_member', (ctx) => {
     const u = ctx.chatMember;
     const joined = u.new_chat_member.status === 'member' || u.new_chat_member.status === 'restricted';
@@ -2799,6 +2814,11 @@ export async function startBot(existing?: Bot): Promise<void> {
 
   startCacheReporter();
   startQuotaSweeper();
+
+  // Groups known from activity before membership was recorded. Inserted only
+  // where no row exists, so a real update is never overwritten by history.
+  const seeded = seedBotChatsFromActivity();
+  if (seeded) console.log(`[chats] seeded ${seeded} group(s) from activity`);
 
   startReadyAutoPost(bot.api, me.username);
   startLaunchLoop(bot.api, me.username);

@@ -53,6 +53,35 @@ export const MIN_BENCHMARK_SAMPLES = (() => {
 /** The longest window any traction metric is defined over. */
 const MAX_WINDOW_MINUTES = WINDOW_30_MIN_BLOCKS / BLOCKS_PER_MINUTE;
 
+/**
+ * The windows a benchmark is ever taken over, in minutes.
+ *
+ * The comparison used to be measured over the token's EXACT age: a launch
+ * scanned at 2m03s was compared over 1,230 blocks and one scanned at 2m08s
+ * over 1,280, and because the population filter and the count window both
+ * move with that number, two near-identical launches seconds apart printed
+ * "index median 2 (n=2,040)", "index median 4 (n=2,023)" and "no index median
+ * (n=0)" in turn. Every one of those was arithmetically correct and together
+ * they read as noise.
+ *
+ * So the window is quantised: the largest step at or below the age. Every
+ * launch between two and three minutes old is compared over two minutes,
+ * against the same population, and gets the same answer. Below the smallest
+ * step there is no comparison yet, and the card says from when there will be.
+ */
+export const BENCHMARK_LADDER_MINUTES: readonly number[] = [0.5, 1, 2, 3, 5, 10, 15, 20, 30];
+
+/** The ladder step for a window, or 0 below the smallest step. */
+export function ladderWindow(windowMinutes: number): number {
+  let step = 0;
+  for (const m of BENCHMARK_LADDER_MINUTES) {
+    // A hair of tolerance: 600 blocks is exactly one minute, but a window
+    // computed as blocks / 600 can land a float below it.
+    if (windowMinutes + 1e-6 >= m) step = m;
+  }
+  return Math.min(step, MAX_WINDOW_MINUTES);
+}
+
 export interface BuyerBenchmark {
   /** The age band this token is in. Describes the token, not the population. */
   bucket: AgeBucket;
@@ -97,12 +126,19 @@ export function buyerBenchmark(opts: {
   now?: number;
 }): BuyerBenchmark {
   const bucket = bucketFor(opts.ageSeconds);
-  const windowMinutes = Math.max(0, opts.windowMinutes);
+  // Quantised, so the answer is a function of the ladder step and the index,
+  // never of the second the scan happened to land on.
+  const windowMinutes = ladderWindow(Math.max(0, opts.windowMinutes));
   const windowBlocks = Math.round(windowMinutes * BLOCKS_PER_MINUTE);
 
-  const measuredAtAge = windowMinutes >= Math.max(0, opts.ageSeconds) / 60 - 0.001
-    && windowMinutes < MAX_WINDOW_MINUTES + 0.001
-    && opts.ageSeconds / 60 <= MAX_WINDOW_MINUTES + 0.001;
+  // "At this age" is true when the token is still inside the cap and the step
+  // the benchmark used is the step its own age falls in: the two windows then
+  // agree to within one rung of the ladder, which is the resolution the card
+  // labels them at.
+  const ageMinutes = Math.max(0, opts.ageSeconds) / 60;
+  const measuredAtAge = windowMinutes > 0
+    && ageMinutes <= MAX_WINDOW_MINUTES + 0.001
+    && ladderWindow(ageMinutes) === windowMinutes;
 
   if (windowBlocks <= 0) return { bucket, median: null, n: 0, windowMinutes, measuredAtAge };
 

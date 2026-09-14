@@ -8,7 +8,7 @@ import { deployerSummary } from './deployerlookup.js';
 import { clamp, clampMessage, MAX_NAME, MAX_TICKER, TELEGRAM_MAX_MESSAGE } from './text.js';
 import { EARLY_WINDOW_SECONDS } from './config.js';
 import { MIN_HOLDERS_FOR_SHARE } from './metrics/concentration.js';
-import { MIN_BENCHMARK_SAMPLES } from './metrics/benchmark.js';
+import { MIN_BENCHMARK_SAMPLES, BENCHMARK_LADDER_MINUTES } from './metrics/benchmark.js';
 import { deployerActivityLine } from './metrics/deployer.js';
 
 export { TELEGRAM_MAX_MESSAGE };
@@ -697,7 +697,7 @@ export function activityLine(r: ScanResult): string {
  * reference at all.
  */
 /** A window as a reader would say it: "40s", "3 min", "30 min" -- never "0 min". */
-function windowLabel(minutes: number): string {
+export function windowLabel(minutes: number): string {
   if (minutes < 1) return `${Math.max(1, Math.round(minutes * 60))}s`;
   return `${Math.round(minutes)} min`;
 }
@@ -715,20 +715,26 @@ export function buyerLine(r: ScanResult): string {
   const head =
     buyers === 0 ? noBuyersPhrase(r.traction) : `${buyers} buyer${buyers === 1 ? '' : 's'} in first ${win}`;
   const b = r.benchmark;
+  // Below the ladder's first rung there is no comparison yet, and the line
+  // says from when there will be rather than printing an n of zero that reads
+  // as an empty index.
+  if (b.windowMinutes === 0) return `${head} \u00b7 index median from ${windowLabel(BENCHMARK_LADDER_MINUTES[0]!)}`;
   // Below the floor there is no median, and saying so beats printing the count
   // alone -- a reader cannot tell a missing reference point from an absent one.
   if (b.median === null) return `${head} \u00b7 no index median (n=${b.n})`;
-  // "at this age" is only true while the window IS the token's life. Past the
-  // 30-minute cap the count -- and so the median beside it -- is a measurement
-  // of the first 30 minutes, and saying "at this age" would describe a
-  // comparison that was never made. When the two windows already match, the
-  // head has named it and repeating it is noise.
-  const sameWindow = Math.round(b.windowMinutes) === Math.round(r.traction.windowMinutes);
-  const ref = b.measuredAtAge
-    ? ' at this age'
-    : sameWindow
-      ? ''
-      : ` over first ${windowLabel(b.windowMinutes)}`;
+  // The benchmark window is a rung of the ladder and the token's own window is
+  // its exact age, so the two can differ by up to one rung. When they label
+  // the same the head has named the window once; when they do not, the median
+  // names its own, because "at this age" over a window the head did not state
+  // would describe a comparison the reader cannot see. And "at this age" only
+  // ever inside the 30-minute cap: past it the count is a measurement of the
+  // first 30 minutes whatever the age.
+  const sameLabel = windowLabel(b.windowMinutes) === windowLabel(r.traction.windowMinutes);
+  const ref = !sameLabel
+    ? ` over first ${windowLabel(b.windowMinutes)}`
+    : b.measuredAtAge
+      ? ' at this age'
+      : '';
   // The sample size travels with the median. Without n it is a number the
   // reader has no way to weigh.
   return `${head} \u00b7 index median ${b.median}${ref} (n=${b.n.toLocaleString()})`;

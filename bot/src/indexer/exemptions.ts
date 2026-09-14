@@ -20,6 +20,26 @@ export interface LaunchCalldata {
   buyRecipient: string | null;
   /** 'logs' once the count came from the curve's own events. */
   source: 'logs' | 'calldata' | null;
+  /**
+   * The socials named in the launch params, as given. Null when the calldata
+   * could not be decoded; a field is an empty string when the deployer left it
+   * blank, which is a fact about the launch and not a failure to read it.
+   */
+  socials: LaunchSocials | null;
+}
+
+export interface LaunchSocials {
+  x: string;
+  tg: string;
+  web: string;
+}
+
+/** The three fields /scout and the CSV care about, trimmed, never invented. */
+export function socialsOf(p: any): LaunchSocials | null {
+  const so = p?.socials;
+  if (!so || typeof so !== 'object') return null;
+  const str = (v: unknown) => (typeof v === 'string' ? v.trim() : '');
+  return { x: str(so.twitter), tg: str(so.telegram), web: str(so.website) };
 }
 
 /**
@@ -53,6 +73,7 @@ const UNKNOWN: LaunchCalldata = {
   buyAmount: null,
   buyRecipient: null,
   source: null,
+  socials: null,
 };
 
 /**
@@ -101,6 +122,7 @@ export function decodeLaunchCalldata(input: Hex): LaunchCalldata {
         buyAmount: null,
         buyRecipient: null,
         source: 'calldata',
+        socials: socialsOf(p),
       };
     } catch (err) {
       reportUndecodable(selector, err);
@@ -144,6 +166,7 @@ export function decodeLaunchCalldata(input: Hex): LaunchCalldata {
       buyAmount,
       buyRecipient,
       source: 'calldata',
+      socials: socialsOf(p),
     };
   } catch (err) {
     reportUndecodable(selector, err);

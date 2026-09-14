@@ -37,14 +37,20 @@ const insertLaunch = db.prepare(`
     token, curve, deployer, pair_token, launch_config_id, graduation_threshold,
     block_number, tx_hash, launched_at, name, symbol, name_key, symbol_key,
     snipe_exemption_count, snipe_exemptions, entry_point, creator_tax_bps,
-    buyback_enabled, launch_buy_amount, launch_buy_recipient, exemption_source
+    buyback_enabled, launch_buy_amount, launch_buy_recipient, exemption_source,
+    social_x, social_tg, social_web, socials_read_at
   ) VALUES (
     @token, @curve, @deployer, @pair_token, @launch_config_id, @graduation_threshold,
     @block_number, @tx_hash, @launched_at, @name, @symbol, @name_key, @symbol_key,
     @snipe_exemption_count, @snipe_exemptions, @entry_point, @creator_tax_bps,
-    @buyback_enabled, @launch_buy_amount, @launch_buy_recipient, @exemption_source
+    @buyback_enabled, @launch_buy_amount, @launch_buy_recipient, @exemption_source,
+    @social_x, @social_tg, @social_web, @socials_read_at
   )
   ON CONFLICT(token) DO UPDATE SET
+    social_x              = COALESCE(excluded.social_x, launches.social_x),
+    social_tg             = COALESCE(excluded.social_tg, launches.social_tg),
+    social_web            = COALESCE(excluded.social_web, launches.social_web),
+    socials_read_at       = COALESCE(excluded.socials_read_at, launches.socials_read_at),
     snipe_exemption_count = COALESCE(excluded.snipe_exemption_count, launches.snipe_exemption_count),
     snipe_exemptions      = COALESCE(excluded.snipe_exemptions, launches.snipe_exemptions),
     entry_point           = excluded.entry_point,
@@ -152,6 +158,12 @@ export async function indexLaunches(
           launch_buy_amount: calldata?.buyAmount == null ? null : String(calldata.buyAmount),
           launch_buy_recipient: calldata?.buyRecipient ?? null,
           exemption_source: calldata?.source ?? null,
+          // Read from the same calldata as the exemptions, in the same request.
+          // Null when it was not decoded, so the lazy fill knows to look.
+          social_x: calldata?.socials?.x ?? null,
+          social_tg: calldata?.socials?.tg ?? null,
+          social_web: calldata?.socials?.web ?? null,
+          socials_read_at: calldata?.socials ? ts || Math.floor(Date.now() / 1000) : null,
         };
       });
       insertMany(rows);
@@ -200,7 +212,10 @@ export async function decodePending(
       buyback_enabled = COALESCE(?, buyback_enabled),
       launch_buy_amount = ?, launch_buy_recipient = ?,
       name = COALESCE(?, name), symbol = COALESCE(?, symbol),
-      name_key = COALESCE(?, name_key), symbol_key = COALESCE(?, symbol_key)
+      name_key = COALESCE(?, name_key), symbol_key = COALESCE(?, symbol_key),
+      social_x = COALESCE(?, social_x), social_tg = COALESCE(?, social_tg),
+      social_web = COALESCE(?, social_web),
+      socials_read_at = COALESCE(?, socials_read_at)
     WHERE token = ?
   `);
 
@@ -229,6 +244,8 @@ export async function decodePending(
       cd.name, cd.symbol,
       cd.name ? normaliseKey(cd.name) : null,
       cd.symbol ? normaliseKey(cd.symbol) : null,
+      cd.socials?.x ?? null, cd.socials?.tg ?? null, cd.socials?.web ?? null,
+      cd.socials ? Math.floor(Date.now() / 1000) : null,
       row.token,
     );
     onProgress?.(++done, rows.length);

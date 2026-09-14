@@ -256,6 +256,18 @@ CREATE INDEX IF NOT EXISTS idx_events_source ON scan_events(source, ts);
 CREATE INDEX IF NOT EXISTS idx_events_user   ON scan_events(user_id, ts);
 CREATE INDEX IF NOT EXISTS idx_events_token  ON scan_events(token);
 
+-- Which chats the bot is a member of, from my_chat_member updates. One row
+-- per chat; status is the bot's last known membership state there. Rows seeded
+-- from group activity before the handler existed carry status 'seen', which
+-- counts as present until an update says otherwise.
+CREATE TABLE IF NOT EXISTS bot_chats (
+  chat_id    INTEGER PRIMARY KEY,
+  type       TEXT NOT NULL,
+  title      TEXT,
+  status     TEXT NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
 -- Indexer cursors, so restarts resume rather than re-scan.
 -- The widest eth_getLogs range each endpoint will actually serve, discovered at
 -- runtime. Keyed by endpoint so switching providers re-discovers instead of
@@ -613,6 +625,13 @@ for (const [table, column, decl] of [
   // back to its count.
   ['launches', 'exempt_open_pct', 'REAL'],
   ['launches', 'creator_open_pct', 'REAL'],
+  // The socials named in the launch calldata, kept as given. NULL is "not
+  // read", which the lazy fill in socials.ts resolves from the token's own
+  // getTokenInfo; an empty string is "read, and none was given".
+  ['launches', 'social_x', 'TEXT'],
+  ['launches', 'social_tg', 'TEXT'],
+  ['launches', 'social_web', 'TEXT'],
+  ['launches', 'socials_read_at', 'INTEGER'],
 ] as const) {
   if (!columnsOf(table).includes(column)) {
     db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${decl}`);

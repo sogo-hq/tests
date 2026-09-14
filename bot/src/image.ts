@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 import type { ScanResult } from './scan.js';
 import { measure, wrap, fitSize, hasGlyph } from './fontmetrics.js';
+import { windowLabel } from './card.js';
 import { shortAge as age } from './text.js';
 import { sponsorLine } from './sponsor.js';
 import { launchNotice } from './launchnotice.js';
@@ -221,7 +222,9 @@ export function heroOf(r: ScanResult): HeroContent {
   const w = r.traction.window;
   const median = r.benchmark.median;
   if (w && median !== null && median > 0) {
-    const label = r.benchmark.measuredAtAge ? 'at this age' : `in the first ${r.benchmark.windowMinutes} min`;
+    // The benchmark window is a rung of the ladder, so it can be a fraction of
+    // a minute; the label is shared with the text card so both say "30s".
+    const label = r.benchmark.measuredAtAge ? 'at this age' : `in the first ${windowLabel(r.benchmark.windowMinutes)}`;
     return {
       headline: `${w.uniqueBuyers30m.toLocaleString()} buyers ${label}`,
       reference: `index median ${median.toLocaleString()} over ${r.benchmark.n.toLocaleString()} launches`,
@@ -781,3 +784,13 @@ function rasterise(svg: string, width: number): Buffer {
 }
 
 export { SIZES, SANS_FILE, SANS_BOLD_FILE, MONO_FILE };
+
+/**
+ * The drawing kit, for cards that live in other modules.
+ *
+ * Same palette, same text primitive, same rasteriser: a card built elsewhere
+ * with these reads as this bot's, and one built with its own colours does not.
+ */
+export const BRAND = { BG, INK, DIM, REF, FLAG, RULE, SANS, MONO } as const;
+export { text, utcStamp, rasterise };
+export type { TextOpts };

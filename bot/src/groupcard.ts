@@ -1,6 +1,6 @@
 import type { ScanResult } from './scan.js';
 import { clamp, shortAge as age, MAX_NAME, MAX_TICKER } from './text.js';
-import { compactAmount, GROUP_HANDLE } from './card.js';
+import { compactAmount, GROUP_HANDLE, windowLabel } from './card.js';
 import { marketSnapshot, type MarketSnapshot } from './metrics/market.js';
 import { holderBreakdown } from './metrics/concentration.js';
 import { firstCallOf } from './firstcall.js';
@@ -116,7 +116,10 @@ export function renderGroupCard(r: ScanResult, opts: GroupCardOptions = {}): Gro
   if (w) {
     const median = r.benchmark.median;
     L.push(
-      `${w.uniqueBuyers30m.toLocaleString()} buyers in first 30 min`
+      // The window the count was taken over, not a fixed thirty: a launch two
+      // minutes old has two minutes of buyers, and saying "first 30 min" over
+      // them states a measurement that was never made.
+      `${w.uniqueBuyers30m.toLocaleString()} buyers in first ${windowLabel(r.traction.windowMinutes)}`
       + (median === null
         ? ' · no index median yet'
         : ` · index median ${median.toLocaleString()} (n=${r.benchmark.n.toLocaleString()})`),
