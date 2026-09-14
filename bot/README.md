@@ -883,6 +883,20 @@ Tables: `launches`, `trades`, `scans`, `rechecks`, `token_peaks`, `cursors`.
 | `npm test` | unit suite (cache, quota, semaphore, compact card) |
 | `node test/integration.mjs` | end-to-end service check against the live chain |
 
+### Admin tools in the bot
+
+| command | where | what it does |
+|---|---|---|
+| `/scout` | DM, admin | graduated launches of the last 7 days with no exempt wallet beyond the deployer, a dev buy at or under 5%, 100+ holders and socials in the launch calldata. A message of at most 20 lines plus a CSV (`token,ticker,deployer,x,tg,holders,age`). The same message posts to `CREW_CHAT_ID` daily at `SCOUT_DAILY_HOUR` (10:00 Europe/Bratislava), once per local day, marked only after the send succeeds. The last line always says what could not be checked. |
+| `/scout serial` | DM, admin | deployers with three or more launches and at least one graduated |
+| `/numbers` | admin | a PNG for the daily post: launches scanned today, exempt wallets caught, groups the bot is in, launch rooms live, declared launches, launches indexed. Counts from the bot's own index; a dim line says when the index had not finished. |
+| `/stats tax` | anyone | creator tax across all launches and across graduated ones by bracket (0%, 1-2%, 3-5%, 6-10%, by tax rounded to the nearest percent), median and p90 (withheld under 30 observations), then the top 10 graduated tokens per bracket by **curve** volume over 7 days, ETH pairs. Pool trades after graduation are not indexed, and the message says so. |
+
+"Groups the bot is in" is recorded from Telegram's `my_chat_member` updates
+(`bot_chats`), so it goes down when the bot is removed. "Launch rooms" are not
+a feature yet; the count is 1 while a launch is scheduled and its CA not yet
+pinned, else 0.
+
 ## Configuration
 
 | variable | default | meaning |
