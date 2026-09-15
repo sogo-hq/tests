@@ -99,6 +99,36 @@ merged. A CSV with a duplicate wallet, a bad address or a zero amount stops the
 run rather than skipping the row, because a skipped row is a person who
 silently does not get paid.
 
+### The burner rehearsal
+
+`--burner` runs all of the above against a throwaway key and three throwaway
+recipients, for dust. It is not a second code path: it writes a real CSV and
+then falls into the same parser, the same plan, the same typed confirmation and
+the same send loop, because a rehearsal down a different path proves nothing
+about the one that moves the money.
+
+```
+BURNER_PRIVATE_KEY=0x... node tools/pay.mjs --burner                 # run, or resume
+BURNER_PRIVATE_KEY=0x... node tools/pay.mjs --burner --kill-after 2  # die after two
+BURNER_PRIVATE_KEY=0x... node tools/pay.mjs --burner                 # resumes, sends the third
+BURNER_PRIVATE_KEY=0x... node tools/pay.mjs --burner --reset         # start over
+```
+
+Fund the burner with about **0.001 ETH**; a run needs roughly 0.0000073 of it,
+three transfers of 0.000001 plus gas. Anything over 0.001 ETH in total is
+refused: a rehearsal exists to prove the path, not to move money.
+
+The three recipients are derived from the burner's own address, so a resumed
+run targets the same three, and so the dust can be swept back rather than
+burned. The command to recompute their keys is printed at the top of the run.
+
+`--kill-after <n>` exits after the nth transfer, immediately after the plan has
+been written, which is where a real kill would land. Running the same command
+again resumes: the rows that went out keep the nonces that paid them, so a
+second attempt at one of them collides with a nonce the chain has already
+spent and is rejected rather than mined. Ctrl-C at any moment does the same
+thing; the plan is written after every single transfer.
+
 ### Afterwards
 
 It prints one line to paste back into the bot:

@@ -70,9 +70,12 @@ test('the payout table against a balance of 10 ETH', async () => {
   const out = await said('/ledger preview 10');
   // The terms, so the total can be derived by anyone reading it.
   assert.match(out, /fee wallet balance {3}10\.0000 ETH/);
-  assert.match(out, /already paid out {5}0\.0000 ETH/);
-  assert.match(out, /unpaid remainder {5}10\.0000 ETH/);
   assert.match(out, /pool, 10% of it {6}1\.0000 ETH/);
+  // Printed, and explicitly not part of the sum: the transfers leave this same
+  // wallet, so the balance above is already net of every run before this one.
+  assert.match(out, /paid out to date {5}0\.0000 ETH, over every run before this one/);
+  assert.match(out, /not subtracted: payouts leave this wallet/);
+  assert.doesNotMatch(out, /unpaid remainder/);
   assert.match(out, /total shares\s+42/);
   // 1 / 42 = 0.0238095..., rounded down to the four places the table prints.
   assert.match(out, /per share {12}0\.0238 ETH/);
@@ -86,7 +89,7 @@ test('the payout table against a balance of 10 ETH', async () => {
 });
 
 test('the run adds up, in wei, not just on screen', () => {
-  const run = L.computeRun({ balanceWei: 10n * 10n ** 18n, paidBeforeWei: 0n });
+  const run = L.computeRun({ balanceWei: 10n * 10n ** 18n, paidToDateWei: 0n });
   assert.equal(run.poolWei, 10n ** 18n);
   assert.equal(run.perShareWei, 23_800_000_000_000_00n * 10n);
   assert.equal(run.rows.reduce((a, r) => a + r.amountWei, 0n), run.distributedWei);

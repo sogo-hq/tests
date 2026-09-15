@@ -1,3 +1,4 @@
+import { keccak256, toHex } from 'viem';
 import { toWei, fromWei } from './launchplan.js';
 
 /**
@@ -165,3 +166,47 @@ export function recordCommand(plan: PayPlan): string {
 }
 
 export { fromWei };
+
+// ------------------------------------------------------------------ burner
+
+/**
+ * The most a rehearsal may move, whatever is typed on the command line.
+ *
+ * A burner run exists to prove the path works, not to move money. A fat
+ * finger on the amount should hit this rather than the wallet.
+ */
+export const BURNER_MAX_TOTAL_WEI = 10n ** 15n; // 0.001 ETH
+
+/** What a burner sends to each of its throwaway recipients by default. */
+export const BURNER_DEFAULT_AMOUNT_WEI = 10n ** 12n; // 0.000001 ETH
+
+/**
+ * Three throwaway recipients, derived from the burner's own address.
+ *
+ * Deterministic, so a resumed run targets the same three and the nonce guard
+ * has something to be right about. Derived from a PUBLIC address, so these
+ * keys are not secret and are not meant to be: they exist so the dust can be
+ * swept back afterwards rather than burned, and anyone reading this file can
+ * recompute them. Never use one for anything else.
+ */
+export function burnerRecipientKeys(burnerAddress: string, count = 3): `0x${string}`[] {
+  return Array.from({ length: count }, (_, i) =>
+    keccak256(toHex(`vitals-burner-recipient:${burnerAddress.toLowerCase()}:${i + 1}`)));
+}
+
+/** The CSV a burner run feeds to the very same parser a real run uses. */
+export function burnerCsv(recipients: string[], amountWei: bigint): string {
+  return ['wallet,amount', ...recipients.map((w) => `${w},${fromWei(amountWei, 18).replace(/0+$/, '0')}`)].join('\n');
+}
+
+/** Refuse a rehearsal that is not dust. */
+export function checkBurnerTotal(totalWei: bigint): { ok: true } | { ok: false; reason: string } {
+  if (totalWei <= 0n) return { ok: false, reason: 'a burner run with nothing in it proves nothing' };
+  if (totalWei > BURNER_MAX_TOTAL_WEI) {
+    return {
+      ok: false,
+      reason: `a burner run moves dust: ${fromWei(totalWei)} ETH is over the ${fromWei(BURNER_MAX_TOTAL_WEI)} ETH ceiling`,
+    };
+  }
+  return { ok: true };
+}

@@ -18,6 +18,13 @@ import { liveSeats, totalShares, TIERS, type Seat, type Tier } from './roster.js
  *   ETH and not in wei is a table somebody will one day reconcile against a
  *   block explorer and find short.
  *
+ *   The pool is a tenth of the CURRENT balance, with nothing subtracted.
+ *   Payouts leave this same wallet, so the balance already reflects every run
+ *   that has been paid; subtracting them again took a tenth of a number that
+ *   had already had them taken off, and every run after the first paid less
+ *   than it owed. What has been paid to date is still printed, because it is
+ *   worth seeing, and it is not part of the arithmetic.
+ *
  *   The per-share amount is rounded DOWN to four decimal places of ETH, which
  *   is the precision the table is printed at. Every payout is then exactly
  *   what is shown, and what is left over stays in the wallet. It is not lost:
@@ -89,8 +96,8 @@ export interface PayoutRow {
 export interface LedgerRun {
   id: number | null;
   balanceWei: bigint;
-  paidBeforeWei: bigint;
-  remainderWei: bigint;
+  /** Cumulative, for the record. Not subtracted from anything. */
+  paidToDateWei: bigint;
   poolWei: bigint;
   totalShares: number;
   perShareWei: bigint;
@@ -110,17 +117,17 @@ export interface LedgerRun {
 export function computeRun(opts: {
   balanceWei: bigint;
   seats?: Seat[];
-  paidBeforeWei?: bigint;
+  paidToDateWei?: bigint;
   now?: number;
   hypothetical?: boolean;
 }): LedgerRun {
   const seats = opts.seats ?? liveSeats();
-  const paidBefore = opts.paidBeforeWei ?? paidOutWei();
-  // A balance below what has been paid means the wallet was spent from
-  // elsewhere. There is nothing to distribute, and a negative remainder would
-  // become a negative pool and a negative payout.
-  const remainder = opts.balanceWei > paidBefore ? opts.balanceWei - paidBefore : 0n;
-  const pool = (remainder * BigInt(LEDGER_SHARE_PCT)) / 100n;
+  const paidToDate = opts.paidToDateWei ?? paidOutWei();
+  // A tenth of what is in the wallet now. Nothing is subtracted: the transfers
+  // go out of this same wallet, so a run that has been paid is already gone
+  // from the balance, and taking it off a second time is what made every run
+  // after the first pay short.
+  const pool = (opts.balanceWei * BigInt(LEDGER_SHARE_PCT)) / 100n;
   const shares = totalShares(seats);
   const perShare = shares > 0
     ? ((pool / BigInt(shares)) / PAYOUT_PRECISION_WEI) * PAYOUT_PRECISION_WEI
@@ -133,8 +140,7 @@ export function computeRun(opts: {
   return {
     id: null,
     balanceWei: opts.balanceWei,
-    paidBeforeWei: paidBefore,
-    remainderWei: remainder,
+    paidToDateWei: paidToDate,
     poolWei: pool,
     totalShares: shares,
     perShareWei: perShare,
@@ -153,7 +159,7 @@ export function saveRun(run: LedgerRun): number {
       `INSERT INTO ledger_runs (created_at, balance_wei, paid_before_wei, remainder_wei, pool_wei,
          total_shares, per_share_wei, distributed_wei, dust_wei, status, hypothetical)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'preview', ?)`,
-    ).run(r.createdAt, String(r.balanceWei), String(r.paidBeforeWei), String(r.remainderWei),
+    ).run(r.createdAt, String(r.balanceWei), String(r.paidToDateWei), String(r.balanceWei),
       String(r.poolWei), r.totalShares, String(r.perShareWei), String(r.distributedWei),
       String(r.dustWei), r.hypothetical ? 1 : 0);
     const id = Number(res.lastInsertRowid);
@@ -173,8 +179,8 @@ export function loadRun(id: number): LedgerRun | null {
   const rows = (db.prepare('SELECT * FROM ledger_payments WHERE run_id = ? ORDER BY seat').all(id) as any[])
     .map((p) => ({ seat: p.seat, handle: p.handle, tier: p.tier as Tier, shares: p.shares, wallet: p.wallet, amountWei: BigInt(p.amount_wei) }));
   return {
-    id, balanceWei: BigInt(r.balance_wei), paidBeforeWei: BigInt(r.paid_before_wei),
-    remainderWei: BigInt(r.remainder_wei), poolWei: BigInt(r.pool_wei), totalShares: r.total_shares,
+    id, balanceWei: BigInt(r.balance_wei), paidToDateWei: BigInt(r.paid_before_wei),
+    poolWei: BigInt(r.pool_wei), totalShares: r.total_shares,
     perShareWei: BigInt(r.per_share_wei), distributedWei: BigInt(r.distributed_wei),
     dustWei: BigInt(r.dust_wei), rows, hypothetical: !!r.hypothetical, createdAt: r.created_at,
   };
@@ -243,9 +249,9 @@ export function previewText(run: LedgerRun, opts: { warnings?: string[] } = {}):
   const L: string[] = [];
   if (run.hypothetical) L.push('HYPOTHETICAL: the balance below was typed in, not read from the fee wallet');
   L.push(`fee wallet balance   ${eth(run.balanceWei)} ETH`);
-  L.push(`already paid out     ${eth(run.paidBeforeWei)} ETH`);
-  L.push(`unpaid remainder     ${eth(run.remainderWei)} ETH`);
   L.push(`pool, ${LEDGER_SHARE_PCT}% of it      ${eth(run.poolWei)} ETH`);
+  L.push(`paid out to date     ${eth(run.paidToDateWei)} ETH, over every run before this one`);
+  L.push('                     not subtracted: payouts leave this wallet, so the balance is already net of them');
   L.push(`total shares         ${run.totalShares}`);
   L.push(`per share            ${eth(run.perShareWei)} ETH`);
   L.push('');
@@ -294,8 +300,8 @@ export function postText(run: LedgerRun): string {
   L.push(`ledger, ${day(run.createdAt)}`);
   L.push('');
   L.push(`fee wallet        ${eth(run.balanceWei)} ETH`);
-  L.push(`already paid out  ${eth(run.paidBeforeWei)} ETH`);
   L.push(`distributing ${LEDGER_SHARE_PCT}%  ${eth(run.poolWei)} ETH`);
+  L.push(`paid out to date  ${eth(run.paidToDateWei)} ETH, before this run`);
   L.push(`total shares      ${run.totalShares}`);
   L.push('');
   for (const t of TIERS) {

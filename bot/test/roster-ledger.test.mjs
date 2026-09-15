@@ -35,7 +35,7 @@ test('a mixed roster adds its shares the way the tiers say', () => {
   seed(4, 6, 10);
   assert.equal(R.totalShares(), 42);
   assert.deepEqual(R.TIER_SHARES, { T1: 5, T2: 2, T3: 1 });
-  const run = L.computeRun({ balanceWei: ETH(10), paidBeforeWei: 0n });
+  const run = L.computeRun({ balanceWei: ETH(10), paidToDateWei: 0n });
   assert.equal(run.totalShares, 42);
   assert.equal(L.eth(run.poolWei), '1.0000');
   assert.equal(L.eth(run.perShareWei), '0.0238');
@@ -53,14 +53,14 @@ test('a mixed roster adds its shares the way the tiers say', () => {
 
 test('shares are stored, so changing what a tier is worth does not rewrite a past run', () => {
   seed(1, 1, 0);
-  const before = L.computeRun({ balanceWei: ETH(10), paidBeforeWei: 0n });
+  const before = L.computeRun({ balanceWei: ETH(10), paidToDateWei: 0n });
   const id = L.saveRun(before);
   assert.equal(before.totalShares, 7);
   // A promotion changes the next run, not the one already computed.
   const r = R.setTier('t2_1', 'T1', { at: 2000 });
   assert.equal(r.ok, true);
   assert.equal(R.totalShares(), 10);
-  const after = L.computeRun({ balanceWei: ETH(10), paidBeforeWei: 0n });
+  const after = L.computeRun({ balanceWei: ETH(10), paidToDateWei: 0n });
   assert.equal(after.totalShares, 10);
   const stored = L.loadRun(id);
   assert.equal(stored.totalShares, 7, 'a stored run changed when a tier did');
@@ -105,35 +105,62 @@ test('a bad tier, handle or wallet is refused by name', () => {
 
 // --------------------------------------------------------------- the dust
 
-test('the dust stays in the wallet and goes out with the next run', () => {
+test('two consecutive runs: the second is a tenth of what is left, and does not pay short', () => {
   seed(4, 6, 10);
-  const one = L.computeRun({ balanceWei: ETH(10), paidBeforeWei: 0n });
+
+  // Run one, on a wallet holding 10 ETH.
+  const one = L.computeRun({ balanceWei: ETH(10) });
   const id = L.saveRun(one);
+  assert.equal(L.eth(one.poolWei), '1.0000');
+  assert.equal(L.eth(one.distributedWei), '0.9996');
   assert.equal(L.eth(one.dustWei, 6), '0.000400');
 
-  // Paid: the hashes come back, so this is now money that has left.
+  // It is paid, from this same wallet, and the hashes come back.
   L.recordTxs(id, one.rows.map((r) => ({ seat: r.seat, txHash: '0x' + String(r.seat).padStart(64, '0') })));
   assert.equal(L.paidOutWei(), one.distributedWei);
+  const balanceTwo = ETH(10) - one.distributedWei;
+  assert.equal(L.eth(balanceTwo), '9.0004');
 
-  // The wallet took nothing further in, so its balance is what it was less
-  // what went out. The dust is still sitting in it.
-  const balanceNow = ETH(10) - one.distributedWei;
-  const two = L.computeRun({ balanceWei: balanceNow, paidBeforeWei: 0n });
-  assert.equal(two.remainderWei, balanceNow);
+  // Run two reads the wallet again. A tenth of what is actually in it.
+  const two = L.computeRun({ balanceWei: balanceTwo });
+  assert.equal(two.poolWei, balanceTwo / 10n, 'the pool is not a tenth of the balance');
+  assert.equal(L.eth(two.poolWei), '0.9000');
+  assert.equal(L.eth(two.perShareWei), '0.0214');
+  assert.equal(L.eth(two.distributedWei), '0.8988');
 
-  // As the ledger actually runs it: the live balance, less what has been paid.
-  // Only a tenth went out, so most of the remainder is simply the nine tenths
-  // that were never up for distribution. What matters is that the dust is
-  // inside it and not stranded, which is the difference between the new
-  // remainder and the nine tenths.
-  const carried = L.computeRun({ balanceWei: ETH(10), paidBeforeWei: L.paidOutWei() });
+  // What the subtraction used to do, and why it was wrong. Payouts leave this
+  // same wallet, so run one is already gone from the balance; taking it off
+  // again made run two a tenth of a number it had already been taken from.
+  const underpaid = (balanceTwo - one.distributedWei) / 10n;
+  assert.ok(two.poolWei > underpaid, 'the pool is still being reduced by what was already paid');
+  assert.equal(L.eth(underpaid), '0.8000');
+  assert.equal(L.eth(two.poolWei - underpaid, 6), '0.099960', 'the amount run two would have been short by');
+
+  // And the paid figure is still reported, as a fact about the past rather
+  // than a term in the arithmetic.
+  const withHistory = L.computeRun({ balanceWei: balanceTwo, paidToDateWei: L.paidOutWei() });
+  assert.equal(withHistory.poolWei, two.poolWei, 'what has been paid changed the pool');
+  assert.equal(withHistory.paidToDateWei, one.distributedWei);
+  const text = L.previewText(withHistory);
+  assert.match(text, /fee wallet balance\s+9\.0004 ETH/);
+  assert.match(text, /pool, 10% of it\s+0\.9000 ETH/);
+  assert.match(text, /paid out to date\s+0\.9996 ETH, over every run before this one/);
+  assert.match(text, /not subtracted: payouts leave this wallet/);
+  assert.doesNotMatch(text, /unpaid remainder/);
+});
+
+test('the dust stays in the wallet and is inside the next run', () => {
+  seed(4, 6, 10);
+  const one = L.computeRun({ balanceWei: ETH(10) });
+  assert.equal(L.eth(one.dustWei, 6), '0.000400');
+  // The wallet keeps the dust along with the nine tenths that were never up
+  // for distribution, and the next run takes its tenth of all of it.
+  const balanceTwo = ETH(10) - one.distributedWei;
   const ninetenths = ETH(10) - one.poolWei;
-  assert.equal(carried.remainderWei - ninetenths, one.dustWei, 'the dust was not carried into the next run');
-  assert.equal(carried.remainderWei + one.distributedWei, ETH(10), 'the wallet is fully accounted for');
-
-  // And it goes out: the second pool is a tenth of a remainder that includes it.
-  assert.equal(carried.poolWei, carried.remainderWei / 10n);
-  assert.ok(carried.poolWei > ninetenths / 10n, 'the second pool does not include the first run\'s dust');
+  assert.equal(balanceTwo - ninetenths, one.dustWei, 'the dust did not stay in the wallet');
+  const two = L.computeRun({ balanceWei: balanceTwo });
+  assert.ok(two.poolWei > ninetenths / 10n, 'the second pool does not include the first run\'s dust');
+  assert.equal(two.poolWei, (ninetenths + one.dustWei) / 10n);
 });
 
 test('what has been paid is what has a hash, not what was once computed', () => {
@@ -161,13 +188,16 @@ test('a hash is never overwritten, and an unknown seat is reported', () => {
   assert.equal(L.paidOutWei(), run.distributedWei, 'the amount was counted twice');
 });
 
-test('a balance below what was paid distributes nothing rather than a negative', () => {
+test('an empty wallet distributes nothing, and a long history does not change a pool', () => {
   seed(1, 0, 0);
-  const run = L.computeRun({ balanceWei: ETH(1), paidBeforeWei: ETH(5) });
-  assert.equal(run.remainderWei, 0n);
-  assert.equal(run.poolWei, 0n);
-  assert.equal(run.perShareWei, 0n);
-  assert.equal(run.rows[0].amountWei, 0n);
+  const empty = L.computeRun({ balanceWei: 0n, paidToDateWei: ETH(5) });
+  assert.equal(empty.poolWei, 0n);
+  assert.equal(empty.perShareWei, 0n);
+  assert.equal(empty.rows[0].amountWei, 0n);
+  // Years of payouts behind it, and the pool is still a tenth of what is there.
+  const later = L.computeRun({ balanceWei: ETH(1), paidToDateWei: ETH(500) });
+  assert.equal(later.poolWei, ETH(0.1));
+  assert.equal(later.paidToDateWei, ETH(500));
 });
 
 test('no seats means no division by zero', () => {
@@ -241,4 +271,94 @@ test('the line pasted back into the bot names wallets, which the bot resolves to
   plan.entries[0].status = 'sent';
   plan.entries[0].txHash = '0x' + 'f'.repeat(64);
   assert.equal(PP.recordCommand(plan), `/ledger tx 3 ${W(1)}:0x${'f'.repeat(64)}`);
+});
+
+// ------------------------------------------------------- the burner rehearsal
+
+test('the burner sends dust to three recipients derived from its own address', async () => {
+  const { privateKeyToAccount } = await import('viem/accounts');
+  const burner = '0x357888ee9a318B33F5916eceF4b6558D9216a476';
+  const keys = PP.burnerRecipientKeys(burner);
+  assert.equal(keys.length, 3);
+  const addrs = keys.map((k) => privateKeyToAccount(k).address);
+  // Deterministic, so a resumed run targets the same three and the nonce
+  // guard has something to be right about.
+  assert.deepEqual(PP.burnerRecipientKeys(burner).map((k) => privateKeyToAccount(k).address), addrs);
+  // And tied to the burner: a different key rehearses to different addresses.
+  assert.notDeepEqual(PP.burnerRecipientKeys('0x' + '9'.repeat(40)).map((k) => privateKeyToAccount(k).address), addrs);
+  assert.equal(new Set(addrs).size, 3, 'two recipients came out the same');
+
+  // The CSV it writes is read back by the same parser a real run uses.
+  const csv = PP.burnerCsv(addrs, PP.BURNER_DEFAULT_AMOUNT_WEI);
+  const parsed = PP.parsePayCsv(csv);
+  assert.equal(parsed.ok, true, parsed.ok ? '' : parsed.errors.join('; '));
+  assert.equal(PP.totalWei(parsed.rows), PP.BURNER_DEFAULT_AMOUNT_WEI * 3n);
+});
+
+test('a burner run that is not dust is refused', () => {
+  assert.equal(PP.checkBurnerTotal(PP.BURNER_DEFAULT_AMOUNT_WEI * 3n).ok, true);
+  assert.equal(PP.checkBurnerTotal(PP.BURNER_MAX_TOTAL_WEI).ok, true);
+  const over = PP.checkBurnerTotal(PP.BURNER_MAX_TOTAL_WEI + 1n);
+  assert.equal(over.ok, false);
+  assert.match(over.reason, /over the 0\.001 ETH ceiling/);
+  assert.match(PP.checkBurnerTotal(0n).reason, /proves nothing/);
+});
+
+test('killed after two and resumed: the third is sent, the first two are not', async () => {
+  // The lifecycle a kill actually goes through, over a real file on disk:
+  // the plan is written after every send, the process dies, and the next run
+  // reads the file back rather than recomputing anything.
+  const { mkdtempSync, writeFileSync, readFileSync, rmSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const dir = mkdtempSync(join(tmpdir(), 'vitals-burner-'));
+  const planPath = join(dir, 'pay-run-burner.json');
+  try {
+    const { privateKeyToAccount } = await import('viem/accounts');
+    const burner = '0x357888ee9a318B33F5916eceF4b6558D9216a476';
+    const addrs = PP.burnerRecipientKeys(burner).map((k) => privateKeyToAccount(k).address);
+    const rows = PP.parsePayCsv(PP.burnerCsv(addrs, PP.BURNER_DEFAULT_AMOUNT_WEI)).rows;
+
+    // First run. The chain's pending nonce is 4.
+    const first = PP.buildPlan({ runId: 'burner', from: burner, rows, baseNonce: 4 });
+    assert.equal(first.resumed, false);
+    const plan = first.plan;
+    writeFileSync(planPath, PP.planToJson(plan));
+    assert.deepEqual(plan.entries.map((e) => e.nonce), [4, 5, 6]);
+
+    // Two go out, each followed by a write, and then it is killed.
+    let killedAfter = 0;
+    for (const e of plan.entries) {
+      e.txHash = '0x' + String(e.index + 1).repeat(64).slice(0, 64);
+      e.status = 'sent';
+      writeFileSync(planPath, PP.planToJson(plan));
+      if (++killedAfter === 2) break;
+    }
+    const onDisk = PP.planFromJson(readFileSync(planPath, 'utf8'));
+    assert.equal(PP.sentEntries(onDisk).length, 2, 'the file does not record what went out');
+    assert.equal(PP.unsent(onDisk).length, 1);
+
+    // Resumed. The chain has moved on, so the pending nonce is now 6, and the
+    // plan must ignore that for the rows it already has.
+    const again = PP.buildPlan({ runId: 'burner', from: burner, rows, baseNonce: 6, stored: onDisk });
+    assert.equal(again.ok, true);
+    assert.equal(again.resumed, true);
+    const todo = PP.unsent(again.plan);
+    assert.equal(todo.length, 1, 'a row that already went out came back around');
+    assert.equal(todo[0].wallet, addrs[2]);
+    assert.equal(todo[0].nonce, 6, 'the third row kept the nonce it was given');
+    assert.deepEqual(again.plan.entries.map((e) => e.nonce), [4, 5, 6],
+      'the sent rows kept the nonces that paid them, which is what a second attempt collides with');
+    assert.deepEqual(PP.sentEntries(again.plan).map((e) => e.wallet), [addrs[0], addrs[1]]);
+
+    // Finish it. Nothing is left, and a third run sends nothing at all.
+    todo[0].txHash = '0x' + '3'.repeat(64);
+    todo[0].status = 'sent';
+    writeFileSync(planPath, PP.planToJson(again.plan));
+    const done = PP.buildPlan({ runId: 'burner', from: burner, rows, baseNonce: 7, stored: PP.planFromJson(readFileSync(planPath, 'utf8')) });
+    assert.equal(PP.unsent(done.plan).length, 0, 'a finished run would send again');
+    assert.equal(PP.totalWei(PP.sentEntries(done.plan)), PP.BURNER_DEFAULT_AMOUNT_WEI * 3n);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

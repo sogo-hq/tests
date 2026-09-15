@@ -968,9 +968,12 @@ rather than derived from the tier when it is needed, so changing what a tier is
 worth changes what people earn from the next run and leaves every run already
 paid exactly as it was paid.
 
-The pool is 10% of the fee wallet balance less what has already been paid out,
-counted as what has a transaction hash against it rather than what was once
-computed. The per-share amount is rounded **down** to four decimal places of
+The pool is 10% of the fee wallet balance, with nothing subtracted. Payouts
+leave that same wallet, so the balance is already net of every run that has
+been paid; subtracting them again would take a tenth of a number they had
+already been taken from, and every run after the first would pay short. What
+has been paid to date is printed beside the pool, as a fact about the past
+rather than a term in the sum. The per-share amount is rounded **down** to four decimal places of
 ETH, which is the precision the table prints, so every payout is exactly the
 figure shown. What is left over stays in the wallet and is inside the next
 run's balance.

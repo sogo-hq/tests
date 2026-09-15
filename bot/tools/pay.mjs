@@ -12,8 +12,19 @@
  * written before the first transfer and updated after each one.
  *
  *   FEE_WALLET_PRIVATE_KEY=0x... node tools/pay.mjs --csv vitals-ledger-run-3.csv --run 3
+ *
+ * --burner runs the whole of the above against a throwaway key and three
+ * throwaway recipients, for dust. It is not a separate code path: it writes a
+ * real CSV and then falls into the same parser, the same plan, the same typed
+ * confirmation and the same send loop, because a rehearsal down a different
+ * path proves nothing about the one that moves the money.
+ *
+ *   BURNER_PRIVATE_KEY=0x... node tools/pay.mjs --burner
+ *   BURNER_PRIVATE_KEY=0x... node tools/pay.mjs --burner --kill-after 2
+ *   BURNER_PRIVATE_KEY=0x... node tools/pay.mjs --burner            # resumes
+ *   BURNER_PRIVATE_KEY=0x... node tools/pay.mjs --burner --reset    # starts over
  */
-import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, rmSync } from 'node:fs';
 import { createInterface } from 'node:readline/promises';
 import { join, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -35,29 +46,66 @@ const bold = (s) => `\x1b[1m${s}\x1b[0m`;
 const dim = (s) => `\x1b[2m${s}\x1b[0m`;
 const red = (s) => `\x1b[31m${s}\x1b[0m`;
 
-const csvPath = arg('--csv');
-const runId = arg('--run');
-if (!csvPath || !runId) {
-  die('usage: FEE_WALLET_PRIVATE_KEY=0x... node tools/pay.mjs --csv <file> --run <id>');
-}
-if (!existsSync(csvPath)) die(`${csvPath} does not exist`);
+const BURNER = argv.includes('--burner');
+const RESET = argv.includes('--reset');
+const KILL_AFTER = Number(arg('--kill-after', '0')) || 0;
+
+const KEY_VAR = BURNER ? 'BURNER_PRIVATE_KEY' : 'FEE_WALLET_PRIVATE_KEY';
 
 /** The key comes from the shell, never from a file beside the code. */
 for (const f of readdirSync(ROOT).filter((x) => x === '.env' || x.startsWith('.env.'))) {
-  if (/^\s*(export\s+)?FEE_WALLET_PRIVATE_KEY\s*=/m.test(readFileSync(join(ROOT, f), 'utf8'))) {
-    die(red(`FEE_WALLET_PRIVATE_KEY is set in ${f}.`) + '\n  a key that pays people never lives in a file next to the code.');
+  if (new RegExp(`^\\s*(export\\s+)?${KEY_VAR}\\s*=`, 'm').test(readFileSync(join(ROOT, f), 'utf8'))) {
+    die(red(`${KEY_VAR} is set in ${f}.`) + '\n  a key that sends money never lives in a file next to the code.');
   }
 }
-const key = (process.env.FEE_WALLET_PRIVATE_KEY ?? '').trim();
-if (!/^0x[0-9a-fA-F]{64}$/.test(key)) die('FEE_WALLET_PRIVATE_KEY is not set in this shell, or is not a 32-byte hex key');
+const key = (process.env[KEY_VAR] ?? '').trim();
+if (!/^0x[0-9a-fA-F]{64}$/.test(key)) die(`${KEY_VAR} is not set in this shell, or is not a 32-byte hex key`);
 const account = privateKeyToAccount(key);
+
+mkdirSync(OUT, { recursive: true });
+
+let csvPath;
+let runId;
+
+if (BURNER) {
+  // A stable run id, so running the same command again resumes rather than
+  // starting a second rehearsal beside the first.
+  runId = 'burner';
+  csvPath = join(OUT, 'burner.csv');
+  const planFile = join(OUT, `pay-run-${runId}.json`);
+  if (RESET) {
+    for (const f of [csvPath, planFile]) rmSync(f, { force: true });
+    console.log(dim(`  reset: ${planFile} and ${csvPath} removed`));
+  }
+  const amount = arg('--amount') ? P.fromWei(0n) && BigInt(Math.round(Number(arg('--amount')) * 1e18)) : P.BURNER_DEFAULT_AMOUNT_WEI;
+  const keys = P.burnerRecipientKeys(account.address);
+  const recipients = keys.map((k) => privateKeyToAccount(k).address);
+  const cap = P.checkBurnerTotal(amount * BigInt(recipients.length));
+  if (!cap.ok) die(red('refused: ') + cap.reason);
+  // Written once. A resume reads the same file, so the plan and the file
+  // cannot drift apart between a kill and the run that finishes the job.
+  if (!existsSync(csvPath)) writeFileSync(csvPath, P.burnerCsv(recipients, amount));
+  console.log(`\n${bold('  BURNER REHEARSAL')}  ${dim('a throwaway key, three throwaway recipients, dust')}`);
+  console.log(`  burner       ${account.address}`);
+  recipients.forEach((r, i) => console.log(`  recipient ${i + 1}  ${r}`));
+  console.log(dim('  the recipients are derived from the burner address, so the dust is recoverable:'));
+  console.log(dim("    node -e \"const{privateKeyToAccount}=require('viem/accounts');const P=require('./dist/payplan.js');"
+    + `console.log(P.burnerRecipientKeys('${account.address}'))\"`));
+} else {
+  csvPath = arg('--csv');
+  runId = arg('--run');
+  if (!csvPath || !runId) {
+    die('usage: FEE_WALLET_PRIVATE_KEY=0x... node tools/pay.mjs --csv <file> --run <id>\n' +
+        '   or: BURNER_PRIVATE_KEY=0x... node tools/pay.mjs --burner');
+  }
+}
+if (!existsSync(csvPath)) die(`${csvPath} does not exist`);
 
 const parsed = P.parsePayCsv(readFileSync(csvPath, 'utf8'));
 if (!parsed.ok) die(`${csvPath}:\n` + parsed.errors.map((e) => `    ${e}`).join('\n'));
 const rows = parsed.rows;
 const total = P.totalWei(rows);
 
-mkdirSync(OUT, { recursive: true });
 const planPath = join(OUT, `pay-run-${runId}.json`);
 const stored = existsSync(planPath) ? P.planFromJson(readFileSync(planPath, 'utf8')) : null;
 const pendingNonce = await client.getTransactionCount({ address: account.address, blockTag: 'pending' });
@@ -67,7 +115,7 @@ const plan = built.plan;
 const todo = P.unsent(plan);
 const done = P.sentEntries(plan);
 
-console.log(`\n${bold('  VITALS payer')}`);
+console.log(`\n${bold(BURNER ? '  VITALS payer, burner rehearsal' : '  VITALS payer')}`);
 console.log(dim(`  csv   ${basename(csvPath)}`));
 console.log(dim(`  rpc   ${RPC_URL}`));
 console.log(`\n  from         ${account.address}`);
@@ -119,6 +167,14 @@ for (const e of plan.entries) {
     e.status = 'sent';
     save();   // after every single one, so a crash loses nothing
     console.log(`  ${String(e.index + 1).padStart(3)}/${plan.entries.length}  ${e.wallet}  ${e.amountEth} ETH  ${hash}`);
+    // The simulated kill, AFTER the save, which is where a real one would
+    // land too: the plan on disk is the record of what went out.
+    if (KILL_AFTER && P.sentEntries(plan).length >= KILL_AFTER) {
+      console.log(red(`\n  killed after ${KILL_AFTER}, as asked.`));
+      console.log(`  ${P.sentEntries(plan).length} of ${plan.entries.length} are recorded in ${planPath}`);
+      console.log(`  run the same command again: it resumes, and reuses the nonces of the rows already sent.\n`);
+      process.exit(9);
+    }
   } catch (err) {
     const msg = String(err?.shortMessage ?? err?.message ?? err).split('\n')[0];
     // A nonce the chain has already used means this row landed on an earlier
@@ -142,4 +198,10 @@ for (const e of plan.entries) {
 const sent = P.sentEntries(plan);
 console.log(`\n  ${bold(`${sent.length} of ${plan.entries.length} sent`)}, ${formatEther(P.totalWei(sent))} ETH`);
 console.log(dim(`  every hash is in ${planPath}`));
-console.log(`\n  paste into the bot:\n\n${P.recordCommand(plan)}\n`);
+if (BURNER) {
+  console.log(`\n  ${bold('the path works end to end.')} the same code sends the real ledger.`);
+  console.log(dim(`  nothing to paste: run ${runId} is a rehearsal and no ledger run has that id.`));
+  console.log(dim('  start over with --reset.\n'));
+} else {
+  console.log(`\n  paste into the bot:\n\n${P.recordCommand(plan)}\n`);
+}
