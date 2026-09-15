@@ -105,62 +105,100 @@ test('a bad tier, handle or wallet is refused by name', () => {
 
 // --------------------------------------------------------------- the dust
 
-test('two consecutive runs: the second is a tenth of what is left, and does not pay short', () => {
+test('four runs: new income moves the pool, a sweep does not, and nothing is paid twice', () => {
   seed(4, 6, 10);
+  const paid = (r) => r.rows.reduce((a, x) => a + x.amountWei, 0n);
 
-  // Run one, on a wallet holding 10 ETH.
-  const one = L.computeRun({ balanceWei: ETH(10) });
-  const id = L.saveRun(one);
+  // Run 1. A wallet holding 10 ETH, nothing ever paid, nothing ever swept.
+  const one = L.computeRun({ balanceWei: ETH(10), paidToDateWei: 0n, sweptToDateWei: 0n });
+  assert.equal(L.eth(one.grossIncomeWei), '10.0000');
+  assert.equal(L.eth(one.poolTargetWei), '1.0000');
   assert.equal(L.eth(one.poolWei), '1.0000');
+  assert.equal(L.eth(one.perShareWei), '0.0238');
   assert.equal(L.eth(one.distributedWei), '0.9996');
   assert.equal(L.eth(one.dustWei, 6), '0.000400');
 
-  // It is paid, from this same wallet, and the hashes come back.
-  L.recordTxs(id, one.rows.map((r) => ({ seat: r.seat, txHash: '0x' + String(r.seat).padStart(64, '0') })));
-  assert.equal(L.paidOutWei(), one.distributedWei);
-  const balanceTwo = ETH(10) - one.distributedWei;
-  assert.equal(L.eth(balanceTwo), '9.0004');
+  // Paid, out of this same wallet. Gas is zero in this test so the figures
+  // are the ones the model is specified with; gas is exercised on its own.
+  const paidOne = paid(one);
+  const balTwo = ETH(10) - paidOne;
+  assert.equal(L.eth(balTwo), '9.0004');
 
-  // Run two reads the wallet again. A tenth of what is actually in it.
-  const two = L.computeRun({ balanceWei: balanceTwo });
-  assert.equal(two.poolWei, balanceTwo / 10n, 'the pool is not a tenth of the balance');
-  assert.equal(L.eth(two.poolWei), '0.9000');
-  assert.equal(L.eth(two.perShareWei), '0.0214');
-  assert.equal(L.eth(two.distributedWei), '0.8988');
+  // Run 2. No new fees at all. Gross income has not moved, so the room is
+  // owed nothing further except the dust run 1 could not divide.
+  const two = L.computeRun({ balanceWei: balTwo, paidToDateWei: paidOne, sweptToDateWei: 0n });
+  assert.equal(L.eth(two.grossIncomeWei), '10.0000', 'gross income moved without any income');
+  assert.equal(L.eth(two.poolTargetWei), '1.0000');
+  assert.equal(two.poolWei, one.dustWei, 'run 2 pays for income the room was already paid for');
+  assert.equal(L.eth(two.poolWei, 6), '0.000400');
+  // 0.0004 over 42 shares is under the 0.0001 ETH a payout is rounded to.
+  assert.equal(two.perShareWei, 0n);
+  assert.equal(two.distributedWei, 0n, 'something was sent below the printed precision');
+  assert.equal(two.dustWei, two.poolWei, 'the dust stays whole and waits');
+  assert.match(L.previewText(two), /under the 0\.0001 ETH a payout is rounded to\. nothing is sent/);
 
-  // What the subtraction used to do, and why it was wrong. Payouts leave this
-  // same wallet, so run one is already gone from the balance; taking it off
-  // again made run two a tenth of a number it had already been taken from.
-  const underpaid = (balanceTwo - one.distributedWei) / 10n;
-  assert.ok(two.poolWei > underpaid, 'the pool is still being reduced by what was already paid');
-  assert.equal(L.eth(underpaid), '0.8000');
-  assert.equal(L.eth(two.poolWei - underpaid, 6), '0.099960', 'the amount run two would have been short by');
+  // Run 3. Five ETH of new fees arrive; run 2 sent nothing.
+  const balThree = balTwo + ETH(5);
+  const three = L.computeRun({ balanceWei: balThree, paidToDateWei: paidOne, sweptToDateWei: 0n });
+  assert.equal(L.eth(three.grossIncomeWei), '15.0000');
+  assert.equal(L.eth(three.poolTargetWei), '1.5000');
+  // A tenth of the new five, plus the dust the earlier runs could not divide.
+  assert.equal(L.eth(three.poolWei, 6), '0.500400');
+  assert.equal(three.poolWei, ETH(0.5) + one.dustWei, 'the carried dust is not in the pool');
+  assert.equal(L.eth(three.perShareWei), '0.0119');
+  assert.equal(L.eth(three.distributedWei), '0.4998');
 
-  // And the paid figure is still reported, as a fact about the past rather
-  // than a term in the arithmetic.
-  const withHistory = L.computeRun({ balanceWei: balanceTwo, paidToDateWei: L.paidOutWei() });
-  assert.equal(withHistory.poolWei, two.poolWei, 'what has been paid changed the pool');
-  assert.equal(withHistory.paidToDateWei, one.distributedWei);
-  const text = L.previewText(withHistory);
-  assert.match(text, /fee wallet balance\s+9\.0004 ETH/);
-  assert.match(text, /pool, 10% of it\s+0\.9000 ETH/);
-  assert.match(text, /paid out to date\s+0\.9996 ETH, over every run before this one/);
-  assert.match(text, /not subtracted: payouts leave this wallet/);
-  assert.doesNotMatch(text, /unpaid remainder/);
+  // Run 4. Eight ETH is swept out to the treasury. Run 3 was not paid.
+  const swept = ETH(8);
+  const balFour = balThree - swept;
+  const four = L.computeRun({ balanceWei: balFour, paidToDateWei: paidOne, sweptToDateWei: swept });
+  assert.equal(L.eth(four.balanceWei), '6.0004');
+  assert.equal(L.eth(four.sweptToDateWei), '8.0000');
+  assert.equal(L.eth(four.grossIncomeWei), '15.0000', 'a sweep changed gross income');
+  assert.equal(four.poolWei, three.poolWei, 'the sweep moved the pool');
+  assert.equal(four.refusal, null);
+  assert.equal(L.eth(four.distributedWei), '0.4998');
+
+  // And the arithmetic is visible, every term of it.
+  const text = L.previewText(four);
+  assert.match(text, /fee wallet balance\s+6\.0004 ETH/);
+  assert.match(text, /paid out to date\s+\+ 0\.9996 ETH, payout values and their gas/);
+  assert.match(text, /swept to date\s+\+ 8\.0000 ETH, moved out by hand and recorded/);
+  assert.match(text, /gross income\s+= 15\.0000 ETH/);
+  assert.match(text, /the room's 10%\s+1\.5000 ETH of it, in total, ever/);
+  assert.match(text, /pool now\s+= 0\.5004 ETH/);
 });
 
-test('the dust stays in the wallet and is inside the next run', () => {
+test('a pool larger than the wallet is refused, and says what to do about it', () => {
   seed(4, 6, 10);
-  const one = L.computeRun({ balanceWei: ETH(10) });
-  assert.equal(L.eth(one.dustWei, 6), '0.000400');
-  // The wallet keeps the dust along with the nine tenths that were never up
-  // for distribution, and the next run takes its tenth of all of it.
-  const balanceTwo = ETH(10) - one.distributedWei;
-  const ninetenths = ETH(10) - one.poolWei;
-  assert.equal(balanceTwo - ninetenths, one.dustWei, 'the dust did not stay in the wallet');
-  const two = L.computeRun({ balanceWei: balanceTwo });
-  assert.ok(two.poolWei > ninetenths / 10n, 'the second pool does not include the first run\'s dust');
-  assert.equal(two.poolWei, (ninetenths + one.dustWei) / 10n);
+  // Ten ETH came in and nine and a half of it was swept out before the room
+  // was paid its tenth. The room is owed 1 ETH and 0.5 is there.
+  const run = L.computeRun({ balanceWei: ETH(0.5), paidToDateWei: 0n, sweptToDateWei: ETH(9.5) });
+  assert.equal(L.eth(run.grossIncomeWei), '10.0000');
+  assert.equal(L.eth(run.poolWei), '1.0000');
+  assert.ok(run.refusal, 'a pool bigger than the wallet was not refused');
+  assert.match(run.refusal, /the pool is 1\.0000 ETH and the fee wallet holds 0\.5000 ETH/);
+  assert.match(run.refusal, /0\.5000 ETH more is owed than is there/);
+  assert.match(run.refusal, /move it back/);
+  // Nothing is payable, rather than a smaller table that looks payable.
+  assert.equal(run.perShareWei, 0n);
+  assert.equal(run.distributedWei, 0n);
+  const text = L.previewText(run);
+  assert.match(text, /REFUSED: the pool is 1\.0000 ETH/);
+  assert.match(text, /nothing is payable until that is settled/);
+  assert.doesNotMatch(text, /seat {2}handle/, 'a refused run printed a payout table');
+});
+
+test('gas counts on both sides: it left the wallet, and the room bears it', () => {
+  seed(1, 0, 0);
+  const gas = ETH(0.001);
+  // A payout of 1 ETH that cost 0.001 to send: 1.001 left the wallet.
+  const run = L.computeRun({ balanceWei: ETH(9), paidToDateWei: ETH(1) + gas, sweptToDateWei: 0n });
+  assert.equal(L.eth(run.grossIncomeWei, 6), '10.001000', 'the gas is missing from gross income');
+  assert.equal(L.eth(run.poolTargetWei, 6), '1.000100');
+  // The room is owed a tenth of the gas too, and has already had it spent on
+  // its behalf, so the pool is the target less the whole 1.001.
+  assert.equal(run.poolWei, 0n, 'the room was paid twice for the gas of paying it');
 });
 
 test('what has been paid is what has a hash, not what was once computed', () => {
@@ -188,16 +226,21 @@ test('a hash is never overwritten, and an unknown seat is reported', () => {
   assert.equal(L.paidOutWei(), run.distributedWei, 'the amount was counted twice');
 });
 
-test('an empty wallet distributes nothing, and a long history does not change a pool', () => {
+test('an empty wallet pays nothing, and a room already paid its share is not owed a negative', () => {
   seed(1, 0, 0);
-  const empty = L.computeRun({ balanceWei: 0n, paidToDateWei: ETH(5) });
+  const empty = L.computeRun({ balanceWei: 0n, paidToDateWei: 0n, sweptToDateWei: 0n });
+  assert.equal(empty.grossIncomeWei, 0n);
   assert.equal(empty.poolWei, 0n);
-  assert.equal(empty.perShareWei, 0n);
   assert.equal(empty.rows[0].amountWei, 0n);
-  // Years of payouts behind it, and the pool is still a tenth of what is there.
-  const later = L.computeRun({ balanceWei: ETH(1), paidToDateWei: ETH(500) });
-  assert.equal(later.poolWei, ETH(0.1));
-  assert.equal(later.paidToDateWei, ETH(500));
+  assert.equal(empty.refusal, null, 'nothing owed and nothing there is not a shortfall');
+
+  // Paid far more than a tenth of everything that ever came in. The pool is
+  // nothing, not a debt to be collected back out of the room.
+  const overpaid = L.computeRun({ balanceWei: ETH(1), paidToDateWei: ETH(5), sweptToDateWei: 0n });
+  assert.equal(L.eth(overpaid.grossIncomeWei), '6.0000');
+  assert.equal(L.eth(overpaid.poolTargetWei), '0.6000');
+  assert.equal(overpaid.poolWei, 0n, 'a pool went negative');
+  assert.equal(overpaid.refusal, null);
 });
 
 test('no seats means no division by zero', () => {

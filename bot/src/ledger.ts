@@ -18,12 +18,20 @@ import { liveSeats, totalShares, TIERS, type Seat, type Tier } from './roster.js
  *   ETH and not in wei is a table somebody will one day reconcile against a
  *   block explorer and find short.
  *
- *   The pool is a tenth of the CURRENT balance, with nothing subtracted.
- *   Payouts leave this same wallet, so the balance already reflects every run
- *   that has been paid; subtracting them again took a tenth of a number that
- *   had already had them taken off, and every run after the first paid less
- *   than it owed. What has been paid to date is still printed, because it is
- *   worth seeing, and it is not part of the arithmetic.
+ *   The pool is a tenth of CUMULATIVE GROSS INCOME, less what has already
+ *   gone to the room. Fees arrive in the same wallet the payouts leave from,
+ *   so the balance alone cannot tell new income from a remainder nobody has
+ *   distributed yet: a tenth of the balance pays the room a second time for
+ *   income it has already been paid for, every run, forever. Gross income is
+ *   reconstructed from what is there plus everything that ever left:
+ *
+ *     gross = balance + paid out to date + swept to date
+ *     pool  = 10% of gross, less paid out to date
+ *
+ *   Both subtractions are of the same figure, which is the point: the room is
+ *   owed a tenth of everything the wallet has ever taken in, and has already
+ *   had whatever it has had. Gas counts on both sides, so the room bears the
+ *   cost of being paid.
  *
  *   The per-share amount is rounded DOWN to four decimal places of ETH, which
  *   is the precision the table is printed at. Every payout is then exactly
@@ -65,9 +73,118 @@ export async function feeWalletBalance(): Promise<bigint | null> {
  */
 export function paidOutWei(): bigint {
   // Summed in JS rather than by SQLite: SUM over a TEXT column goes through a
-  // double, and wei does not survive that.
-  const rows = db.prepare('SELECT amount_wei FROM ledger_payments WHERE tx_hash IS NOT NULL').all() as { amount_wei: string }[];
-  return rows.reduce((a, x) => a + BigInt(x.amount_wei), 0n);
+  // double, and wei does not survive that. Gas is included: it left the wallet
+  // with the payment, so gross income cannot be reconstructed without it.
+  const rows = db.prepare('SELECT amount_wei, gas_wei FROM ledger_payments WHERE tx_hash IS NOT NULL').all() as { amount_wei: string; gas_wei: string | null }[];
+  return rows.reduce((a, x) => a + BigInt(x.amount_wei) + BigInt(x.gas_wei ?? '0'), 0n);
+}
+
+/** Payouts whose receipt was never read, so their gas is missing from the sum. */
+export function paymentsWithUnknownGas(): number {
+  return (db.prepare('SELECT COUNT(*) AS n FROM ledger_payments WHERE tx_hash IS NOT NULL AND gas_wei IS NULL').get() as { n: number }).n;
+}
+
+export interface Sweep {
+  txHash: string;
+  to: string;
+  valueWei: bigint;
+  gasWei: bigint;
+  block: number;
+  at: number;
+}
+
+/** Everything manually moved out of the fee wallet, value and gas both. */
+export function sweptWei(): bigint {
+  const rows = db.prepare('SELECT value_wei, gas_wei FROM ledger_sweeps').all() as { value_wei: string; gas_wei: string }[];
+  return rows.reduce((a, x) => a + BigInt(x.value_wei) + BigInt(x.gas_wei), 0n);
+}
+
+export function sweeps(): Sweep[] {
+  return (db.prepare('SELECT * FROM ledger_sweeps ORDER BY block, tx_hash').all() as any[]).map((r) => ({
+    txHash: r.tx_hash, to: r.to_address, valueWei: BigInt(r.value_wei),
+    gasWei: BigInt(r.gas_wei), block: r.block, at: r.at,
+  }));
+}
+
+/**
+ * Record a transfer out of the fee wallet, after checking it is one.
+ *
+ * Verified against the chain rather than taken on trust: the sender has to be
+ * the fee wallet, the recipient has to be somebody else, and a hash this
+ * ledger already counts as a payout is refused, because counting it twice
+ * would inflate gross income and pay the room for money it never earned.
+ */
+export async function recordSweep(txHash: string, opts: { by?: number; now?: number } = {}):
+  Promise<{ ok: true; sweep: Sweep } | { ok: false; reason: string }> {
+  const wallet = feeWallet();
+  if (!wallet) return { ok: false, reason: 'FEE_WALLET is not set, so there is nothing to check the transfer against' };
+  if (!/^0x[0-9a-fA-F]{64}$/.test(txHash)) return { ok: false, reason: `${txHash} is not a transaction hash` };
+  if (db.prepare('SELECT 1 FROM ledger_sweeps WHERE tx_hash = ?').get(txHash.toLowerCase())) {
+    return { ok: false, reason: 'that transfer is already recorded' };
+  }
+  if (db.prepare('SELECT 1 FROM ledger_payments WHERE lower(tx_hash) = ?').get(txHash.toLowerCase())) {
+    return { ok: false, reason: 'that hash is a payout this ledger already counts. recording it as a sweep would count it twice' };
+  }
+  let tx: any;
+  let receipt: any;
+  try {
+    [tx, receipt] = await Promise.all([
+      atApiPriority(() => client.getTransaction({ hash: txHash as `0x${string}` })),
+      atApiPriority(() => client.getTransactionReceipt({ hash: txHash as `0x${string}` })),
+    ]);
+  } catch (err) {
+    return { ok: false, reason: `that transaction could not be read: ${String((err as Error)?.message ?? err).slice(0, 120)}` };
+  }
+  if (receipt.status !== 'success') return { ok: false, reason: 'that transaction reverted, so nothing left the wallet' };
+  if (String(tx.from).toLowerCase() !== wallet.toLowerCase()) {
+    return { ok: false, reason: `that transfer was sent by ${tx.from}, not by the fee wallet` };
+  }
+  if (!tx.to || String(tx.to).toLowerCase() === wallet.toLowerCase()) {
+    return { ok: false, reason: 'that transfer went nowhere, or back to the fee wallet' };
+  }
+  const gas = BigInt(receipt.gasUsed) * BigInt(receipt.effectiveGasPrice ?? tx.gasPrice ?? 0n);
+  let at = opts.now ?? Math.floor(Date.now() / 1000);
+  try {
+    const block = await atApiPriority(() => client.getBlock({ blockNumber: receipt.blockNumber }));
+    at = Number(block.timestamp);
+  } catch (err) {
+    console.warn('[ledger] sweep block time unreadable, using now:', String((err as Error)?.message ?? err).slice(0, 80));
+  }
+  const sweep: Sweep = {
+    txHash: txHash.toLowerCase(), to: String(tx.to), valueWei: BigInt(tx.value),
+    gasWei: gas, block: Number(receipt.blockNumber), at,
+  };
+  db.prepare(
+    `INSERT INTO ledger_sweeps (tx_hash, to_address, value_wei, gas_wei, block, at, recorded_at, by_user)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(sweep.txHash, sweep.to, String(sweep.valueWei), String(sweep.gasWei), sweep.block, sweep.at,
+    Math.floor(Date.now() / 1000), opts.by ?? null);
+  return { ok: true, sweep };
+}
+
+/**
+ * Fill in the gas of payouts recorded without it.
+ *
+ * The hash comes back from the payer by hand and the receipt is what says what
+ * it cost, so the two are read separately. A receipt that will not read leaves
+ * the gas null and the preview says how many, rather than counting it as zero.
+ */
+export async function fillPaymentGas(): Promise<{ filled: number; failed: number }> {
+  const rows = db.prepare('SELECT run_id, seat, tx_hash FROM ledger_payments WHERE tx_hash IS NOT NULL AND gas_wei IS NULL').all() as any[];
+  let filled = 0;
+  let failed = 0;
+  for (const r of rows) {
+    try {
+      const receipt = await atApiPriority(() => client.getTransactionReceipt({ hash: r.tx_hash }));
+      const gas = BigInt(receipt.gasUsed) * BigInt(receipt.effectiveGasPrice ?? 0n);
+      db.prepare('UPDATE ledger_payments SET gas_wei = ? WHERE run_id = ? AND seat = ?').run(String(gas), r.run_id, r.seat);
+      filled++;
+    } catch (err) {
+      failed++;
+      console.warn(`[ledger] receipt for ${String(r.tx_hash).slice(0, 12)} unreadable:`, String((err as Error)?.message ?? err).slice(0, 80));
+    }
+  }
+  return { filled, failed };
 }
 
 /** Runs computed but never paid, which is what would make a preview double count. */
@@ -96,9 +213,18 @@ export interface PayoutRow {
 export interface LedgerRun {
   id: number | null;
   balanceWei: bigint;
-  /** Cumulative, for the record. Not subtracted from anything. */
+  /** Payout values and their gas, over every run whose hashes are in. */
   paidToDateWei: bigint;
+  /** Manual transfers out of the fee wallet, value and gas. */
+  sweptToDateWei: bigint;
+  /** balance + paid + swept: everything the wallet has ever taken in. */
+  grossIncomeWei: bigint;
+  /** A tenth of gross income: what the room is owed in total, ever. */
+  poolTargetWei: bigint;
+  /** That target less what it has already had. */
   poolWei: bigint;
+  /** Set when the pool exceeds the balance, which is when nothing is sent. */
+  refusal: string | null;
   totalShares: number;
   perShareWei: bigint;
   distributedWei: bigint;
@@ -118,18 +244,33 @@ export function computeRun(opts: {
   balanceWei: bigint;
   seats?: Seat[];
   paidToDateWei?: bigint;
+  sweptToDateWei?: bigint;
   now?: number;
   hypothetical?: boolean;
 }): LedgerRun {
   const seats = opts.seats ?? liveSeats();
   const paidToDate = opts.paidToDateWei ?? paidOutWei();
-  // A tenth of what is in the wallet now. Nothing is subtracted: the transfers
-  // go out of this same wallet, so a run that has been paid is already gone
-  // from the balance, and taking it off a second time is what made every run
-  // after the first pay short.
-  const pool = (opts.balanceWei * BigInt(LEDGER_SHARE_PCT)) / 100n;
+  const swept = opts.sweptToDateWei ?? sweptWei();
+  // Everything the wallet has ever taken in: what is in it, plus everything
+  // that has ever left it. Fees and payouts share the wallet, so this is the
+  // only figure that separates new income from a remainder already accounted
+  // for.
+  const gross = opts.balanceWei + paidToDate + swept;
+  const target = (gross * BigInt(LEDGER_SHARE_PCT)) / 100n;
+  // What the room is owed in total, less what it has had. Negative would mean
+  // it has had more than its share, which is not a debt anyone collects back.
+  const raw = target - paidToDate;
+  const pool = raw > 0n ? raw : 0n;
+  // The pool is paid out of the wallet, so it cannot exceed what is in it.
+  // Reaching here means income has been moved out that the room was owed a
+  // share of, and the fix is a transfer back rather than a smaller table.
+  const refusal = pool > opts.balanceWei
+    ? `the pool is ${eth(pool)} ETH and the fee wallet holds ${eth(opts.balanceWei)} ETH. `
+      + `${eth(pool - opts.balanceWei)} ETH more is owed than is there, because income was moved out `
+      + 'before the room was paid its share of it. move it back, or record what it was spent on.'
+    : null;
   const shares = totalShares(seats);
-  const perShare = shares > 0
+  const perShare = shares > 0 && !refusal
     ? ((pool / BigInt(shares)) / PAYOUT_PRECISION_WEI) * PAYOUT_PRECISION_WEI
     : 0n;
   const rows: PayoutRow[] = seats.map((s) => ({
@@ -141,7 +282,11 @@ export function computeRun(opts: {
     id: null,
     balanceWei: opts.balanceWei,
     paidToDateWei: paidToDate,
+    sweptToDateWei: swept,
+    grossIncomeWei: gross,
+    poolTargetWei: target,
     poolWei: pool,
+    refusal,
     totalShares: shares,
     perShareWei: perShare,
     distributedWei: distributed,
@@ -162,6 +307,8 @@ export function saveRun(run: LedgerRun): number {
     ).run(r.createdAt, String(r.balanceWei), String(r.paidToDateWei), String(r.balanceWei),
       String(r.poolWei), r.totalShares, String(r.perShareWei), String(r.distributedWei),
       String(r.dustWei), r.hypothetical ? 1 : 0);
+    db.prepare('UPDATE ledger_runs SET gross_income_wei = ?, swept_to_date_wei = ? WHERE id = last_insert_rowid()')
+      .run(String(r.grossIncomeWei), String(r.sweptToDateWei));
     const id = Number(res.lastInsertRowid);
     const p = db.prepare(
       `INSERT INTO ledger_payments (run_id, seat, handle, wallet, tier, shares, amount_wei)
@@ -180,7 +327,10 @@ export function loadRun(id: number): LedgerRun | null {
     .map((p) => ({ seat: p.seat, handle: p.handle, tier: p.tier as Tier, shares: p.shares, wallet: p.wallet, amountWei: BigInt(p.amount_wei) }));
   return {
     id, balanceWei: BigInt(r.balance_wei), paidToDateWei: BigInt(r.paid_before_wei),
-    poolWei: BigInt(r.pool_wei), totalShares: r.total_shares,
+    sweptToDateWei: BigInt(r.swept_to_date_wei ?? '0'),
+    grossIncomeWei: BigInt(r.gross_income_wei ?? r.balance_wei),
+    poolTargetWei: BigInt(r.pool_wei) + BigInt(r.paid_before_wei),
+    poolWei: BigInt(r.pool_wei), refusal: null, totalShares: r.total_shares,
     perShareWei: BigInt(r.per_share_wei), distributedWei: BigInt(r.distributed_wei),
     dustWei: BigInt(r.dust_wei), rows, hypothetical: !!r.hypothetical, createdAt: r.created_at,
   };
@@ -249,12 +399,30 @@ export function previewText(run: LedgerRun, opts: { warnings?: string[] } = {}):
   const L: string[] = [];
   if (run.hypothetical) L.push('HYPOTHETICAL: the balance below was typed in, not read from the fee wallet');
   L.push(`fee wallet balance   ${eth(run.balanceWei)} ETH`);
-  L.push(`pool, ${LEDGER_SHARE_PCT}% of it      ${eth(run.poolWei)} ETH`);
-  L.push(`paid out to date     ${eth(run.paidToDateWei)} ETH, over every run before this one`);
-  L.push('                     not subtracted: payouts leave this wallet, so the balance is already net of them');
+  L.push(`paid out to date   + ${eth(run.paidToDateWei)} ETH, payout values and their gas`);
+  L.push(`swept to date      + ${eth(run.sweptToDateWei)} ETH, moved out by hand and recorded`);
+  L.push(`gross income       = ${eth(run.grossIncomeWei)} ETH, everything this wallet has ever taken in`);
+  L.push(`the room's ${LEDGER_SHARE_PCT}%        ${eth(run.poolTargetWei)} ETH of it, in total, ever`);
+  L.push(`less what it has had - ${eth(run.paidToDateWei)} ETH`);
+  L.push(`pool now           = ${eth(run.poolWei)} ETH`);
+  const unknownGas = paymentsWithUnknownGas();
+  if (unknownGas) {
+    L.push(`  ${unknownGas} payout${unknownGas === 1 ? '' : 's'} had no readable receipt, so their gas is missing from the sum above`);
+  }
+  if (run.refusal) {
+    L.push('');
+    L.push(`REFUSED: ${run.refusal}`);
+    L.push('nothing is payable until that is settled.');
+    return L.join('\n');
+  }
   L.push(`total shares         ${run.totalShares}`);
   L.push(`per share            ${eth(run.perShareWei)} ETH`);
   L.push('');
+  if (run.perShareWei === 0n && run.poolWei > 0n) {
+    L.push(`the pool is ${eth(run.poolWei, 18).replace(/0+$/, '')} ETH over ${run.totalShares} shares, which is under the `
+      + `${eth(PAYOUT_PRECISION_WEI)} ETH a payout is rounded to. nothing is sent; it stays in the wallet.`);
+    L.push('');
+  }
   if (!run.rows.length) {
     L.push('no seats, so nothing to divide. /seat add <handle> <tier> <wallet>');
     return L.join('\n');
@@ -299,9 +467,10 @@ export function postText(run: LedgerRun): string {
   const L: string[] = [];
   L.push(`ledger, ${day(run.createdAt)}`);
   L.push('');
-  L.push(`fee wallet        ${eth(run.balanceWei)} ETH`);
-  L.push(`distributing ${LEDGER_SHARE_PCT}%  ${eth(run.poolWei)} ETH`);
-  L.push(`paid out to date  ${eth(run.paidToDateWei)} ETH, before this run`);
+  L.push(`gross income      ${eth(run.grossIncomeWei)} ETH, everything the fee wallet has taken in`);
+  L.push(`the room's ${LEDGER_SHARE_PCT}%       ${eth(run.poolTargetWei)} ETH of it, in total`);
+  L.push(`already paid      ${eth(run.paidToDateWei)} ETH`);
+  L.push(`this run          ${eth(run.poolWei)} ETH`);
   L.push(`total shares      ${run.totalShares}`);
   L.push('');
   for (const t of TIERS) {

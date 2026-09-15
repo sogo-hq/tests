@@ -959,7 +959,8 @@ Admin commands, and every view that names a wallet is a DM.
 | `/ledger preview [eth]` | the payout table. With an amount, a stated hypothetical |
 | `/ledger csv [run]` | `wallet,amount` for the payer |
 | `/ledger send [run]` | the command to run on the machine holding the key |
-| `/ledger tx <run> <wallet-or-seat>:<hash> ...` | record what was sent |
+| `/ledger tx <run> <wallet-or-seat>:<hash> ...` | record what was sent, and read its gas |
+| `/ledger sweep <hash>` | record a transfer out of the fee wallet, after verifying it is one |
 | `/ledger post [run]` | the public message, grouped by tier |
 | `/ledger history` | every run, and whether its hashes are in |
 
@@ -968,12 +969,29 @@ rather than derived from the tier when it is needed, so changing what a tier is
 worth changes what people earn from the next run and leaves every run already
 paid exactly as it was paid.
 
-The pool is 10% of the fee wallet balance, with nothing subtracted. Payouts
-leave that same wallet, so the balance is already net of every run that has
-been paid; subtracting them again would take a tenth of a number they had
-already been taken from, and every run after the first would pay short. What
-has been paid to date is printed beside the pool, as a fact about the past
-rather than a term in the sum. The per-share amount is rounded **down** to four decimal places of
+The pool is a tenth of **cumulative gross income**, less what the room has
+already had:
+
+```
+gross income = balance now + paid out to date + swept to date
+pool now     = 10% of gross income - paid out to date
+```
+
+Fees arrive in the same wallet the payouts leave from, so the balance alone
+cannot tell new income from a remainder nobody has distributed yet: a tenth of
+the balance would pay the room a second time for income it has already been
+paid for, every run. Gross income is reconstructed from what is there plus
+everything that ever left it. `paid out to date` is payout values **and their
+gas**; `swept to date` is manual transfers out, recorded with
+`/ledger sweep <hash>` after the hash is verified on chain to be an outbound
+transfer from the fee wallet. Gas counts on both sides, so the room bears the
+cost of being paid.
+
+If the pool ever exceeds the balance, the run is **refused**: income was moved
+out before the room was paid its share of it, and the fix is a transfer back
+rather than a smaller table.
+
+The per-share amount is rounded **down** to four decimal places of
 ETH, which is the precision the table prints, so every payout is exactly the
 figure shown. What is left over stays in the wallet and is inside the next
 run's balance.

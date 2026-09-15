@@ -2421,11 +2421,17 @@ export function createBot(token = TELEGRAM_BOT_TOKEN): Bot {
           return;
         }
       }
+      // The receipts say what the payouts cost, and the cost left the wallet
+      // with them, so gross income cannot be reconstructed without reading
+      // them. Done before the sum, not after it.
+      await Ledger.fillPaymentGas();
       const warnings = Ledger.unrecordedRuns().map((r) =>
         `run ${r.id} was previewed and has ${r.payments} payment${r.payments === 1 ? '' : 's'} with no transaction hash. `
         + `if it was paid, record it with /ledger tx ${r.id} <seat>:<hash> ... before the next run, or this one distributes it again.`);
       const run = Ledger.computeRun({ balanceWei: balance, seats, hypothetical });
-      run.id = Ledger.saveRun(run);
+      // A refused run is not saved: there is no table to pay, and a stored run
+      // with no payable rows is something a later /ledger send would offer.
+      if (!run.refusal) run.id = Ledger.saveRun(run);
       await ctx.reply(clamp(Ledger.previewText(run, { warnings }), TELEGRAM_MAX_MESSAGE));
       return;
     }
@@ -2470,10 +2476,14 @@ export function createBot(token = TELEGRAM_BOT_TOKEN): Bot {
       }
       if (!txs.length) { await ctx.reply('/ledger tx <run> <seat>:<hash> <seat>:<hash> ...'); return; }
       const r = Ledger.recordTxs(run.id!, txs);
+      // Their gas is part of what left the wallet, so it is read now rather
+      // than left for the next preview to notice.
+      const gas = await Ledger.fillPaymentGas();
       const L = [`run ${run.id}: ${r.recorded} hash${r.recorded === 1 ? '' : 'es'} recorded`];
       if (r.already.length) L.push(`${r.already.length} seat${r.already.length === 1 ? ' already had one' : 's already had one'}, left as they were: ${r.already.map((a) => a.seat).join(', ')}`);
       if (r.unknown.length) L.push(`not in this run: seat ${r.unknown.join(', ')}`);
       if (unmatched.length) L.push(`no seat in this run holds ${unmatched.join(', ')}`);
+      if (gas.failed) L.push(`${gas.failed} receipt${gas.failed === 1 ? '' : 's'} could not be read, so that gas is missing from gross income`);
       await ctx.reply(L.join('\n'));
       return;
     }
@@ -2497,6 +2507,24 @@ export function createBot(token = TELEGRAM_BOT_TOKEN): Bot {
       }
       return;
     }
+    if (sub === 'sweep') {
+      if (!isDm) { await dmOnly(); return; }
+      const hash = parts[1];
+      if (!hash) {
+        const all = Ledger.sweeps();
+        await ctx.reply(all.length
+          ? clamp(['transfers out of the fee wallet, recorded:', ...all.map((w) =>
+              `${new Date(w.at * 1000).toISOString().slice(0, 10)}  ${Ledger.eth(w.valueWei)} ETH to ${w.to}  ${w.txHash}`)].join('\n'), TELEGRAM_MAX_MESSAGE)
+          : '/ledger sweep <tx hash>   records a transfer out of the fee wallet, after checking it is one');
+        return;
+      }
+      const r = await Ledger.recordSweep(hash, { by: ctx.from?.id });
+      await ctx.reply(r.ok
+        ? `recorded: ${Ledger.eth(r.sweep.valueWei)} ETH to ${r.sweep.to}, gas ${Ledger.eth(r.sweep.gasWei, 6)} ETH, block ${r.sweep.block}.\n`
+          + 'it counts toward gross income, so the room is still owed its share of it.'
+        : r.reason);
+      return;
+    }
     if (sub === 'history') {
       if (!isDm) { await dmOnly(); return; }
       await ctx.reply(clamp(Ledger.historyText(), TELEGRAM_MAX_MESSAGE));
@@ -2507,6 +2535,7 @@ export function createBot(token = TELEGRAM_BOT_TOKEN): Bot {
       '/ledger csv [run]       wallet,amount for the payer',
       '/ledger send [run]      the command to run on the machine with the key',
       '/ledger tx <run> <seat>:<hash> ...   record what was sent',
+      '/ledger sweep <hash>    record a transfer out of the fee wallet',
       '/ledger post [run]      the public message for the room',
       '/ledger history         every run',
     ].join('\n'));

@@ -335,6 +335,26 @@ CREATE TABLE IF NOT EXISTS ledger_payments (
   sent_at    INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_ledger_payments_run ON ledger_payments(run_id);
+
+-- ---------------------------------------------------------------------------
+-- Manual transfers out of the fee wallet, to the treasury or anywhere else.
+--
+-- Fees arrive in the same wallet the payouts leave from, so the balance alone
+-- cannot tell new income from a remainder nobody has distributed yet. What
+-- reconstructs it is everything that ever left: the payouts, and these. Each
+-- one is verified against the chain before it is recorded, so the figure the
+-- pool is computed from is a sum of transactions rather than of assertions.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS ledger_sweeps (
+  tx_hash     TEXT PRIMARY KEY,
+  to_address  TEXT NOT NULL,
+  value_wei   TEXT NOT NULL,
+  gas_wei     TEXT NOT NULL,
+  block       INTEGER NOT NULL,
+  at          INTEGER NOT NULL,
+  recorded_at INTEGER NOT NULL,
+  by_user     INTEGER
+);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_ledger_payments_once ON ledger_payments(run_id, seat);
 
 -- Which chats the bot is a member of, from my_chat_member updates. One row
@@ -718,6 +738,12 @@ for (const [table, column, decl] of [
   // is the buyer benchmark's population key, and this read must not enrol
   // launches in it by outcome.
   ['launches', 'curve_indexed_to', 'INTEGER'],
+  // What a payout cost to send. It left the wallet too, so gross income
+  // cannot be reconstructed without it. NULL is "the receipt was not read",
+  // which the preview reports rather than treating as zero.
+  ['ledger_payments', 'gas_wei', 'TEXT'],
+  ['ledger_runs', 'gross_income_wei', 'TEXT'],
+  ['ledger_runs', 'swept_to_date_wei', 'TEXT'],
 ] as const) {
   if (!columnsOf(table).includes(column)) {
     db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${decl}`);
