@@ -1,0 +1,107 @@
+{
+  "status": "active",
+  "count": 8,
+  "traders": [
+    {
+      "handle": "unipcs",
+      "address": "0x0a6ebed0155edb4b21d92ad02897a626cd90119e",
+      "score": 96,
+      "status": "active",
+      "summary": "19.5M 30d, the largest on the board, and it is not one ticket: PONS at 91x on a 68k basis, USELESS at 4.3x on 830k, MarsCoin at 2.7x on 965k, MEME at 1.4x on 455k. 107 early entries across 269 tokens are the wallet's own fills, and the seven-figure bases behind the later legs are conviction rather than lottery money.",
+      "fomo_pnl": 19471552.16676372,
+      "style": [
+        "sniper",
+        "holder"
+      ],
+      "red_flags": []
+    },
+    {
+      "handle": "ogle",
+      "address": "0x1bcc5f67cd17e13770f199fa03bc043b0cde1143",
+      "score": 91,
+      "status": "active",
+      "summary": "6.7M 30d, and the cost basis is what makes it exceptional: PONS at 1.7x on a 3.65M entry, which is a different order of operation from the multiples elsewhere here. ZZZ at 6.1x on 15k and INJOH at 16x behind it, 37 early entries among 83 own buys across 101 tokens, and a ~28h median hold.",
+      "fomo_pnl": 6655391.056153984,
+      "style": [
+        "holder",
+        "swing"
+      ],
+      "red_flags": []
+    },
+    {
+      "handle": "theveeman",
+      "address": "0xa0670863bd5cd0d60022bab2eed78e81e1a06bce",
+      "score": 91,
+      "status": "active",
+      "summary": "4.0M 30d with 2.0M of it in the last day, from STONK at 22.4x on a 180k basis and PONS at 6.7x on 139k, plus ANSEM at 564k. Six-figure cost bases running 20x is about as clean a signal as this dataset produces.",
+      "fomo_pnl": 3995807.1160879876,
+      "style": [
+        "holder",
+        "swing"
+      ],
+      "red_flags": []
+    },
+    {
+      "handle": "lordarbiter",
+      "address": "0x712b009be8006d28738fd4810ee1440e277bae03",
+      "score": 78,
+      "status": "active",
+      "summary": "3.2M 30d with PONS at 2.4M as the anchor and BUN at 3.9x on a 25k basis behind it. A 25-hour median hold with flow balanced near 230k each way across 33 tokens: patient, sizeable, and consistent at every horizon.",
+      "fomo_pnl": 3169813.7702543773,
+      "style": [
+        "holder"
+      ],
+      "red_flags": []
+    },
+    {
+      "handle": "zeri_terminal",
+      "address": "0xa562df7d4a58b34c226d4d45d58379d06d03cd3e",
+      "score": 78,
+      "status": "active",
+      "summary": "2.2M 30d on only 295k of volume - ZCAT at 229x from a 9k entry is nearly all of it, with KNOTS at 11.8x behind. 78 fomo trades and 24 tokens: an exceptionally concentrated book that happens to hold one of the best entries on the board.",
+      "fomo_pnl": 2240618.888865028,
+      "style": [
+        "holder",
+        "sniper"
+      ],
+      "red_flags": []
+    },
+    {
+      "handle": "cryptolyxe",
+      "address": "0xf7514424abb4ced3a637511a7557eaaa44188a37",
+      "score": 78,
+      "status": "active",
+      "summary": "1.7M 30d from USELESS at 3.1x on a 429k basis and Basecat at 3.3x on 213k - the largest cost bases on the board, and both well in front. Worth noting the losses are sized the same way: YOLO wiped out 46k and OTC is down 86k on 246k.",
+      "fomo_pnl": 1745592.8099443708,
+      "style": [
+        "holder"
+      ],
+      "red_flags": []
+    },
+    {
+      "handle": "shahkishanp",
+      "address": "0x8aeab81aee0ffcc243c217a73215560904b44b9b",
+      "score": 70,
+      "status": "active",
+      "summary": "96k in 24h on only 54 fomo trades, with an open book of 337k - KNOTS, ZCAT at 6.6x, STONK, NUDES at 8.3x. A 33-hour median hold and 154k bought against 115k sold says patient accumulation; the sample is small but every leg is green.",
+      "fomo_pnl": 95889.50826834845,
+      "style": [
+        "holder",
+        "swing"
+      ],
+      "red_flags": []
+    },
+    {
+      "handle": "Ekonomeest",
+      "address": "0x86adce3344e0b7a33aa8dfe80076a2ce5faa535b",
+      "score": 70,
+      "status": "active",
+      "summary": "95k in 24h but the book is the point: QUOTRON at 239k, 4Stock on a 375k basis, Basecat at 3.1x on 36k, plumber at 1.9x - four green legs and real capital. Only 109 fomo trades and a 4-hour hold: quiet, large, and right.",
+      "fomo_pnl": 95032.37902297179,
+      "style": [
+        "holder"
+      ],
+      "red_flags": []
+    }
+  ]
+}

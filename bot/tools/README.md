@@ -12,6 +12,7 @@ Both need the repo built first: `npm run build`.
 |---|---|
 | `launch.mjs` | the launch transaction |
 | `pay.mjs` | the ledger's transfers |
+| `fomo_intersect.mjs` | nothing on chain, but it spends USDC on paid robinx calls |
 
 ## launch.mjs
 
@@ -140,3 +141,53 @@ It prints one line to paste back into the bot:
 That is what makes the payment real to the ledger. Until the hashes are in,
 `/ledger preview` counts the run as unpaid and says so, because the next
 preview would otherwise distribute the same money again.
+
+## fomo_intersect.mjs
+
+Scored traders who hold our tokens. Two sources, neither of them this chain's
+node: the fomoradar leaderboard, which is public and keyless, and robinx's
+`smart_holders`, which is paid and settles over x402 from the wallet in
+`ROBINX_WALLET_KEY`.
+
+```
+node tools/fomo_intersect.mjs --dry                    # leaderboard only, nothing paid
+ROBINX_WALLET_KEY=0x... node tools/fomo_intersect.mjs  # the whole thing
+```
+
+| flag | what it does |
+|---|---|
+| `--dry` | the leaderboard and `fomo_top.csv`, no paid calls |
+| `--token SYMBOL:0x…` | a token to check, repeatable. Overrides the defaults |
+| `--limit <n>` | leaderboard page size, default 400 |
+| `--min-score <n>` | the cut for `fomo_top.csv`, default 74 |
+| `--robinx-cmd <cmd>` | how to reach robinx, default `npx -y robinx-mcp` |
+
+### The tokens
+
+ZZZ and CHIPPER are fixed. The third is the newest graduated launch in the
+bot's own index, which means the machine running this needs `pons.db`. It does
+not have to: name all three with `--token` instead and the index is never
+opened.
+
+### Outputs
+
+`tools/out/fomo_top.csv` is every trader at or above the cut, highest score
+first: username, score, style, wallet, pnl, red flags.
+
+`tools/out/t1_candidates.csv` is the overlap: username, score, style, wallet,
+which of the tokens they hold, how many, and the robinx receipt for the calls
+that found them.
+
+The raw answer to each paid call is kept beside them as
+`robinx-<symbol>.json`, so a call that was paid for is never spent twice to
+look at it again. A call whose answer had no readable holders in it is kept as
+`robinx-<symbol>-unparsed.json`, which is what to send me if the shape has
+moved.
+
+### What it will not do
+
+The leaderboard host is pinned as a constant in `src/fomo.ts` and never
+derived from a redirect or a search result, the same rule the RPC and explorer
+hosts follow. The robinx key is read from the shell and refused if it is found
+in a `.env` beside the code. Neither file is written anywhere but
+`tools/out/`.
