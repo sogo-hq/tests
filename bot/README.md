@@ -943,3 +943,45 @@ pinned, else 0.
 The RPC and explorer hosts are hardcoded in `src/config.ts` and are never
 resolved from search results — lookalike RPCs and fake explorers exist for this
 chain.
+
+## The roster and the ledger
+
+Admin commands, and every view that names a wallet is a DM.
+
+| command | what it does |
+|---|---|
+| `/seat add <handle> <tier> <wallet>` | takes the lowest free seat number |
+| `/seat list` | seat, handle, tier, shares, wallet, joined. DM only |
+| `/seat tier <handle> <tier>` | records the old tier and the date |
+| `/seat remove <handle>` | frees the seat, keeps the history |
+| `/seat history [seat]` | everything that happened to a seat |
+| `/roster` | the version for the room: seat, handle, tier. No wallet |
+| `/ledger preview [eth]` | the payout table. With an amount, a stated hypothetical |
+| `/ledger csv [run]` | `wallet,amount` for the payer |
+| `/ledger send [run]` | the command to run on the machine holding the key |
+| `/ledger tx <run> <wallet-or-seat>:<hash> ...` | record what was sent |
+| `/ledger post [run]` | the public message, grouped by tier |
+| `/ledger history` | every run, and whether its hashes are in |
+
+Tiers are worth T1 5 shares, T2 2, T3 1. The share count is stored on the seat
+rather than derived from the tier when it is needed, so changing what a tier is
+worth changes what people earn from the next run and leaves every run already
+paid exactly as it was paid.
+
+The pool is 10% of the fee wallet balance less what has already been paid out,
+counted as what has a transaction hash against it rather than what was once
+computed. The per-share amount is rounded **down** to four decimal places of
+ETH, which is the precision the table prints, so every payout is exactly the
+figure shown. What is left over stays in the wallet and is inside the next
+run's balance.
+
+The bot never holds a key and never sends ETH. `/ledger send` prints a command
+for `tools/pay.mjs`, which runs on a laptop.
+
+### What never reaches a group
+
+`/roster` and `/ledger post` are the two views that can be posted into a room,
+and both are checked for an address before they are sent rather than trusted
+not to contain one. The public ledger post groups payouts by tier and lists the
+transaction hashes **without the handles they belong to**: a hash beside a name
+is that name's wallet, one block explorer away.

@@ -276,3 +276,56 @@ test('an address that differs only in case is the same address', () => {
   const rows = P.diffRows({ token: '0xAbCdEf' }, { token: '0xabcdef' });
   assert.equal(rows[0].same, true);
 });
+
+// ------------------------------------------------ the inverse, and the table
+
+test('the inverse lands under the share it was asked for, never over', () => {
+  for (const tax of [0n, 400n, 1000n]) {
+    for (const pct of [0.5, 1, 2, 3, 4.2, 5, 10, 22.7586]) {
+      const q = C.quoteInForSupplyPct(CFG, tax, pct);
+      const got = C.quoteLaunchBuy(CFG, tax, q).supplyPct;
+      assert.ok(got <= pct, `${pct}% at ${tax}bps: ${q} wei takes ${got}%, over the target`);
+      // And it is the LARGEST such amount: one wei more goes over.
+      const more = C.quoteLaunchBuy(CFG, tax, q + 1n).supplyPct;
+      assert.ok(more > pct, `${pct}% at ${tax}bps: not the largest, ${q + 1n} wei still takes only ${more}%`);
+    }
+  }
+});
+
+test('the share is resolved finely enough for the inverse to be exact', () => {
+  // At the old resolution of 0.0001% the inverse overshot by a THOUSAND tokens
+  // and the published table said 1% where the buy took 1.0001%. At 1e-10% the
+  // overshoot is one granule, a thousandth of a token on a supply of a billion.
+  const onePct = CFG.supply / 100n;
+  const out = C.quoteLaunchBuy(CFG, 400n, C.quoteInForSupplyPct(CFG, 400n, 1)).tokensOut;
+  const off = out > onePct ? out - onePct : onePct - out;
+  assert.ok(off < 10n ** 16n, `1% of supply is ${onePct}, the inverse gives ${out}, off by ${off} wei`);
+  // The figure a human reads is right either way.
+  assert.equal((Number(out / 10n ** 15n) / 1000).toFixed(0), '10000000');
+});
+
+test('the figure in the docs for 5% at our tax is under the cap, and rounding up is not', () => {
+  // The table's safe column, and the trap beside it.
+  const safe = P.toWei('0.0930');
+  const rounded = P.toWei('0.0931');
+  assert.equal(P.checkDevBuyCap(C.quoteLaunchBuy(CFG, 400n, safe).supplyPct).ok, true);
+  assert.equal(P.checkDevBuyCap(C.quoteLaunchBuy(CFG, 400n, rounded).supplyPct).ok, false,
+    '0.0931 is 5.0012% and must be refused');
+});
+
+test('the docs table is the model, not a hand-written number', async () => {
+  const md = readFileSync(new URL('../docs/launch-configs.md', import.meta.url), 'utf8');
+  const rows = [...md.matchAll(/^\| (\d+)% \| ([\d,]+) \| ([\d.]+) \| \*\*([\d.]+)\*\* \(([\d.]+)%\) \| ([\d.]+) \|$/gm)];
+  assert.equal(rows.length, 5, 'the table is not where the docs say it is');
+  for (const [, pct, tokens, exact, safe, safePct] of rows) {
+    const q = C.quoteInForSupplyPct(CFG, 400n, Number(pct));
+    const b = C.quoteLaunchBuy(CFG, 400n, q);
+    // Compared as numbers: the doc prints six places, fromWei trims zeros.
+    assert.ok(Math.abs(Number(exact) - Number(P.fromWei(q, 6))) < 1e-6,
+      `${pct}%: docs say ${exact}, model says ${P.fromWei(q, 6)}`);
+    assert.equal(Math.round(Number(b.tokensOut / 10n ** 18n)).toLocaleString('en-US'), tokens);
+    const sb = C.quoteLaunchBuy(CFG, 400n, P.toWei(safe));
+    assert.equal(sb.supplyPct.toFixed(4), safePct, `${pct}%: the safe column's share is wrong`);
+    assert.ok(sb.supplyPct <= Number(pct), `${pct}%: the safe column is over its own target`);
+  }
+});

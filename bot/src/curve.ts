@@ -75,8 +75,13 @@ export function quoteBuy(opts: {
     ? 0n
     : (opts.tokenReserve * quoteNet) / (opts.quoteReserve + quoteNet);
   const supply = opts.supply ?? opts.tokenReserve;
+  // Resolution matters here. At a divisor of 1e6 the share is only good to
+  // 0.0001%, which is a thousand tokens on a supply of a billion, and the
+  // inverse below then returns an amount whose true share is a thousand tokens
+  // past the target it was asked for. 1e12 puts the granularity at 1e-10%,
+  // well inside a double for any supply this chain mints.
   const supplyPct = supply > 0n
-    ? Number((tokensOut * 1_000_000n) / supply) / 10_000
+    ? Number((tokensOut * 1_000_000_000_000n) / supply) / 10_000_000_000
     : 0;
   return { tokensOut, curveFee, creatorTax, quoteNet, supplyPct };
 }
@@ -91,6 +96,37 @@ export function quoteLaunchBuy(cfg: CurveConfig, creatorTaxBps: bigint, quoteIn:
     quoteIn,
     supply: cfg.supply,
   });
+}
+
+/**
+ * The ETH an opening buy of a given share of supply needs.
+ *
+ * The inverse of quoteLaunchBuy, which is not algebraically invertible because
+ * both cuts are floored: solving it in closed form and rounding lands a wei or
+ * two either side, and a wei on the wrong side of the cap is a refusal nobody
+ * can explain. So the closed form seeds a binary search over the real function,
+ * and what comes back is the largest input whose share does not exceed the
+ * target. Exact, and checkable against the forward direction.
+ */
+export function quoteInForSupplyPct(cfg: CurveConfig, creatorTaxBps: bigint, targetPct: number): bigint {
+  if (targetPct <= 0) return 0n;
+  const share = targetPct / 100;
+  if (share >= 1) throw new Error('an opening buy cannot take the whole supply');
+  // Closed form, ignoring the flooring: qNet = share*P/(1-share), grossed up
+  // for the two cuts. Used only to bracket the search.
+  const cuts = 10_000n - cfg.curveFeeBps - creatorTaxBps;
+  if (cuts <= 0n) throw new Error('the fees take the whole input');
+  const seed = (cfg.phantomQuote * BigInt(Math.round(share * 1e12)) * 10_000n)
+    / (BigInt(Math.round((1 - share) * 1e12)) * cuts);
+  let lo = 0n;
+  let hi = seed * 2n + 1n;
+  const over = (q: bigint) => quoteLaunchBuy(cfg, creatorTaxBps, q).supplyPct > targetPct;
+  while (!over(hi)) hi *= 2n;
+  while (lo + 1n < hi) {
+    const mid = (lo + hi) / 2n;
+    if (over(mid)) hi = mid; else lo = mid;
+  }
+  return lo;
 }
 
 /**

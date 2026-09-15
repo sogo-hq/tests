@@ -8,6 +8,11 @@ run if they find one in a `.env` file beside the code.
 
 Both need the repo built first: `npm run build`.
 
+| script | what it sends |
+|---|---|
+| `launch.mjs` | the launch transaction |
+| `pay.mjs` | the ledger's transfers |
+
 ## launch.mjs
 
 Every value comes from `launch.config.json`, so the dry run, the rehearsal and
@@ -70,3 +75,38 @@ It is decided by the sender, the salt and the parameters, so `--dry` prints the
 exact address `--go` will produce. Changing the salt changes it; so does
 changing the symbol or the sender, which is why a rehearsal never lands on the
 real one.
+
+## pay.mjs
+
+Reads the CSV `/ledger csv` produced, prints what it is about to do, asks for
+the total to be typed back, and sends one transfer per row.
+
+```
+FEE_WALLET_PRIVATE_KEY=0x... node tools/pay.mjs --csv vitals-ledger-run-3.csv --run 3
+```
+
+### A crash cannot pay twice
+
+Every row is given a nonce when the plan is first written, and a resumed run
+reuses it. A row that already landed is rejected by the chain the second time
+rather than mined again, and the script says so and carries on rather than
+stopping. The plan is written to `tools/out/pay-run-<id>.json` before the first
+transfer and updated after every one, so an interruption at any point loses
+nothing: run the same command again and it picks up where it stopped.
+
+A stored plan whose rows no longer match the file is refused rather than
+merged. A CSV with a duplicate wallet, a bad address or a zero amount stops the
+run rather than skipping the row, because a skipped row is a person who
+silently does not get paid.
+
+### Afterwards
+
+It prints one line to paste back into the bot:
+
+```
+/ledger tx 3 0xwallet:0xhash 0xwallet:0xhash ...
+```
+
+That is what makes the payment real to the ledger. Until the hashes are in,
+`/ledger preview` counts the run as unpaid and says so, because the next
+preview would otherwise distribute the same money again.

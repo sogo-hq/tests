@@ -60,6 +60,12 @@ import {
   everAnswered, AUTOSCAN_DEDUPE_MS,
 } from './autoscan.js';
 import { recordBotChat, seedBotChatsFromActivity, type BotChatStatus } from './chats.js';
+import {
+  addSeat, setTier, removeSeat, liveSeats, seatTableForAdmin, publicRoster,
+  totalShares, seatHistory, TIER_SHARES,
+} from './roster.js';
+import * as Ledger from './ledger.js';
+import { toWei as toWeiEth } from './launchplan.js';
 import { scout, scoutCsv, scoutMessage, scoutSerial, scoutSerialMessage, startScoutLoop } from './scout.js';
 import { dailyNumbers, renderNumbersPng, numbersText } from './numbers.js';
 import { taxStatsText } from './taxstats.js';
@@ -2290,6 +2296,220 @@ export function createBot(token = TELEGRAM_BOT_TOKEN): Bot {
     if (r.rows.length) {
       await ctx.replyWithDocument(new InputFile(Buffer.from(scoutCsv(r), 'utf8'), `vitals-scout-${r.rows.length}.csv`));
     }
+  });
+
+  // ----------------------------------------------------------------- seats
+
+  /**
+   * The roster. Admin, and DM only wherever a wallet is on screen.
+   *
+   * /seat list and /seat add echo a wallet, so they refuse to answer in a
+   * group at all. /roster is the version built for the room and carries no
+   * wallet, which is checked rather than trusted before it is sent.
+   */
+  bot.command('seat', async (ctx) => {
+    if (!isAdmin(ctx.from?.id)) return;
+    const parts = (ctx.match ?? '').toString().trim().split(/\s+/).filter(Boolean);
+    const sub = (parts[0] ?? '').toLowerCase();
+    const isDm = ctx.chat?.type === 'private';
+    const at = Math.floor(Date.now() / 1000);
+    const by = ctx.from?.id;
+
+    if (sub === 'list' || sub === '') {
+      if (!isDm) { await ctx.reply('/seat list shows wallets, so it answers in a DM only. /roster is the version for here'); return; }
+      await ctx.reply(clamp(seatTableForAdmin(), TELEGRAM_MAX_MESSAGE));
+      return;
+    }
+    if (sub === 'add') {
+      if (!isDm) { await ctx.reply('/seat add carries a wallet, so it is a DM command'); return; }
+      const [, handle, tier, wallet] = parts;
+      if (!handle || !tier || !wallet) { await ctx.reply('/seat add <handle> <tier> <wallet>'); return; }
+      const r = addSeat(handle, tier, wallet, { at, by });
+      await ctx.reply(r.ok
+        ? `seat ${r.value.seat}: ${r.value.handle} ${r.value.tier}, ${r.value.shares} share${r.value.shares === 1 ? '' : 's'}`
+        : r.reason);
+      return;
+    }
+    if (sub === 'tier') {
+      const [, handle, tier] = parts;
+      if (!handle || !tier) { await ctx.reply('/seat tier <handle> <tier>'); return; }
+      const r = setTier(handle, tier, { at, by });
+      await ctx.reply(r.ok
+        ? `seat ${r.value.seat}: ${r.value.seat.handle ?? handle} ${r.value.from} to ${r.value.seat.tier}, now ${r.value.seat.shares} share${r.value.seat.shares === 1 ? '' : 's'}. recorded`
+        : r.reason);
+      return;
+    }
+    if (sub === 'remove') {
+      const handle = parts[1];
+      if (!handle) { await ctx.reply('/seat remove <handle>'); return; }
+      const r = removeSeat(handle, { at, by });
+      await ctx.reply(r.ok
+        ? `seat ${r.value.seat} freed. ${r.value.handle} kept in the history, and the number goes to the next person added`
+        : r.reason);
+      return;
+    }
+    if (sub === 'history') {
+      if (!isDm) { await ctx.reply('a DM command'); return; }
+      const n = parts[1] ? Number(parts[1]) : undefined;
+      const ev = seatHistory(Number.isFinite(n) ? n : undefined);
+      if (!ev.length) { await ctx.reply('nothing recorded yet'); return; }
+      const d = (t: number) => new Date(t * 1000).toISOString().slice(0, 10);
+      await ctx.reply(clamp(ev.map((e) => e.event === 'tier'
+        ? `${d(e.at)} seat ${e.seat} ${e.handle}: ${e.fromTier} to ${e.toTier}`
+        : `${d(e.at)} seat ${e.seat} ${e.handle}: ${e.event}${e.toTier ? ` as ${e.toTier}` : ''}`).join('\n'), TELEGRAM_MAX_MESSAGE));
+      return;
+    }
+    await ctx.reply([
+      '/seat add <handle> <tier> <wallet>',
+      '/seat list',
+      '/seat tier <handle> <tier>',
+      '/seat remove <handle>',
+      '/seat history [seat]',
+      '',
+      `T1 ${TIER_SHARES.T1} shares · T2 ${TIER_SHARES.T2} · T3 ${TIER_SHARES.T3}`,
+    ].join('\n'));
+  });
+
+  /** The room's version: seat, handle, tier. No wallet, ever. */
+  bot.command('roster', async (ctx) => {
+    if (!isAdmin(ctx.from?.id)) return;
+    const text = publicRoster();
+    // Checked, not trusted. This is the one roster view that can reach a group.
+    if (/0x[0-9a-fA-F]{40}/.test(text)) {
+      console.error('[roster] a wallet reached the public roster; refusing to send');
+      await ctx.reply('the roster could not be rendered without a wallet in it, so it was not sent');
+      return;
+    }
+    await ctx.reply(clamp(text, TELEGRAM_MAX_MESSAGE));
+  });
+
+  // ---------------------------------------------------------------- ledger
+
+  /**
+   * The ledger. The bot computes and records; it never holds a key.
+   *
+   * Every view that names a wallet is a DM. /ledger post is the one that goes
+   * to the room, and what it may contain is checked before it is sent.
+   */
+  bot.command('ledger', async (ctx) => {
+    if (!isAdmin(ctx.from?.id)) return;
+    const parts = (ctx.match ?? '').toString().trim().split(/\s+/).filter(Boolean);
+    const sub = (parts[0] ?? 'preview').toLowerCase();
+    const isDm = ctx.chat?.type === 'private';
+    const dmOnly = async () => {
+      await ctx.reply('that view names wallets, so it answers in a DM only');
+    };
+
+    if (sub === 'preview') {
+      if (!isDm) { await dmOnly(); return; }
+      const seats = liveSeats();
+      if (!seats.length) { await ctx.reply('no seats yet. /seat add <handle> <tier> <wallet>'); return; }
+      // An amount typed after the command is a hypothetical, said to be one.
+      const typed = parts[1];
+      let balance: bigint | null = null;
+      let hypothetical = false;
+      if (typed !== undefined) {
+        if (!/^\d+(\.\d+)?$/.test(typed)) { await ctx.reply('/ledger preview [balance in ETH]'); return; }
+        balance = toWeiEth(typed);
+        hypothetical = true;
+      } else {
+        balance = await Ledger.feeWalletBalance();
+        if (balance === null) {
+          await ctx.reply(Ledger.feeWallet()
+            ? 'the fee wallet balance could not be read. try again, or /ledger preview <eth> to check the table against a figure'
+            : 'FEE_WALLET is not set. /ledger preview <eth> checks the table against a figure you give');
+          return;
+        }
+      }
+      const warnings = Ledger.unrecordedRuns().map((r) =>
+        `run ${r.id} was previewed and has ${r.payments} payment${r.payments === 1 ? '' : 's'} with no transaction hash. `
+        + `if it was paid, record it with /ledger tx ${r.id} <seat>:<hash> ... before the next run, or this one distributes it again.`);
+      const run = Ledger.computeRun({ balanceWei: balance, seats, hypothetical });
+      run.id = Ledger.saveRun(run);
+      await ctx.reply(clamp(Ledger.previewText(run, { warnings }), TELEGRAM_MAX_MESSAGE));
+      return;
+    }
+
+    const runFrom = (i: number) => {
+      const id = parts[i] ? Number(parts[i]) : null;
+      return id !== null && Number.isFinite(id) ? Ledger.loadRun(id) : Ledger.latestRun();
+    };
+
+    if (sub === 'csv') {
+      if (!isDm) { await dmOnly(); return; }
+      const run = runFrom(1);
+      if (!run) { await ctx.reply('no run to export. /ledger preview first'); return; }
+      const name = `vitals-ledger-run-${run.id}.csv`;
+      await ctx.replyWithDocument(new InputFile(Buffer.from(Ledger.csvText(run), 'utf8'), name));
+      return;
+    }
+    if (sub === 'send') {
+      if (!isDm) { await dmOnly(); return; }
+      const run = runFrom(1);
+      if (!run) { await ctx.reply('no run to send. /ledger preview first'); return; }
+      await ctx.reply(clamp(Ledger.sendCommand(run, `vitals-ledger-run-${run.id}.csv`), TELEGRAM_MAX_MESSAGE));
+      return;
+    }
+    if (sub === 'tx') {
+      const run = parts[1] ? Ledger.loadRun(Number(parts[1])) : null;
+      if (!run) { await ctx.reply('/ledger tx <run> <seat>:<hash> <seat>:<hash> ...'); return; }
+      // Keyed by seat or by wallet. The payer only ever sees a wallet, because
+      // that is all the CSV carries, so it is resolved back to a seat here
+      // rather than asking anybody to look one up.
+      const txs: { seat: number; txHash: string }[] = [];
+      const unmatched: string[] = [];
+      for (const p of parts.slice(2)) {
+        const bySeat = /^(\d+):(0x[0-9a-fA-F]{64})$/.exec(p);
+        if (bySeat) { txs.push({ seat: Number(bySeat[1]), txHash: bySeat[2]! }); continue; }
+        const byWallet = /^(0x[0-9a-fA-F]{40}):(0x[0-9a-fA-F]{64})$/.exec(p);
+        if (byWallet) {
+          const row = run.rows.find((r) => r.wallet.toLowerCase() === byWallet[1]!.toLowerCase());
+          if (row) txs.push({ seat: row.seat, txHash: byWallet[2]! });
+          else unmatched.push(byWallet[1]!);
+        }
+      }
+      if (!txs.length) { await ctx.reply('/ledger tx <run> <seat>:<hash> <seat>:<hash> ...'); return; }
+      const r = Ledger.recordTxs(run.id!, txs);
+      const L = [`run ${run.id}: ${r.recorded} hash${r.recorded === 1 ? '' : 'es'} recorded`];
+      if (r.already.length) L.push(`${r.already.length} seat${r.already.length === 1 ? ' already had one' : 's already had one'}, left as they were: ${r.already.map((a) => a.seat).join(', ')}`);
+      if (r.unknown.length) L.push(`not in this run: seat ${r.unknown.join(', ')}`);
+      if (unmatched.length) L.push(`no seat in this run holds ${unmatched.join(', ')}`);
+      await ctx.reply(L.join('\n'));
+      return;
+    }
+    if (sub === 'post') {
+      const run = runFrom(1);
+      if (!run) { await ctx.reply('no run to post. /ledger preview first'); return; }
+      const text = Ledger.postText(run);
+      // The public message is the one place a wallet must never reach, so it
+      // is checked for one rather than assumed not to have any.
+      if (/0x[0-9a-fA-F]{40}/.test(text)) {
+        console.error('[ledger] a wallet reached the public ledger post; refusing to send');
+        await ctx.reply('the ledger post could not be rendered without a wallet in it, so it was not sent');
+        return;
+      }
+      const room = launchChat();
+      if (room && room !== ctx.chat?.id) {
+        await ctx.api.sendMessage(room, clamp(text, TELEGRAM_MAX_MESSAGE));
+        await ctx.reply(`posted to the room. run ${run.id}`);
+      } else {
+        await ctx.reply(clamp(text, TELEGRAM_MAX_MESSAGE));
+      }
+      return;
+    }
+    if (sub === 'history') {
+      if (!isDm) { await dmOnly(); return; }
+      await ctx.reply(clamp(Ledger.historyText(), TELEGRAM_MAX_MESSAGE));
+      return;
+    }
+    await ctx.reply([
+      '/ledger preview [eth]   the table, from the fee wallet or a figure you give',
+      '/ledger csv [run]       wallet,amount for the payer',
+      '/ledger send [run]      the command to run on the machine with the key',
+      '/ledger tx <run> <seat>:<hash> ...   record what was sent',
+      '/ledger post [run]      the public message for the room',
+      '/ledger history         every run',
+    ].join('\n'));
   });
 
   // -------------------------------------------------------------- numbers

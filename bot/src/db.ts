@@ -256,6 +256,87 @@ CREATE INDEX IF NOT EXISTS idx_events_source ON scan_events(source, ts);
 CREATE INDEX IF NOT EXISTS idx_events_user   ON scan_events(user_id, ts);
 CREATE INDEX IF NOT EXISTS idx_events_token  ON scan_events(token);
 
+-- ---------------------------------------------------------------------------
+-- The roster. One row per seat, occupied or freed.
+--
+-- The shares column is stored rather than derived from the tier, so changing what a
+-- tier is worth changes what people earn NEXT run and leaves every run already
+-- paid exactly as it was paid. A ledger that recomputes history is a ledger
+-- nobody can check against their own wallet.
+--
+-- A freed seat keeps its row: the history of who sat in it is the point, and a
+-- deleted row would take the reason for a past payout with it.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS seats (
+  seat        INTEGER PRIMARY KEY,
+  handle      TEXT NOT NULL,
+  -- Lowercased, for the uniqueness the handle itself cannot carry.
+  handle_key  TEXT NOT NULL,
+  tier        TEXT NOT NULL CHECK (tier IN ('T1','T2','T3')),
+  shares      INTEGER NOT NULL,
+  wallet      TEXT NOT NULL,
+  joined_at   INTEGER NOT NULL,
+  removed_at  INTEGER
+);
+-- One live seat per handle. A handle that sat before and left may return.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_seats_live ON seats(handle_key) WHERE removed_at IS NULL;
+
+-- Everything that ever happened to a seat, including the tier it used to be.
+CREATE TABLE IF NOT EXISTS seat_events (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  seat       INTEGER NOT NULL,
+  handle     TEXT NOT NULL,
+  event      TEXT NOT NULL CHECK (event IN ('add','tier','remove')),
+  from_tier  TEXT,
+  to_tier    TEXT,
+  wallet     TEXT,
+  at         INTEGER NOT NULL,
+  by_user    INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_seat_events ON seat_events(seat, at);
+
+-- ---------------------------------------------------------------------------
+-- The ledger. One row per run, one row per payment inside it.
+--
+-- A run is written at preview and stays 'preview' until money actually moved:
+-- what has been paid is what has a transaction hash against it, never what was
+-- once computed. Every amount is wei in a TEXT column, because a payout is not
+-- a float.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS ledger_runs (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  created_at      INTEGER NOT NULL,
+  -- What the fee wallet held when the run was computed.
+  balance_wei     TEXT NOT NULL,
+  -- What had already gone out, from this table's own record of it.
+  paid_before_wei TEXT NOT NULL,
+  remainder_wei   TEXT NOT NULL,
+  pool_wei        TEXT NOT NULL,
+  total_shares    INTEGER NOT NULL,
+  per_share_wei   TEXT NOT NULL,
+  distributed_wei TEXT NOT NULL,
+  dust_wei        TEXT NOT NULL,
+  status          TEXT NOT NULL CHECK (status IN ('preview','sent')),
+  posted_at       INTEGER,
+  -- True when the balance was supplied by hand rather than read from chain.
+  hypothetical    INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS ledger_payments (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  run_id     INTEGER NOT NULL,
+  seat       INTEGER NOT NULL,
+  handle     TEXT NOT NULL,
+  wallet     TEXT NOT NULL,
+  tier       TEXT NOT NULL,
+  shares     INTEGER NOT NULL,
+  amount_wei TEXT NOT NULL,
+  tx_hash    TEXT,
+  sent_at    INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_ledger_payments_run ON ledger_payments(run_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_ledger_payments_once ON ledger_payments(run_id, seat);
+
 -- Which chats the bot is a member of, from my_chat_member updates. One row
 -- per chat; status is the bot's last known membership state there. Rows seeded
 -- from group activity before the handler existed carry status 'seen', which
