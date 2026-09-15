@@ -1,0 +1,42 @@
+{
+  "_": "Every value the launch uses. The dry run, the rehearsal and the real launch read this one file, so what was rehearsed is what goes out. Fill in the placeholders marked CHANGE ME.",
+
+  "name": "VITALS",
+  "symbol": "VITALS",
+  "logo": "ipfs://CHANGE-ME",
+  "description": "CHANGE ME",
+  "socials": {
+    "twitter": "",
+    "telegram": "https://t.me/vitalsofficial",
+    "discord": "",
+    "website": "https://checkvitals.xyz",
+    "farcaster": ""
+  },
+
+  "creatorFeeRecipient": "0x0000000000000000000000000000000000000001",
+  "creatorTaxBps": 0,
+  "buybackEnabled": false,
+
+  "_expectedEconomics": "The factory's commitment to the economics of this config and pair. Read off a recent successful ETH-pair launch on config 0 and verified live before every send: if the factory's economics change, the launch refuses rather than going out on terms nobody agreed to. bytes32(0) would disable the check; it is deliberately not used.",
+  "expectedEconomics": "0xa9fc75d4203a33fe660e8fa32c74c3aa41c1fda4bf23d3a39b6bc22a1f8b1ca7",
+
+  "_salt": "Decides the token address, together with the sender and the params. The dry run prints the address this salt will produce, so the CA is known before the transaction.",
+  "salt": "0x766974616c732d6c61756e63682d73616c742d76312d6368616e67652d6d6521",
+
+  "launchConfigId": 0,
+  "pairToken": "0x0000000000000000000000000000000000000000",
+
+  "_devBuyEth": "The opening buy. Refused above 5% of supply, which at a zero creator tax is about 0.0884 ETH. 0.05 takes about 2.86%.",
+  "devBuyEth": "0.05",
+  "minTokensOut": "0",
+  "recipient": "0x0000000000000000000000000000000000000001",
+
+  "_extraExemptions": "Wallets exempt from the opening tax BESIDES the deployer, which the tool adds itself. Empty is the declared position: nobody gets in tax free but the wallet that launched it.",
+  "extraExemptions": [],
+
+  "rehearsal": {
+    "_": "The rehearsal launches a real token on the real chain, so it never carries the production ticker: a second VITALS on chain before launch is the thing the collision check exists to catch.",
+    "symbolSuffix": "RH1",
+    "devBuyEth": "0.001"
+  }
+}

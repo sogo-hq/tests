@@ -6,3 +6,7 @@ dist/
 *.db-shm
 .env
 decode.log
+
+# Launch records. The token address and tx of a real launch are public, but the
+# record is written by a laptop and belongs to it, not to the repository.
+tools/out/
