@@ -67,7 +67,17 @@ function readBody(req: IncomingMessage): Promise<unknown> {
 export const DOCS_URL = 'https://docs.checkvitals.xyz/api';
 
 export async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
-  const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
+  // A request line does not have to be a URL this parser accepts. "GET //" is
+  // legal HTTP and throws here, which the wrapper turns into a 500: a valid
+  // request answered with an internal error. Anything unparseable is a request
+  // for a path this service does not have, which is a 404.
+  let url: URL;
+  try {
+    url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
+  } catch (err) {
+    send(res, 404, { error: 'unknown_route', see: `/${API_VERSION}/openapi.json` });
+    return;
+  }
   const path = url.pathname.replace(/\/+$/, '') || '/';
 
   if (req.method === 'OPTIONS') {

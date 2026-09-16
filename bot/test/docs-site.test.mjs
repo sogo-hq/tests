@@ -167,3 +167,36 @@ test('the api root points at the docs site', async () => {
   // And that is a page this build actually produces.
   assert.ok(PAGES.some((p) => p.slug === 'api'));
 });
+
+test('the api root redirects, and only the root does', async () => {
+  const { handle, DOCS_URL } = await import('../dist/api/server.js');
+  // handle() is called directly rather than through a socket: the module keeps
+  // timers alive, and a test that leaves a listening server behind hangs the
+  // runner rather than failing it.
+  const call = async (url, method = 'GET') => {
+    const res = {
+      statusCode: 0, headers: {}, body: '',
+      writeHead(code, h) { this.statusCode = code; Object.assign(this.headers, h ?? {}); },
+      setHeader(k, v) { this.headers[k.toLowerCase()] = v; },
+      end(b) { this.body = b ?? ''; this.done = true; },
+    };
+    await handle({ url, method, headers: { host: 'api.checkvitals.xyz' }, on: () => {} }, res);
+    return res;
+  };
+
+  for (const url of ['/', '/?ref=x']) {
+    const r = await call(url);
+    assert.equal(r.statusCode, 302, url);
+    assert.equal(r.headers.location, DOCS_URL, url);
+  }
+  // HEAD too: a link checker uses it, and a 404 would read as a dead host.
+  assert.equal((await call('/', 'HEAD')).statusCode, 302);
+  // Nothing else moved.
+  assert.equal((await call('/v1/openapi.json')).statusCode, 200);
+  assert.equal((await call('/nope')).statusCode, 404);
+  // A POST to the root is not a browser looking for the documentation.
+  assert.notEqual((await call('/', 'POST')).statusCode, 302);
+  // "GET //" is a legal request line that this URL parser rejects. It is a
+  // path this service does not have, so it is a 404 and not a 500.
+  assert.equal((await call('//')).statusCode, 404);
+});
