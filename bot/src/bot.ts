@@ -22,6 +22,7 @@ import {
 } from './grants.js';
 import { entitlement, entitlementLine } from './premium.js';
 import { statusReport, statusText, resetWatchdog } from './watchdog.js';
+import { shouldOnboard, markOnboarded, onboardingText } from './onboard.js';
 import { clamp, TELEGRAM_MAX_MESSAGE, ADDRESS_PATTERN, containsAddress } from './text.js';
 import {
   tierOf, atLeast, thresholds, setThreshold, setVitalsToken, vitalsToken,
@@ -1379,7 +1380,9 @@ export function createBot(token = TELEGRAM_BOT_TOKEN): Bot {
     if (ctx.chat?.type !== 'private' && ctx.chat?.id !== undefined) {
       const set = autoscanSetting(ctx.chat.id);
       text += `\n\nin this group: autoscan is ${set.on ? 'on' : 'off'}`
-        + (set.setAt ? `, set ${agoWords(Math.floor(Date.now() / 1000) - set.setAt)} ago` : ', never changed')
+        + (set.setAt ? `, set ${agoWords(Math.floor(Date.now() / 1000) - set.setAt)} ago`
+           : set.byDefault ? ', on because this group is licensed, never set here'
+           : ', never changed')
         + '. an admin changes it with /autoscan on or /autoscan off.';
     }
 
@@ -2174,10 +2177,25 @@ export function createBot(token = TELEGRAM_BOT_TOKEN): Bot {
    * chat with the last status Telegram reported; a status of left or kicked is
    * as much a fact as one of member, and is the reason the count can go down.
    */
-  bot.on('my_chat_member', (ctx) => {
+  bot.on('my_chat_member', async (ctx) => {
     const u = ctx.myChatMember;
     const status = u.new_chat_member.status as BotChatStatus;
     recordBotChat(u.chat.id, u.chat.type, 'title' in u.chat ? u.chat.title ?? null : null, status, u.date);
+
+    // One message, the first time it is made an admin of a group, and then
+    // nothing until it is asked something.
+    if (u.chat.type === 'private') return;
+    if (!shouldOnboard(u.chat.id, u.old_chat_member.status, status)) return;
+    // Marked before the send: a retry that posts a second introduction into
+    // somebody's room is worse than one that never posts a first.
+    markOnboarded(u.chat.id);
+    try {
+      await ctx.api.sendMessage(u.chat.id, onboardingText(u.chat.id), {
+        link_preview_options: { is_disabled: true },
+      });
+    } catch (err) {
+      console.warn(`[onboard] could not post in ${u.chat.id}: ${String((err as Error)?.message ?? err).slice(0, 90)}`);
+    }
   });
 
   bot.on('chat_member', (ctx) => {

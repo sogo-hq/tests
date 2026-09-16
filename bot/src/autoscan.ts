@@ -1,5 +1,6 @@
 import { db } from './db.js';
 import { ADDRESS_PATTERN } from './text.js';
+import { groupLicensed } from './grants.js';
 
 /**
  * Answering an address somebody pasted in a group.
@@ -21,11 +22,20 @@ export const AUTOSCAN_DEDUPE_MS = Number(process.env.AUTOSCAN_DEDUPE_MS || 600_0
 
 const KEY = 'autoscan';
 
+/**
+ * Is autoscan on here?
+ *
+ * An explicit setting wins either way: an admin who turned it off has decided,
+ * and a licence must not turn it back on behind them. With nothing set, a
+ * licensed group defaults to on and every other group to off, which is the
+ * standing rule that the bot never scans what it was not asked to.
+ */
 export function autoscanEnabled(chatId: number): boolean {
   const row = db
     .prepare('SELECT value FROM group_settings WHERE chat_id = ? AND key = ?')
     .get(chatId, KEY) as { value: string } | undefined;
-  return row?.value === 'on';
+  if (row) return row.value === 'on';
+  return groupLicensed(chatId).licensed;
 }
 
 export function setAutoscan(chatId: number, on: boolean, setBy?: number): void {
@@ -37,11 +47,15 @@ export function setAutoscan(chatId: number, on: boolean, setBy?: number): void {
 }
 
 /** Who turned it on or off, and when, for the settings line in /help. */
-export function autoscanSetting(chatId: number): { on: boolean; setAt: number | null } {
+export function autoscanSetting(chatId: number):
+  { on: boolean; setAt: number | null; byDefault: boolean } {
   const row = db
     .prepare('SELECT value, set_at FROM group_settings WHERE chat_id = ? AND key = ?')
     .get(chatId, KEY) as { value: string; set_at: number } | undefined;
-  return { on: row?.value === 'on', setAt: row?.set_at ?? null };
+  if (row) return { on: row.value === 'on', setAt: row.set_at ?? null, byDefault: false };
+  // On because the group is licensed, rather than because anybody chose it.
+  const licensed = groupLicensed(chatId).licensed;
+  return { on: licensed, setAt: null, byDefault: licensed };
 }
 
 // ------------------------------------------------------------ what is in it
