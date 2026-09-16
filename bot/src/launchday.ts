@@ -1,4 +1,5 @@
 import type { Api } from 'grammy';
+import { ADDRESS_PATTERN } from './text.js';
 import {
   getLaunchPlan, dueCountdown, countdownPost, COUNTDOWN_OFFSETS, launchTimeLine, LAUNCH_TZ,
   envNumber,
@@ -207,7 +208,7 @@ async function memberCount(api: Api, chatId: number): Promise<number | null> {
  * guard in bot.ts already accepted 0X, so the two disagreed about what an
  * address even is.
  */
-export const ADDRESS_ANYWHERE = /0[xX][0-9a-fA-F]{40}/g;
+export const ADDRESS_ANYWHERE = new RegExp(ADDRESS_PATTERN, 'g');
 
 export type GuardVerdict =
   | { action: 'ignore' }

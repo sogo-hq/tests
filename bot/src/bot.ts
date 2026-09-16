@@ -21,7 +21,7 @@ import {
   groupLicensed, MAX_GRANT_DAYS,
 } from './grants.js';
 import { entitlement, entitlementLine } from './premium.js';
-import { clamp, TELEGRAM_MAX_MESSAGE } from './text.js';
+import { clamp, TELEGRAM_MAX_MESSAGE, ADDRESS_PATTERN, containsAddress } from './text.js';
 import {
   tierOf, atLeast, thresholds, setThreshold, setVitalsToken, vitalsToken,
   grant, revokeGrant, linkedWallet, effectiveTier, type Tier,
@@ -846,7 +846,7 @@ async function handleInline(ctx: Context): Promise<void> {
  * with punctuation on either side, because a reader can copy an address out of
  * backticks or a trailing comma just as easily.
  */
-const LOOSE_ADDRESS = /0[xX][0-9a-fA-F]{40}/;
+const LOOSE_ADDRESS = new RegExp(ADDRESS_PATTERN);
 
 /** Split on line boundaries so a CSV row is never cut in half. */
 function chunkText(text: string, limit: number): string[] {
@@ -2502,7 +2502,7 @@ export function createBot(token = TELEGRAM_BOT_TOKEN): Bot {
     if (!isAdmin(ctx.from?.id)) return;
     const text = publicRoster();
     // Checked, not trusted. This is the one roster view that can reach a group.
-    if (/0x[0-9a-fA-F]{40}/.test(text)) {
+    if (containsAddress(text)) {
       console.error('[roster] a wallet reached the public roster; refusing to send');
       await ctx.reply('the roster could not be rendered without a wallet in it, so it was not sent');
       return;
@@ -2589,18 +2589,7 @@ export function createBot(token = TELEGRAM_BOT_TOKEN): Bot {
       // Keyed by seat or by wallet. The payer only ever sees a wallet, because
       // that is all the CSV carries, so it is resolved back to a seat here
       // rather than asking anybody to look one up.
-      const txs: { seat: number; txHash: string }[] = [];
-      const unmatched: string[] = [];
-      for (const p of parts.slice(2)) {
-        const bySeat = /^(\d+):(0x[0-9a-fA-F]{64})$/.exec(p);
-        if (bySeat) { txs.push({ seat: Number(bySeat[1]), txHash: bySeat[2]! }); continue; }
-        const byWallet = /^(0x[0-9a-fA-F]{40}):(0x[0-9a-fA-F]{64})$/.exec(p);
-        if (byWallet) {
-          const row = run.rows.find((r) => r.wallet.toLowerCase() === byWallet[1]!.toLowerCase());
-          if (row) txs.push({ seat: row.seat, txHash: byWallet[2]! });
-          else unmatched.push(byWallet[1]!);
-        }
-      }
+      const { txs, unmatched } = Ledger.parseTxArgs(run, parts.slice(2));
       if (!txs.length) { await ctx.reply('/ledger tx <run> <seat>:<hash> <seat>:<hash> ...'); return; }
       const r = Ledger.recordTxs(run.id!, txs);
       // Their gas is part of what left the wallet, so it is read now rather
@@ -2620,7 +2609,7 @@ export function createBot(token = TELEGRAM_BOT_TOKEN): Bot {
       const text = Ledger.postText(run);
       // The public message is the one place a wallet must never reach, so it
       // is checked for one rather than assumed not to have any.
-      if (/0x[0-9a-fA-F]{40}/.test(text)) {
+      if (containsAddress(text)) {
         console.error('[ledger] a wallet reached the public ledger post; refusing to send');
         await ctx.reply('the ledger post could not be rendered without a wallet in it, so it was not sent');
         return;

@@ -1,4 +1,5 @@
 import { db } from './db.js';
+import { ADDRESS_PATTERN } from './text.js';
 
 /**
  * Answering an address somebody pasted in a group.
@@ -45,7 +46,8 @@ export function autoscanSetting(chatId: number): { on: boolean; setAt: number | 
 
 // ------------------------------------------------------------ what is in it
 
-const ADDRESS = /0[xX][0-9a-fA-F]{40}/g;
+// Hashes are not addresses: see ADDRESS_PATTERN in text.ts.
+const ADDRESS = new RegExp(ADDRESS_PATTERN, 'g');
 
 /**
  * Every address readable in a message, wherever it is hiding.

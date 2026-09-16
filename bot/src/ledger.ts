@@ -373,6 +373,32 @@ export function recordTxs(runId: number, txs: TxRecord[], now = Math.floor(Date.
   return { recorded, already, unknown };
 }
 
+/**
+ * The arguments of /ledger tx, resolved to seats.
+ *
+ * Keyed by seat or by wallet. The payer only ever sees a wallet, because that
+ * is all the CSV carries, so it is resolved back to a seat here rather than
+ * asking anybody to look one up. A wallet no seat in this run holds is
+ * reported rather than dropped: it means the CSV and the run have drifted
+ * apart, which is the one thing this join exists to catch.
+ */
+export function parseTxArgs(run: LedgerRun, args: string[]):
+  { txs: TxRecord[]; unmatched: string[] } {
+  const txs: TxRecord[] = [];
+  const unmatched: string[] = [];
+  for (const p of args) {
+    const bySeat = /^(\d+):(0x[0-9a-fA-F]{64})$/.exec(p);
+    if (bySeat) { txs.push({ seat: Number(bySeat[1]), txHash: bySeat[2]! }); continue; }
+    const byWallet = /^(0x[0-9a-fA-F]{40}):(0x[0-9a-fA-F]{64})$/.exec(p);
+    if (byWallet) {
+      const row = run.rows.find((r) => r.wallet.toLowerCase() === byWallet[1]!.toLowerCase());
+      if (row) txs.push({ seat: row.seat, txHash: byWallet[2]! });
+      else unmatched.push(byWallet[1]!);
+    }
+  }
+  return { txs, unmatched };
+}
+
 // ------------------------------------------------------------------ rendering
 
 /** Wei as ETH to four places, the precision every payout is a multiple of. */

@@ -65,3 +65,32 @@ export function shortAge(seconds: number): string {
   if (seconds < 172_800) return `${Math.round(seconds / 3600)}h`;
   return `${Math.round(seconds / 86_400)}d`;
 }
+
+/**
+ * A 40-hex address, and not the first forty characters of something longer.
+ *
+ * Without the lookahead this matches inside a transaction hash: a hash is
+ * `0x` and sixty-four hex characters, and the first forty of them are a
+ * perfectly good address as far as a regular expression is concerned.
+ *
+ * Measured: the public ledger post carries the payout hashes, so the guard
+ * that refuses to send a post containing a wallet refused to send every post
+ * that had hashes in it. That is the T+4h post on launch day, and it would
+ * have failed the first time it mattered and never before. The same pattern
+ * guards the fake-CA check in the launch room, where a member pasting a hash
+ * would have been warned and then muted for a day.
+ *
+ * `x` is not a hex character, so a match can only start at a real `0x` and
+ * the lookahead is the whole fix.
+ */
+export const ADDRESS_PATTERN = '0[xX][0-9a-fA-F]{40}(?![0-9a-fA-F])';
+
+/** Does this text contain an address? Hashes do not count. */
+export function containsAddress(text: string): boolean {
+  return new RegExp(ADDRESS_PATTERN).test(text);
+}
+
+/** Every address in the text, with hashes left alone. */
+export function addressesIn(text: string): string[] {
+  return text.match(new RegExp(ADDRESS_PATTERN, 'g')) ?? [];
+}
