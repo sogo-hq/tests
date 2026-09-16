@@ -32,9 +32,16 @@ node tools/launch.mjs --check
 
 `--check` validates that file and nothing else: it never signs, never sends,
 needs no key, and does not care what time it is, so the config can be checked
-on a Sunday. It prints a verdict per field, fetches the logo from ipfs.io and
-checks it is a square image under a megabyte, and prints the token address the
-salt produces. It exits non-zero when a field fails.
+on a Sunday. It prints a verdict per field, fetches the logo and checks it is
+a square image under a megabyte, and prints the token address the salt
+produces. It exits non-zero when a field fails.
+
+The logo is tried on ipfs.io, then gateway.pinata.cloud, then dweb.link. A
+gateway that answers 429 or 5xx is asked once more five seconds later before
+the next one is tried; a 404 is a straight answer and is not retried. The
+report says which gateway answered, and a logo verified on any of them
+passes. Every gateway refusing is undetermined rather than a failed logo:
+that is a fact about the gateways as much as about the image.
 
 ```
 node tools/launch.mjs --dry

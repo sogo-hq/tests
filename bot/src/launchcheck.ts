@@ -238,3 +238,130 @@ export function checkImage(info: ImageInfo): { verdict: Verdict; note: string } 
   const why = [!square ? 'not square' : '', !small ? `over ${MAX_IMAGE_BYTES / 1000} KB` : ''].filter(Boolean);
   return { verdict: 'fail', note: `${parts.join(', ')}, ${why.join(' and ')}` };
 }
+
+// ----------------------------------------------------------------- gateways
+
+/**
+ * The public gateways, in the order they are tried.
+ *
+ * Three of them because one of them being busy is not a fact about the image.
+ * A 429 from ipfs.io at the wrong moment would have failed the pre-flight on
+ * launch day over somebody else's rate limit, and the answer to "is the logo
+ * there" does not depend on which gateway answered.
+ *
+ * Pinned, and never resolved from a search: a gateway named by a stranger is
+ * a stranger's idea of what our logo is.
+ */
+export const IPFS_GATEWAYS = [
+  'https://ipfs.io/ipfs/',
+  'https://gateway.pinata.cloud/ipfs/',
+  'https://dweb.link/ipfs/',
+] as const;
+
+/** How long to wait before the one retry. */
+export const GATEWAY_RETRY_MS = 5_000;
+
+/** A busy gateway and a broken one are different answers. */
+export function isRetryableStatus(status: number): boolean {
+  return status === 429 || status >= 500;
+}
+
+/** The cid out of an ipfs:// reference, or null when it is not one. */
+export function cidOf(ref: string): string | null {
+  const v = (ref ?? '').trim();
+  const m = v.match(/^ipfs:\/\/(?:ipfs\/)?(.+)$/i);
+  return m ? m[1]! : null;
+}
+
+/**
+ * Every URL worth trying for one reference, in order.
+ *
+ * An http reference is one URL: it names a host, and trying our gateways for
+ * it would be fetching a different thing from the one the token carries.
+ */
+export function gatewayUrls(ref: string): string[] {
+  const v = (ref ?? '').trim();
+  if (!v) return [];
+  if (/^https?:\/\//i.test(v)) return [v];
+  const cid = cidOf(v);
+  return cid ? IPFS_GATEWAYS.map((g) => g + cid) : [];
+}
+
+/** Which gateway a URL came from, for the line that says who answered. */
+export function gatewayHost(url: string): string {
+  try {
+    return new URL(url).host;
+  } catch (err) {
+    // Not a url we can parse. Naming it in full is worse than naming it
+    // wrongly, so it is reported as it was written.
+    void err;
+    return url;
+  }
+}
+
+export interface FetchAttempt {
+  url: string;
+  ok: boolean;
+  /** The http status, or null when the request never completed. */
+  status: number | null;
+  reason: string | null;
+  retried: boolean;
+}
+
+export interface LogoFetch {
+  ok: boolean;
+  bytes: Uint8Array | null;
+  /** The gateway that answered, for the report. */
+  url: string | null;
+  attempts: FetchAttempt[];
+}
+
+/**
+ * Fetch a logo, trying each gateway and retrying a busy one once.
+ *
+ * `get` and `wait` are injected so the policy can be tested against every
+ * combination of 429, 500, 404 and a thrown request without a network.
+ */
+export async function fetchLogo(
+  ref: string,
+  get: (url: string) => Promise<{ ok: boolean; status: number; bytes: Uint8Array }>,
+  wait: (ms: number) => Promise<void> = (ms) => new Promise((r) => setTimeout(r, ms)),
+): Promise<LogoFetch> {
+  const attempts: FetchAttempt[] = [];
+  for (const url of gatewayUrls(ref)) {
+    for (let tries = 0; tries < 2; tries++) {
+      let res: { ok: boolean; status: number; bytes: Uint8Array } | null = null;
+      let thrown: string | null = null;
+      try {
+        res = await get(url);
+      } catch (err) {
+        thrown = String((err as Error)?.message ?? err).slice(0, 90);
+      }
+      if (res?.ok) {
+        attempts.push({ url, ok: true, status: res.status, reason: null, retried: tries > 0 });
+        return { ok: true, bytes: res.bytes, url, attempts };
+      }
+      const status = res ? res.status : null;
+      const reason = thrown ? `did not answer: ${thrown}` : `answered ${status}`;
+      // A 404 is this gateway's answer about the cid and will not change in
+      // five seconds. Only a busy or broken gateway is worth asking twice.
+      const retryable = thrown !== null || (status !== null && isRetryableStatus(status));
+      attempts.push({ url, ok: false, status, reason, retried: tries > 0 });
+      if (!retryable || tries === 1) break;
+      await wait(GATEWAY_RETRY_MS);
+    }
+  }
+  return { ok: false, bytes: null, url: null, attempts };
+}
+
+/** One line saying who answered, and who was asked first. */
+export function gatewayNote(f: LogoFetch): string {
+  if (f.ok && f.url) {
+    const earlier = f.attempts.filter((a) => !a.ok);
+    const who = `answered by ${gatewayHost(f.url)}`;
+    if (!earlier.length) return who;
+    return `${who}, after ${earlier.map((a) => `${gatewayHost(a.url)} ${a.reason}`).join(', ')}`;
+  }
+  if (!f.attempts.length) return 'nothing to fetch';
+  return `no gateway served it: ${f.attempts.map((a) => `${gatewayHost(a.url)} ${a.reason}`).join(', ')}`;
+}

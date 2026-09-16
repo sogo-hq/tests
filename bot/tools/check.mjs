@@ -31,24 +31,22 @@ const MARK = {
   unknown: () => dim('??  '),
 };
 
-/** ipfs:// to a gateway URL. Anything already http stays as it is. */
-export function gatewayUrl(ref, gateway = 'https://ipfs.io/ipfs/') {
-  const v = (ref ?? '').trim();
-  if (!v) return null;
-  if (/^https?:\/\//i.test(v)) return v;
-  const m = v.match(/^ipfs:\/\/(?:ipfs\/)?(.+)$/i);
-  return m ? gateway + m[1] : null;
-}
-
-async function fetchImage(url) {
+/** One request. The policy around it lives in launchcheck.ts, where it is tested. */
+async function getOnce(url) {
   const res = await fetch(url, { signal: AbortSignal.timeout(25_000), redirect: 'follow' });
-  if (!res.ok) return { error: `gateway answered ${res.status}` };
-  const buf = new Uint8Array(await res.arrayBuffer());
-  return { buf, contentType: res.headers.get('content-type') ?? '' };
+  // The body is only read on a 200: there is no point buffering an error page.
+  return {
+    ok: res.ok,
+    status: res.status,
+    bytes: res.ok ? new Uint8Array(await res.arrayBuffer()) : new Uint8Array(),
+  };
 }
 
 export async function runCheck({ configPath, as }) {
-  const { checkConfig, imageInfo, checkImage, EXPECTED_DEPLOYER } = await import(join(ROOT, 'dist/launchcheck.js'));
+  const {
+    checkConfig, imageInfo, checkImage, EXPECTED_DEPLOYER,
+    gatewayUrls, fetchLogo, gatewayNote, gatewayHost,
+  } = await import(join(ROOT, 'dist/launchcheck.js'));
   const { calibrate } = await import(join(ROOT, 'dist/curve.js'));
   const { client } = await import(join(ROOT, 'dist/chain.js'));
   const { factoryAbi, forwarderAbi } = await import(join(ROOT, 'dist/abi.js'));
@@ -95,22 +93,32 @@ export async function runCheck({ configPath, as }) {
   const rows = checkConfig(raw, curve);
 
   // ------------------------------------------------------------- the image
-  const url = gatewayUrl(raw.logo);
-  if (!url) {
+  const candidates = gatewayUrls(raw.logo);
+  if (!candidates.length) {
     rows.push({ field: 'logo image', value: '(no reference)', verdict: 'fail', note: 'nothing to fetch' });
   } else {
-    try {
-      const got = await fetchImage(url);
-      if (got.error) {
-        rows.push({ field: 'logo image', value: url, verdict: 'fail', note: got.error });
-      } else {
-        const info = imageInfo(got.buf);
-        const v = checkImage(info);
-        rows.push({ field: 'logo image', value: url, verdict: v.verdict, note: v.note });
-      }
-    } catch (err) {
-      // A gateway that times out says nothing about the image, so neither do we.
-      rows.push({ field: 'logo image', value: url, verdict: 'unknown', note: `gateway did not answer: ${err.message}` });
+    if (candidates.length > 1) {
+      console.log(dim(`\n  fetching the logo, ${candidates.length} gateways in order, one retry each`));
+    }
+    const got = await fetchLogo(raw.logo, getOnce);
+    for (const a of got.attempts) {
+      if (!a.ok) console.log(dim(`  ${gatewayHost(a.url)} ${a.reason}${a.retried ? ' on the retry' : ''}`));
+    }
+    if (got.ok) {
+      const v = checkImage(imageInfo(got.bytes));
+      rows.push({
+        field: 'logo image', value: got.url, verdict: v.verdict,
+        note: `${v.note}, ${gatewayNote(got)}`,
+      });
+    } else {
+      // Every gateway refused. That is a fact about the gateways as much as
+      // about the image, so it is undetermined rather than a failed logo,
+      // unless one of them gave a straight answer that the cid is not there.
+      const found404 = got.attempts.some((a) => a.status === 404 || a.status === 410);
+      rows.push({
+        field: 'logo image', value: candidates[0], verdict: found404 ? 'fail' : 'unknown',
+        note: gatewayNote(got),
+      });
     }
   }
 

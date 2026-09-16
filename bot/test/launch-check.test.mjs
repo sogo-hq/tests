@@ -3,8 +3,12 @@ import assert from 'node:assert/strict';
 import {
   checkConfig, imageInfo, checkImage, pointsAt,
   EXPECTED_DEPLOYER, EXPECTED_SOCIALS, EXAMPLE_SALT, MAX_IMAGE_BYTES, OBSERVED_MAX_DESCRIPTION,
+  gatewayUrls, cidOf, fetchLogo, gatewayNote, gatewayHost, isRetryableStatus,
+  IPFS_GATEWAYS, GATEWAY_RETRY_MS,
 } from '../dist/launchcheck.js';
-import { gatewayUrl } from '../tools/check.mjs';
+
+/** The first gateway for a reference, which is what the old single-gateway test meant. */
+const gatewayUrl = (ref) => gatewayUrls(ref)[0] ?? null;
 
 // Config 0, the only one the factory accepts.
 const CURVE = { supply: 10n ** 27n, phantomQuote: 1_680_000_000_000_000_000n, curveFeeBps: 100n };
@@ -342,4 +346,134 @@ test('the example names the dev buy this repo computed', async () => {
   assert.equal(example.launchConfigId, 0);
   assert.deepEqual(example.extraExemptions, []);
   assert.match(example._devBuyEth, /0\.0931 takes 5\.0012%/);
+});
+
+// ------------------------------------------------------------- the gateways
+
+const PNG = png(512, 512, 1000);
+
+/** A fake fetch driven by a script of answers per url, with no network and no clock. */
+const stub = (script) => {
+  const calls = [];
+  const waits = [];
+  const get = async (url) => {
+    calls.push(url);
+    const queue = script[gatewayHost(url)];
+    const next = Array.isArray(queue) ? queue.shift() : queue;
+    if (next === undefined) throw new Error('nothing scripted');
+    if (next instanceof Error) throw next;
+    return { ok: next === 200, status: next, bytes: next === 200 ? PNG : new Uint8Array() };
+  };
+  const wait = async (ms) => { waits.push(ms); };
+  return { get, wait, calls, waits };
+};
+
+test('three gateways, in the order the runbook names them', () => {
+  assert.deepEqual([...IPFS_GATEWAYS], [
+    'https://ipfs.io/ipfs/',
+    'https://gateway.pinata.cloud/ipfs/',
+    'https://dweb.link/ipfs/',
+  ]);
+  assert.deepEqual(gatewayUrls('ipfs://bafyabc'), [
+    'https://ipfs.io/ipfs/bafyabc',
+    'https://gateway.pinata.cloud/ipfs/bafyabc',
+    'https://dweb.link/ipfs/bafyabc',
+  ]);
+});
+
+test('an http reference is one url: our gateways would fetch a different thing', () => {
+  assert.deepEqual(gatewayUrls('https://example.com/a.png'), ['https://example.com/a.png']);
+  assert.deepEqual(gatewayUrls(''), []);
+  assert.deepEqual(gatewayUrls('not a reference'), []);
+  assert.equal(cidOf('ipfs://ipfs/bafyabc'), 'bafyabc');
+  assert.equal(cidOf('https://x/y'), null);
+});
+
+test('a busy gateway is retried once, after five seconds', async () => {
+  const s = stub({ 'ipfs.io': [429, 200] });
+  const got = await fetchLogo('ipfs://bafyabc', s.get, s.wait);
+  assert.equal(got.ok, true);
+  assert.equal(got.url, 'https://ipfs.io/ipfs/bafyabc');
+  assert.deepEqual(s.waits, [GATEWAY_RETRY_MS]);
+  assert.equal(GATEWAY_RETRY_MS, 5_000);
+  assert.equal(s.calls.length, 2, 'asked the same gateway twice and stopped there');
+});
+
+test('every 5xx is retryable, and a 429 is', () => {
+  for (const s of [429, 500, 502, 503, 504]) assert.equal(isRetryableStatus(s), true, String(s));
+  for (const s of [200, 301, 400, 404, 410]) assert.equal(isRetryableStatus(s), false, String(s));
+});
+
+test('a gateway that stays busy falls back to pinata', async () => {
+  const s = stub({ 'ipfs.io': [503, 503], 'gateway.pinata.cloud': [200] });
+  const got = await fetchLogo('ipfs://bafyabc', s.get, s.wait);
+  assert.equal(got.ok, true);
+  assert.equal(gatewayHost(got.url), 'gateway.pinata.cloud');
+  assert.equal(s.waits.length, 1, 'one retry on the busy gateway, not one per attempt');
+  assert.match(gatewayNote(got), /answered by gateway\.pinata\.cloud, after ipfs\.io answered 503/);
+});
+
+test('and then to dweb, and a logo verified on any of them passes', async () => {
+  const s = stub({ 'ipfs.io': [429, 429], 'gateway.pinata.cloud': [500, 500], 'dweb.link': [200] });
+  const got = await fetchLogo('ipfs://bafyabc', s.get, s.wait);
+  assert.equal(got.ok, true);
+  assert.equal(gatewayHost(got.url), 'dweb.link');
+  const v = checkImage(imageInfo(got.bytes));
+  assert.equal(v.verdict, 'pass', 'a square image under a megabyte is one whoever served it');
+  assert.deepEqual(s.waits, [GATEWAY_RETRY_MS, GATEWAY_RETRY_MS]);
+});
+
+test('a 404 is not retried: it will not be a different answer in five seconds', async () => {
+  const s = stub({ 'ipfs.io': [404], 'gateway.pinata.cloud': [404], 'dweb.link': [404] });
+  const got = await fetchLogo('ipfs://bafyabc', s.get, s.wait);
+  assert.equal(got.ok, false);
+  assert.deepEqual(s.waits, [], 'nothing was waited on');
+  assert.equal(s.calls.length, 3, 'one call per gateway');
+  assert.match(gatewayNote(got), /no gateway served it: ipfs\.io answered 404/);
+});
+
+test('a request that throws is retried too, then falls back', async () => {
+  const s = stub({ 'ipfs.io': [new Error('timed out'), new Error('timed out')], 'gateway.pinata.cloud': [200] });
+  const got = await fetchLogo('ipfs://bafyabc', s.get, s.wait);
+  assert.equal(got.ok, true);
+  assert.equal(gatewayHost(got.url), 'gateway.pinata.cloud');
+  assert.match(gatewayNote(got), /ipfs\.io did not answer: timed out/);
+});
+
+test('the report says which gateway answered, every time', async () => {
+  const first = await fetchLogo('ipfs://bafyabc', stub({ 'ipfs.io': [200] }).get, async () => {});
+  assert.equal(gatewayNote(first), 'answered by ipfs.io');
+
+  const s = stub({ 'ipfs.io': [429, 500], 'gateway.pinata.cloud': [404], 'dweb.link': [200] });
+  const third = await fetchLogo('ipfs://bafyabc', s.get, s.wait);
+  const note = gatewayNote(third);
+  assert.match(note, /^answered by dweb\.link, after /);
+  assert.match(note, /ipfs\.io answered 429/);
+  assert.match(note, /gateway\.pinata\.cloud answered 404/);
+});
+
+test('every gateway busy is undetermined, not a failed logo', async () => {
+  const s = stub({ 'ipfs.io': [503, 503], 'gateway.pinata.cloud': [503, 503], 'dweb.link': [503, 503] });
+  const got = await fetchLogo('ipfs://bafyabc', s.get, s.wait);
+  assert.equal(got.ok, false);
+  assert.equal(got.bytes, null);
+  // Six calls: two at each gateway. Nothing is concluded about the image.
+  assert.equal(s.calls.length, 6);
+  assert.doesNotMatch(gatewayNote(got), /not an image|not square/);
+});
+
+test('the attempts are recorded in order, with the retry marked', async () => {
+  const s = stub({ 'ipfs.io': [429, 200] });
+  const got = await fetchLogo('ipfs://bafyabc', s.get, s.wait);
+  assert.deepEqual(got.attempts.map((a) => [gatewayHost(a.url), a.ok, a.status, a.retried]), [
+    ['ipfs.io', false, 429, false],
+    ['ipfs.io', true, 200, true],
+  ]);
+});
+
+test('nothing in the gateway reporting says clean, or carries an em dash', async () => {
+  const s = stub({ 'ipfs.io': [500, 500], 'gateway.pinata.cloud': [404], 'dweb.link': [200] });
+  const note = gatewayNote(await fetchLogo('ipfs://bafyabc', s.get, s.wait));
+  assert.doesNotMatch(note, /\bclean\b|\bsafe\b|!/i);
+  assert.ok(!note.includes(String.fromCharCode(0x2014)));
 });
