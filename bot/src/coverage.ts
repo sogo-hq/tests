@@ -35,7 +35,7 @@ const MIN_ROWS_FOR_NEGATIVE = Number(process.env.MIN_INDEX_ROWS_FOR_NEGATIVE || 
  * time rule allows, measured in the unit that actually bounds what the index
  * has seen.
  */
-const MAX_LAG_BLOCKS_FOR_NEGATIVE =
+export const MAX_LAG_BLOCKS_FOR_NEGATIVE =
   Number(process.env.MAX_INDEX_LAG_FOR_NEGATIVE || BLOCKS_PER_MINUTE * 5) || BLOCKS_PER_MINUTE * 5;
 
 let recovering = false;

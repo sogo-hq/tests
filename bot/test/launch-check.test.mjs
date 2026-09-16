@@ -52,7 +52,7 @@ test('no field verdict is ever the word clean or safe', () => {
 
 test('no em dash anywhere in the output', () => {
   const rows = checkConfig(clone({ description: 'x'.repeat(200), salt: EXAMPLE_SALT }), CURVE);
-  for (const r of rows) assert.ok(!`${r.field}${r.value}${r.note}`.includes('—'), r.field);
+  for (const r of rows) assert.ok(!`${r.field}${r.value}${r.note}`.includes(String.fromCharCode(0x2014)), r.field);
 });
 
 // --------------------------------------------------------------- the dev buy

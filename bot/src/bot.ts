@@ -15,6 +15,7 @@ import { isFilterKey, filterDef, filterRates, rateLine } from './filters.js';
 import { LEGEND, claimLegend } from './legend.js';
 import { launchNotice, claimLaunchNotice } from './launchnotice.js';
 import { age } from './card.js';
+import { buildPosition, positionText } from './position.js';
 import { clamp, TELEGRAM_MAX_MESSAGE } from './text.js';
 import {
   tierOf, atLeast, thresholds, setThreshold, setVitalsToken, vitalsToken,
@@ -186,6 +187,9 @@ const HELP = [
   '  • Inline: type @BOTNAME <address> in any chat',
   '',
   '/full <address> adds the technical detail behind every line.',
+  '/position <wallet> <ca> says where one wallet stood in one launch: what number',
+  '  buyer it was, how many exempt wallets were ahead of it, and how many of those',
+  '  early buyers sold inside thirty minutes.',
   '/image <address> renders the card as a picture, for sharing outside Telegram.',
   '/stats shows what has been indexed.',
   '',
@@ -707,7 +711,7 @@ async function handleInline(ctx: Context): Promise<void> {
   const answerTransient = (results: InlineQueryResult[]) =>
     ctx.answerInlineQuery(results, { cache_time: 0, is_personal: true });
 
-  // Empty query — tell the user what to paste rather than returning nothing.
+  // Empty query: tell the user what to paste rather than returning nothing.
   if (!q) {
     await answerShared([
       article(
@@ -726,7 +730,7 @@ async function handleInline(ctx: Context): Promise<void> {
 
   const token = normaliseToken(q);
   if (!token) {
-    // Not an error — an explanation. An empty inline result list just shows a
+    // Not an error, an explanation. An empty inline result list just shows a
     // spinner that never resolves, which reads as the bot being broken.
     const isSol = looksLikeSolanaAddress(q);
     const isTx = !isSol && looksLikeTxHash(q);
@@ -2296,6 +2300,32 @@ export function createBot(token = TELEGRAM_BOT_TOKEN): Bot {
     if (r.rows.length) {
       await ctx.replyWithDocument(new InputFile(Buffer.from(scoutCsv(r), 'utf8'), `vitals-scout-${r.rows.length}.csv`));
     }
+  });
+
+  /**
+   * Where one wallet stood in one launch.
+   *
+   * Open to everyone, because the wallet is one the person typed rather than
+   * one the bot knows about them. In a group it is still printed short: a full
+   * address on screen in a room is a full address on screen in a room, however
+   * it got there.
+   */
+  bot.command('position', async (ctx) => {
+    const parts = (ctx.match ?? '').toString().trim().split(/\s+/).filter(Boolean);
+    const [wallet, token] = parts;
+    if (!wallet || !token) {
+      await ctx.reply('/position <wallet> <ca>');
+      return;
+    }
+    if (!/^0x[0-9a-fA-F]{40}$/.test(wallet) || !/^0x[0-9a-fA-F]{40}$/.test(token)) {
+      await ctx.reply('both have to be addresses. /position <wallet> <ca>');
+      return;
+    }
+    const { row, result } = await buildPosition(token, wallet);
+    const full = ctx.chat?.type === 'private';
+    await ctx.reply(clamp(positionText(
+      { wallet, token, symbol: row?.symbol ?? null }, result, full,
+    ), TELEGRAM_MAX_MESSAGE));
   });
 
   // ----------------------------------------------------------------- seats
