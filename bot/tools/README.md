@@ -13,6 +13,7 @@ Both need the repo built first: `npm run build`.
 | `launch.mjs` | the launch transaction |
 | `pay.mjs` | the ledger's transfers |
 | `fomo_intersect.mjs` | nothing on chain, but it spends USDC on paid robinx calls |
+| `dayrun.mjs` | telegram posts, and dust from a burner key when one is in the shell |
 
 ## launch.mjs
 
@@ -207,3 +208,36 @@ derived from a redirect or a search result, the same rule the RPC and explorer
 hosts follow. The robinx key is read from the shell and refused if it is found
 in a `.env` beside the code. Neither file is written anywhere but
 `tools/out/`.
+
+## dayrun.mjs
+
+The launch-day timeline, end to end, against a token that already exists.
+
+```
+node tools/dayrun.mjs --token <ca> --room <chat id> --fast
+```
+
+Eight steps in order: detect the launch from the index the way `/launch watch`
+does, pin the CA in the room, post the self scan at T+15, then at T+4h the
+ledger preview, the csv, the payer, the hashes and the public post.
+
+| flag | what it does |
+|---|---|
+| `--token <ca>` | the launch to run against. Thursday's rehearsal token. |
+| `--room <chat id>` | where the posts go. A state file for another room is refused. |
+| `--fast` | every wait becomes seconds, so the Friday private group test fits in one sitting. |
+| `--balance <eth>` | a typed fee wallet balance. The run is marked hypothetical. |
+| `--status` | print what has run and stop. Sends nothing. |
+
+Every step writes to `tools/out/dayrun-<ca>.json` the moment it finishes, so a
+rerun continues rather than starting again. A post that went out is recorded
+before anything else can decide to send it, so the room never gets two.
+
+The payer runs in burner mode when `BURNER_PRIVATE_KEY` is in the shell: a
+throwaway key, three throwaway recipients and dust that payplan caps. With no
+key it builds the plan, prints it and sends nothing. The harness never runs
+the real fee wallet path. That one is typed by a person on launch day, which
+is what the confirmation in `pay.mjs` is for.
+
+Before the public post goes out, the text is checked against the live roster
+for a handle or a wallet. If it contains either, nothing is sent.
