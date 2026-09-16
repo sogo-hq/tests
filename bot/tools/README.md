@@ -20,6 +20,21 @@ Every value comes from `launch.config.json`, so the dry run, the rehearsal and
 the launch are the same launch. Every mode ends with a diff of that file
 against what the chain says.
 
+That file is **not in git**. The salt in it decides the token address, so a
+salt in a public repository is a token address anyone can take before we do.
+Copy the example and fill in every `CHANGE ME`:
+
+```
+cp tools/launch.config.example.json tools/launch.config.json
+node tools/launch.mjs --check
+```
+
+`--check` validates that file and nothing else: it never signs, never sends,
+needs no key, and does not care what time it is, so the config can be checked
+on a Sunday. It prints a verdict per field, fetches the logo from ipfs.io and
+checks it is a square image under a megabyte, and prints the token address the
+salt produces. It exits non-zero when a field fails.
+
 ```
 node tools/launch.mjs --dry
 REHEARSAL_PRIVATE_KEY=0x... node tools/launch.mjs --rehearse
@@ -28,6 +43,7 @@ LAUNCH_PRIVATE_KEY=0x...    node tools/launch.mjs --go
 
 | flag | what it does |
 |---|---|
+| `--check` | validates the config only. No key, no send, no launch window. Prints every field with a verdict and the address the salt produces. |
 | `--dry` | simulates through `eth_call`. Sends nothing, signs nothing, needs no key, and still prints the token address the launch will have. |
 | `--rehearse` | launches a throwaway token on a burner key, then scans it with this repo's own scanner and prints the card. |
 | `--go` | the launch, after a typed confirmation of the symbol. |

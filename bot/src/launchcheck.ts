@@ -99,10 +99,17 @@ export function checkConfig(cfg: LaunchConfigFile, curve: CurveConfig | null): C
         ? `${desc.length} characters. pons publishes no limit; the longest seen on chain is ${OBSERVED_MAX_DESCRIPTION}. the dry run is what would reject it`
         : `${desc.length} characters`);
 
+  // A salt has to BE a salt before it can be a good one: 32 bytes of hex. A
+  // placeholder passes straight through a "not the default" test and only fails
+  // at the transaction, which is the wrong place to find out.
   const salt = (cfg.salt ?? '').trim();
+  const wellFormed = /^0x[0-9a-fA-F]{64}$/.test(salt);
   const defaulted = eq(salt, EXAMPLE_SALT) || /^0x0+$/.test(salt);
-  add('salt', salt, defaulted ? 'fail' : 'pass',
-    defaulted ? 'still the example salt, which decides the token address' : 'set, and not the example');
+  add('salt', salt, !wellFormed || defaulted ? 'fail' : 'pass',
+    !wellFormed
+      ? (salt ? 'not 32 bytes of hex, so it is a placeholder rather than a salt' : 'empty')
+      : defaulted ? 'still the example salt, which decides the token address'
+      : 'set, 32 bytes, and not the example');
 
   // The size of the opening buy, from the curve rather than from a table.
   const devBuy = (cfg.devBuyEth ?? '').trim();

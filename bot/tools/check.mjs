@@ -58,7 +58,10 @@ export async function runCheck({ configPath, as }) {
   try {
     raw = JSON.parse(readFileSync(configPath, 'utf8'));
   } catch (err) {
-    console.error(`\n  ${red('cannot read the config')}  ${configPath}\n  ${err.message}\n`);
+    console.error(`\n  ${red('cannot read the config')}  ${configPath}`);
+    console.error(`  ${err.message}`);
+    console.error(dim('  the real config is not in git. copy tools/launch.config.example.json'));
+    console.error(dim('  to tools/launch.config.json and fill in every CHANGE ME.\n'));
     process.exit(1);
   }
 

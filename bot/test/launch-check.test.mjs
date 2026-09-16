@@ -93,6 +93,13 @@ test('an all zero salt fails', () => {
   assert.equal(row(checkConfig(clone({ salt: `0x${'0'.repeat(64)}` }), CURVE), 'salt').verdict, 'fail');
 });
 
+test('a salt that is not 32 bytes of hex fails before the transaction does', () => {
+  for (const bad of ['0xCHANGE-ME-32-BYTES-OF-YOUR-OWN', '', '0x1234', `0x${'1'.repeat(63)}`, `0x${'1'.repeat(65)}`, 'no']) {
+    const r = row(checkConfig(clone({ salt: bad }), CURVE), 'salt');
+    assert.equal(r.verdict, 'fail', JSON.stringify(bad));
+  }
+});
+
 // -------------------------------------------------------------- the wallets
 
 test('either recipient pointing anywhere else fails', () => {
@@ -283,4 +290,56 @@ test('ipfs references become ipfs.io urls and http ones are left alone', () => {
   assert.equal(gatewayUrl('https://example.com/a.png'), 'https://example.com/a.png');
   assert.equal(gatewayUrl(''), null);
   assert.equal(gatewayUrl(undefined), null);
+});
+
+// ------------------------------------------------------------ the real file
+
+test('the real launch config is not in git, and the example is', async () => {
+  const { execFileSync } = await import('node:child_process');
+  const tracked = execFileSync('git', ['ls-files', 'tools/'], { encoding: 'utf8' })
+    .split('\n').filter(Boolean);
+  assert.ok(!tracked.includes('tools/launch.config.json'),
+    'the salt decides the token address, so the real config never enters git');
+  assert.ok(tracked.includes('tools/launch.config.example.json'));
+});
+
+test('gitignore covers the config and the launch records', async () => {
+  const { readFileSync } = await import('node:fs');
+  const ignore = readFileSync('.gitignore', 'utf8');
+  assert.match(ignore, /^tools\/launch\.config\.json$/m);
+  assert.match(ignore, /^tools\/out\/$/m);
+});
+
+test('the example has the same shape as the config the tool reads', async () => {
+  const { readFileSync } = await import('node:fs');
+  const example = JSON.parse(readFileSync('tools/launch.config.example.json', 'utf8'));
+  const real = JSON.parse(readFileSync('tools/launch.config.json', 'utf8'));
+  const keys = (o) => Object.keys(o).filter((k) => !k.startsWith('_')).sort();
+  assert.deepEqual(keys(example), keys(real));
+  assert.deepEqual(keys(example.socials), keys(real.socials));
+  assert.deepEqual(keys(example.rehearsal), keys(real.rehearsal));
+});
+
+test('the example carries no salt, no recipient and no description of its own', async () => {
+  const { readFileSync } = await import('node:fs');
+  const example = JSON.parse(readFileSync('tools/launch.config.example.json', 'utf8'));
+  for (const field of ['salt', 'creatorFeeRecipient', 'recipient', 'description', 'logo']) {
+    assert.match(String(example[field]), /CHANGE.?ME/i, field);
+  }
+  // And a checker run against the example fails on every one of them, rather
+  // than passing because the shape is right.
+  const rows = checkConfig(example, CURVE);
+  for (const field of ['salt', 'creatorFeeRecipient', 'recipient', 'description', 'logo']) {
+    assert.equal(rows.find((r) => r.field === field).verdict, 'fail', field);
+  }
+});
+
+test('the example names the dev buy this repo computed', async () => {
+  const { readFileSync } = await import('node:fs');
+  const example = JSON.parse(readFileSync('tools/launch.config.example.json', 'utf8'));
+  assert.equal(example.devBuyEth, '0.0930');
+  assert.equal(example.creatorTaxBps, 400);
+  assert.equal(example.launchConfigId, 0);
+  assert.deepEqual(example.extraExemptions, []);
+  assert.match(example._devBuyEth, /0\.0931 takes 5\.0012%/);
 });

@@ -1,5 +1,5 @@
 {
-  "_": "Every value the launch uses. The dry run, the rehearsal and the real launch read this one file, so what was rehearsed is what goes out. Fill in the placeholders marked CHANGE ME.",
+  "_": "Copy this to launch.config.json and fill in every CHANGE ME. That file is gitignored and stays on the machine that launches: the salt decides the token address, so a salt in a public repository is a token address anyone can take.",
   "name": "VITALS",
   "symbol": "VITALS",
   "logo": "ipfs://CHANGE-ME",
@@ -11,24 +11,25 @@
     "website": "https://checkvitals.xyz",
     "farcaster": ""
   },
-  "creatorFeeRecipient": "0x0000000000000000000000000000000000000001",
+  "creatorFeeRecipient": "0xCHANGE-ME",
   "creatorTaxBps": 400,
   "buybackEnabled": false,
   "_expectedEconomics": "The factory's commitment to the economics of this config and pair. Read off a recent successful ETH-pair launch on config 0 and verified live before every send: if the factory's economics change, the launch refuses rather than going out on terms nobody agreed to. bytes32(0) would disable the check; it is deliberately not used.",
   "expectedEconomics": "0xa9fc75d4203a33fe660e8fa32c74c3aa41c1fda4bf23d3a39b6bc22a1f8b1ca7",
-  "_salt": "Decides the token address, together with the sender and the params. The dry run prints the address this salt will produce, so the CA is known before the transaction.",
-  "salt": "0x766974616c732d6c61756e63682d73616c742d76312d6368616e67652d6d6521",
+  "_salt": "Decides the token address, together with the sender and the params. 32 bytes, yours, never committed. --check prints the address this salt produces, so the CA is known before the transaction.",
+  "salt": "0xCHANGE-ME-32-BYTES-OF-YOUR-OWN",
   "launchConfigId": 0,
   "pairToken": "0x0000000000000000000000000000000000000000",
-  "_devBuyEth": "The opening buy. Refused above 5% of supply, which at our 4% creator tax is 0.0931 ETH. See the table in docs/launch-configs.md. 0.05 takes 2.7496%.",
-  "devBuyEth": "0.05",
+  "_devBuyEth": "The opening buy. Refused above 5% of supply. At our 4% creator tax 0.0930 ETH takes 4.9962% and 0.0931 takes 5.0012%, which the cap refuses: the safe four-decimal value is 0.0930. See the table in docs/launch-configs.md.",
+  "devBuyEth": "0.0930",
   "minTokensOut": "0",
-  "recipient": "0x0000000000000000000000000000000000000001",
+  "recipient": "0xCHANGE-ME",
   "_extraExemptions": "Wallets exempt from the opening tax BESIDES the deployer, which the tool adds itself. Empty is the declared position: nobody gets in tax free but the wallet that launched it.",
   "extraExemptions": [],
   "rehearsal": {
     "_": "The rehearsal launches a real token on the real chain, so it never carries the production ticker: a second VITALS on chain before launch is the thing the collision check exists to catch.",
     "symbolSuffix": "RH1",
     "devBuyEth": "0.001"
-  }
+  },
+  "_recipients": "creatorFeeRecipient takes the creator tax, recipient takes the opening buy. Both are the deployer wallet for our launch. --check refuses any other address."
 }

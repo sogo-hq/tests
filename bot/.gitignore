@@ -10,3 +10,9 @@ decode.log
 # Launch records. The token address and tx of a real launch are public, but the
 # record is written by a laptop and belongs to it, not to the repository.
 tools/out/
+
+# The real launch config. The salt in it decides the token address, so a salt
+# in a public repository is a token address anyone can take before we do.
+# tools/launch.config.example.json is the shape, with the salt, the recipients
+# and the description left as placeholders.
+tools/launch.config.json
