@@ -1,8 +1,18 @@
 # correction post, draft
 
-Dated 16 september 2026. Lowercase, vitals voice, no excuses. The figures
-marked PENDING are filled from the production re-decode; the method is settled
-and only the totals move.
+Dated 16 september 2026. Lowercase, vitals voice, no excuses.
+
+**The numbers below are from the working copy, not from production.** That
+database is eight days stale and its re-decode is still running, so the shares
+are stable but n is not final. Before posting, run the re-decode on production
+and take the figures from `/stats tax`:
+
+```
+node dist/index.js decode
+```
+
+It is resumable and picks up every row whose `exemption_source` is null or
+`calldata`. The method is settled. Only the totals move.
 
 ---
 
@@ -39,14 +49,14 @@ what was wrong, exactly:
   the 33% figure we quoted for "launches that exempted nobody" was the array
   count. there is no such thing as a launch that exempted nobody.
 
-what is true, over PENDING_READ launches read from the curve's own events:
+what is true, over the launches read back from the curve's own events:
 
-  exactly the deployer   PENDING_ONLY (PENDING_ONLY_PCT)
-  beyond the deployer    PENDING_BEYOND (PENDING_BEYOND_PCT)
-  median where beyond    PENDING_MEDIAN wallets (n=PENDING_SAMPLE)
+  exactly the deployer   91.6%
+  beyond the deployer     8.4%
+  median where beyond    8 wallets
 
-PENDING_UNREAD launches are still being re-read from the events and are not
-in those percentages. they will be, and the numbers may move.
+the rest are still being re-read and are not in those percentages. the exact
+counts and the n are on /stats tax and move as the re-read finishes.
 
 how we found it: our own launch rehearsal. the config said one exempt wallet,
 the chain emitted four events. the four were two wallets, and the rehearsal
@@ -74,7 +84,10 @@ calldata.
 
 ## what to check before posting
 
-- The PENDING values come from `/stats tax` after the production re-decode.
+- Replace the three percentages with the production figures and add their n.
+  The working copy read 2,227 launches at the time of writing and gave 91.6%
+  deployer only, 8.4% beyond, median 8 where beyond, with 15,873 still unread.
+  A share taken from a seventh of the population is a share, not the answer.
 - The 33% figure was quoted in a source comment and possibly in a post. Check
   the X history before claiming what was published where; if it was never
   posted publicly, drop that paragraph rather than inventing a correction to

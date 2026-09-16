@@ -282,3 +282,63 @@ test('neither new line carries an em dash or an exclamation', () => {
     assert.doesNotMatch(line, /!/);
   }
 });
+
+// -------------------------------------------------------- the correction post
+
+test('the correction post exists and is dated', () => {
+  const t = read('correction-post.md');
+  assert.match(t, /16 september 2026/i);
+});
+
+test('it says what was counted wrong, in the terms of the mistake', () => {
+  const t = read('correction-post.md');
+  assert.match(t, /we counted tax-free wallets wrong/);
+  assert.match(t, /four slots/);
+  assert.match(t, /we were counting the\s+array/);
+  // The evidence, not just the claim.
+  assert.match(t, /fourteen of fourteen had\s+exempted their deployer/);
+});
+
+test('it carries no excuse and no hedge about whose fault it was', () => {
+  const t = read('correction-post.md');
+  for (const weasel of [/\bunfortunately\b/i, /\bedge case\b/i, /\bminor\b/i, /\bwe apologi[sz]e\b/i, /\bregret\b/i]) {
+    assert.doesNotMatch(t, weasel, String(weasel));
+  }
+  // It says the thing plainly instead.
+  assert.match(t, /a count of zero was never\s+possible and we published it anyway/);
+});
+
+test('the two unverified figures are marked, not restated', () => {
+  const t = read('correction-post.md');
+  assert.match(t, /141 seconds/);
+  assert.match(t, /not from the events path/i);
+  assert.match(t, /57% of buyers/);
+  assert.match(t, /no source/i);
+  assert.match(t, /withdrawn/);
+  // Neither is quoted as though it still stands.
+  assert.doesNotMatch(t, /^the median hold is 141/mi);
+});
+
+test('the post is lowercase in the part that gets posted', () => {
+  const t = read('correction-post.md');
+  const block = t.split('```')[1];
+  assert.ok(block, 'the post has no quoted block');
+  // Addresses and identifiers keep their case; prose does not start sentences
+  // with capitals, which is the voice.
+  const sentences = block.split('\n').filter((l) => /^[a-z]/.test(l.trim()) || !l.trim());
+  assert.ok(sentences.length > block.split('\n').length * 0.6, 'the post is not in the voice');
+  assert.doesNotMatch(block, /^[A-Z][a-z]+ /m);
+});
+
+test('the post names the tool that found it and claims nothing it cannot show', () => {
+  const t = read('correction-post.md');
+  assert.match(t, /tools\/exemption-slots\.mjs/);
+  assert.match(t, /it signs nothing/);
+  assert.match(t, /0xae3020888aEd39556469C8A8026672D781FF5f84/);
+});
+
+test('the post says the figures are not the production ones yet', () => {
+  const t = read('correction-post.md');
+  assert.match(t, /not from production/i);
+  assert.match(t, /node dist\/index\.js decode/);
+});
