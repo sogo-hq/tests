@@ -337,8 +337,47 @@ test('the post names the tool that found it and claims nothing it cannot show', 
   assert.match(t, /0xae3020888aEd39556469C8A8026672D781FF5f84/);
 });
 
-test('the post says the figures are not the production ones yet', () => {
+test('the post carries the production figures, and they add up', () => {
   const t = read('correction-post.md');
-  assert.match(t, /not from production/i);
+  assert.match(t, /478,610/);
+  assert.match(t, /331,678/);
+  assert.match(t, /146,932/);
+  assert.equal(331_678 + 146_932, 478_610, 'the two buckets partition what was read');
+  assert.equal(((331_678 / 478_610) * 100).toFixed(1), '69.3');
+  assert.equal(((146_932 / 478_610) * 100).toFixed(1), '30.7');
+  assert.match(t, /69\.3%/);
+  assert.match(t, /30\.7%/);
+});
+
+test('the 422 undecodable are stated, and as undetermined rather than as a number', () => {
+  const t = read('correction-post.md');
+  assert.match(t, /422 launches are still undetermined/);
+  assert.match(t, /entry\s+points we have no ABI for/);
+  assert.match(t, /undetermined rather than as a number/);
+});
+
+test('the sentence about the impossible zero is in the post itself', () => {
+  const block = read('correction-post.md').split('```')[1];
+  assert.match(block, /a count of zero was never\s+possible and we published it anyway/);
+});
+
+test('the three old numbers are explained as what they counted', () => {
+  const t = read('correction-post.md');
+  assert.equal(33 + 38 + 29, 100, 'the three were a partition');
+  assert.match(t, /33 \+ 38 \+ 29 adds to 100/);
+  assert.match(t, /length of the `exemptions` array/);
+  // And the post itself says it, not only the notes around it.
+  const block = t.split('```')[1];
+  assert.match(block, /33%, 38% and 29% were a\s+split of launches by the length of the exemptions array/);
+  assert.match(block, /never a count of tax-free wallets/);
+});
+
+test('the split it cannot compute yet is marked, not estimated', () => {
+  const t = read('correction-post.md');
+  assert.match(t, /PENDING_A/);
+  assert.match(t, /PENDING_B/);
+  assert.match(t, /Do not estimate them/);
+  // And the reason is given rather than left as a gap.
+  assert.match(t, /never stored/);
   assert.match(t, /node dist\/index\.js decode/);
 });

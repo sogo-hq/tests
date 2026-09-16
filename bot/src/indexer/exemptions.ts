@@ -18,6 +18,16 @@ export interface LaunchCalldata {
   /** launchAndBuy only: the creator's opening buy, in the same transaction. */
   buyAmount: bigint | null;
   buyRecipient: string | null;
+  /** The wallet the creator fee goes to, from the launch parameters. */
+  creatorFeeRecipient: string | null;
+  /**
+   * Exempt wallets that are none of the creator's three slots.
+   *
+   * Null when the slots are not all known, because a count that assumed an
+   * unknown slot was a stranger would put the creator's own wallet in the
+   * column that says somebody else got in tax free.
+   */
+  thirdPartyExempt: number | null;
   /** 'logs' once the count came from the curve's own events. */
   source: 'logs' | 'calldata' | null;
   /**
@@ -87,6 +97,39 @@ export function unionOfSlots(opts: {
   return out;
 }
 
+/**
+ * Exempt wallets that are none of the creator's own slots.
+ *
+ * The creator's slots are the wallet that sent the launch, the wallet the fee
+ * goes to, and the wallet that received the opening buy. Anything else in the
+ * exempt set is somebody the creator named, which is the thing worth counting
+ * separately: a launch where the creator's own three wallets are tax free is a
+ * different shape from one where eight strangers are.
+ *
+ * Null when a slot is unknown. Counting an unknown slot as a stranger would
+ * put the creator's own wallet in the column that says somebody else got in.
+ */
+export function thirdPartyExemptCount(opts: {
+  exempt: readonly string[];
+  sender?: string | null;
+  creatorFeeRecipient?: string | null;
+  recipient?: string | null;
+  /** False for entry points that take no opening buy, so there is no recipient slot. */
+  hasBuy?: boolean;
+}): number | null {
+  const addr = (a?: string | null) => {
+    const v = (a ?? '').trim().toLowerCase();
+    return /^0x[0-9a-f]{40}$/.test(v) ? v : null;
+  };
+  const sender = addr(opts.sender);
+  const fee = addr(opts.creatorFeeRecipient);
+  const recipient = addr(opts.recipient);
+  if (!sender || !fee) return null;
+  if (opts.hasBuy !== false && !recipient) return null;
+  const slots = new Set([sender, fee, ...(recipient ? [recipient] : [])]);
+  return opts.exempt.filter((a) => !slots.has(a.trim().toLowerCase())).length;
+}
+
 const UNKNOWN: LaunchCalldata = {
   exemptionCount: null,
   exemptions: [],
@@ -97,6 +140,8 @@ const UNKNOWN: LaunchCalldata = {
   buybackEnabled: null,
   buyAmount: null,
   buyRecipient: null,
+  creatorFeeRecipient: null,
+  thirdPartyExempt: null,
   source: null,
   socials: null,
 };
@@ -148,6 +193,11 @@ export function decodeLaunchCalldata(input: Hex, sender?: string | null): Launch
         // show: fourteen of fourteen launches stored as 0 had emitted one.
         exemptionCount: sender ? union.length : null,
         exemptions: union,
+        creatorFeeRecipient: (p?.creatorFeeRecipient as string | undefined)?.toLowerCase() ?? null,
+        thirdPartyExempt: thirdPartyExemptCount({
+          exempt: union, sender, creatorFeeRecipient: p?.creatorFeeRecipient as string | undefined,
+          recipient: null, hasBuy: false,
+        }),
         entryPoint: 'launchToken',
         name: p.name ?? null,
         symbol: p.symbol ?? null,
@@ -205,6 +255,11 @@ export function decodeLaunchCalldata(input: Hex, sender?: string | null): Launch
       // be short is worse than no number: it reads as a measurement.
       exemptionCount: sender ? union.length : null,
       exemptions: union,
+      creatorFeeRecipient: (p?.creatorFeeRecipient as string | undefined)?.toLowerCase() ?? null,
+      thirdPartyExempt: thirdPartyExemptCount({
+        exempt: union, sender, creatorFeeRecipient: p?.creatorFeeRecipient as string | undefined,
+        recipient: buyRecipient, hasBuy: d.functionName === 'launchAndBuy',
+      }),
       entryPoint: d.functionName,
       name: p?.name ?? null,
       symbol: p?.symbol ?? null,
@@ -306,6 +361,16 @@ export async function fetchLaunchCalldata(txHash: Hex, curve?: string): Promise<
     ...fromCalldata,
     exemptionCount: fromLogs.length,
     exemptions: fromLogs,
+    // Recomputed over what the curve actually emitted, not over what the call
+    // asked for. The slots still come from the calldata, because that is the
+    // only place they are named.
+    thirdPartyExempt: thirdPartyExemptCount({
+      exempt: fromLogs,
+      sender: tx?.from,
+      creatorFeeRecipient: fromCalldata.creatorFeeRecipient,
+      recipient: fromCalldata.buyRecipient,
+      hasBuy: fromCalldata.entryPoint === 'launchAndBuy',
+    }),
     entryPoint: fromCalldata.entryPoint === 'unknown' ? 'logs' : fromCalldata.entryPoint,
     source: 'logs',
   };

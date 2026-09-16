@@ -311,19 +311,51 @@ test('the exemption distribution counts only what the events settled', () => {
   assert.equal(d.notRead, 4, 'the impossible zero is unread, not a launch that exempted nobody');
 });
 
+const DIST = {
+  read: 1000, deployerOnly: 620, beyondDeployer: 380,
+  creatorSlotsOnly: 300, thirdParty: 80, unsplit: 0,
+  notRead: 250, medianBeyond: 5, beyondSample: 380,
+  medianThirdParty: 3, thirdPartySample: 80,
+};
+
 test('the lines name both sides, the unread remainder and the floor', () => {
-  const lines = T.exemptionLines({
-    read: 1000, deployerOnly: 620, beyondDeployer: 380,
-    notRead: 250, medianBeyond: 5, beyondSample: 380,
-  });
-  assert.match(lines[0], /over 1,000 launches read from the curve's own events/);
-  assert.match(lines[1], /exactly the deployer\s+620 \(62\.0%\)/);
-  assert.match(lines[2], /beyond the deployer\s+380 \(38\.0%\)/);
-  assert.match(lines[3], /median where beyond\s+5 wallets \(n=380\)/);
-  assert.match(lines[4], /250 launches not read from the events yet, not counted above/);
-  assert.match(lines[5], /a launch cannot exempt nobody/);
+  const lines = T.exemptionLines(DIST).join('\n');
+  assert.match(lines, /over 1,000 launches read from the curve's own events/);
+  assert.match(lines, /exactly the deployer\s+620 \(62\.0%\)/);
+  assert.match(lines, /beyond the deployer\s+380 \(38\.0%\)/);
+  assert.match(lines, /median wallets where beyond\s+5 \(n=380\)/);
+  assert.match(lines, /250 launches not read from the events yet, not counted above/);
+  assert.match(lines, /a launch cannot exempt nobody/);
   // The two sides are a partition of what was read, not of everything.
   assert.equal(620 + 380, 1000);
+});
+
+test('beyond the deployer is split into the creator\'s own slots and strangers', () => {
+  const lines = T.exemptionLines(DIST).join('\n');
+  assert.match(lines, /creator's own slots\s+300 \(30\.0%\), the fee recipient and the buy recipient/);
+  assert.match(lines, /third parties\s+80 \(8\.0%\), wallets outside those slots/);
+  // The two buckets partition the beyond column.
+  assert.equal(DIST.creatorSlotsOnly + DIST.thirdParty + DIST.unsplit, DIST.beyondDeployer);
+});
+
+test('the median third-party count is given where there are any', () => {
+  const lines = T.exemptionLines(DIST).join('\n');
+  assert.match(lines, /median third parties where any\s+3 \(n=80\)/);
+});
+
+test('the third-party median is withheld under thirty observations', () => {
+  const lines = T.exemptionLines({ ...DIST, medianThirdParty: null, thirdPartySample: 12 }).join('\n');
+  assert.match(lines, /median third parties where any: not published under 30 observations \(n=12\)/);
+});
+
+test('rows read before the slots were stored are named, never folded into either', () => {
+  const lines = T.exemptionLines({
+    ...DIST, creatorSlotsOnly: 100, thirdParty: 30, unsplit: 250,
+  }).join('\n');
+  assert.match(lines, /not split yet\s+250, read before the creator's slots were stored/);
+  // And they are not silently added to either bucket.
+  assert.match(lines, /creator's own slots\s+100 /);
+  assert.match(lines, /third parties\s+30 /);
 });
 
 test('an unread population is said once, not drawn as a table of zeros', () => {
@@ -336,16 +368,90 @@ test('an unread population is said once, not drawn as a table of zeros', () => {
 });
 
 test('the median beyond is withheld under thirty observations', () => {
-  const few = T.exemptionLines({ read: 40, deployerOnly: 30, beyondDeployer: 10, notRead: 0, medianBeyond: null, beyondSample: 10 });
-  assert.match(few[3], /not published under 30 observations \(n=10\)/);
+  const few = T.exemptionLines({
+    read: 40, deployerOnly: 30, beyondDeployer: 10, creatorSlotsOnly: 8, thirdParty: 2,
+    unsplit: 0, notRead: 0, medianBeyond: null, beyondSample: 10,
+    medianThirdParty: null, thirdPartySample: 2,
+  }).join('\n');
+  assert.match(few, /median wallets where beyond: not published under 30 observations \(n=10\)/);
 });
 
 test('no line in it says clean, safe or nobody', () => {
-  const lines = T.exemptionLines({ read: 10, deployerOnly: 10, beyondDeployer: 0, notRead: 0, medianBeyond: null, beyondSample: 0 });
+  const lines = T.exemptionLines({
+    read: 10, deployerOnly: 10, beyondDeployer: 0, creatorSlotsOnly: 0, thirdParty: 0,
+    unsplit: 0, notRead: 0, medianBeyond: null, beyondSample: 0,
+    medianThirdParty: null, thirdPartySample: 0,
+  });
   for (const l of lines) {
     assert.doesNotMatch(l, /\bclean\b|\bsafe\b|!/i, l);
     assert.ok(!l.includes(String.fromCharCode(0x2014)), l);
   }
   // "cannot exempt nobody" is the floor being stated, not a finding of none.
   assert.match(lines.join('\n'), /cannot exempt nobody/);
+});
+
+test('the split comes from stored slots, and a row missing one is not guessed at', async () => {
+  const { thirdPartyExemptCount } = await import('../dist/indexer/exemptions.js');
+  const S = '0x' + '11'.repeat(20);
+  const F = '0x' + '22'.repeat(20);
+  const R = '0x' + '33'.repeat(20);
+  const X = '0x' + '44'.repeat(20);
+  const low = (a) => a.toLowerCase();
+
+  // Every exempt wallet is one of the creator's own three slots.
+  assert.equal(thirdPartyExemptCount({
+    exempt: [S, F, R].map(low), sender: S, creatorFeeRecipient: F, recipient: R,
+  }), 0);
+  // One stranger among them.
+  assert.equal(thirdPartyExemptCount({
+    exempt: [S, F, R, X].map(low), sender: S, creatorFeeRecipient: F, recipient: R,
+  }), 1);
+  // The creator's three collapsed onto one wallet, and two strangers.
+  assert.equal(thirdPartyExemptCount({
+    exempt: [S, X, low('0x' + '55'.repeat(20))], sender: S, creatorFeeRecipient: S, recipient: S,
+  }), 2);
+  // launchToken has no buy, so no recipient slot to miss.
+  assert.equal(thirdPartyExemptCount({
+    exempt: [S, F].map(low), sender: S, creatorFeeRecipient: F, recipient: null, hasBuy: false,
+  }), 0);
+});
+
+test('an unknown slot makes the count undetermined, never zero', async () => {
+  const { thirdPartyExemptCount } = await import('../dist/indexer/exemptions.js');
+  const S = '0x' + '11'.repeat(20);
+  const F = '0x' + '22'.repeat(20);
+  // Counting an unknown slot as a stranger would put the creator's own wallet
+  // in the column that says somebody else got in tax free.
+  assert.equal(thirdPartyExemptCount({ exempt: [S], sender: S, creatorFeeRecipient: null, recipient: S }), null);
+  assert.equal(thirdPartyExemptCount({ exempt: [S], sender: null, creatorFeeRecipient: F, recipient: S }), null);
+  assert.equal(thirdPartyExemptCount({ exempt: [S, F], sender: S, creatorFeeRecipient: F, recipient: null }), null);
+});
+
+test('the three buckets are counted from the column, not from a list walk', () => {
+  db.prepare('DELETE FROM launches').run();
+  const add = (t, count, third) => db.prepare(
+    `INSERT INTO launches (token, curve, deployer, pair_token, launch_config_id, graduation_threshold,
+       block_number, tx_hash, launched_at, snipe_exemption_count, exemption_source, third_party_exempt)
+     VALUES (?,?,?,?,0,'0',1,?,1,?,'logs',?)`,
+  ).run(t, t, t, ETH, t, count, third);
+
+  add('0xa', 1, 0);         // the deployer alone
+  add('0xb', 1, 0);
+  add('0xc', 2, 0);         // beyond, the creator's own slots
+  add('0xd', 3, 0);
+  add('0xe', 4, 2);         // beyond, two strangers
+  add('0xf', 9, 7);         // beyond, seven strangers
+  add('0x10', 5, null);     // beyond, read before the slots were stored
+
+  const d = T.exemptionDistribution();
+  assert.equal(d.read, 7);
+  assert.equal(d.deployerOnly, 2);
+  assert.equal(d.beyondDeployer, 5);
+  assert.equal(d.creatorSlotsOnly, 2);
+  assert.equal(d.thirdParty, 2);
+  assert.equal(d.unsplit, 1);
+  // The split is a partition of the beyond column, with nothing invented.
+  assert.equal(d.creatorSlotsOnly + d.thirdParty + d.unsplit, d.beyondDeployer);
+  assert.equal(d.thirdPartySample, 2);
+  assert.equal(d.medianThirdParty, null, 'two observations is under the floor');
 });

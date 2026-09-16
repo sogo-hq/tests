@@ -206,7 +206,12 @@ export async function decodePending(
            -- 'calldata' is re-queued too: the old array-only count and the new
            -- union cannot be told apart by their source alone.
            OR exemption_source IS NULL
-           OR exemption_source = 'calldata')
+           OR exemption_source = 'calldata'
+           -- and rows read before the creator's slots were stored, which is
+           -- what the third-party split is computed from. The fee recipient is
+           -- only in the launch calldata, so this cannot be filled by
+           -- arithmetic over rows already read.
+           OR third_party_exempt IS NULL)
        ORDER BY launched_at DESC LIMIT ?`,
     )
     .all(MAX_DECODE_ATTEMPTS, Number.isFinite(limit) ? limit : -1) as { token: string; tx_hash: string; curve: string }[];
@@ -214,6 +219,7 @@ export async function decodePending(
   const update = db.prepare(`
     UPDATE launches SET
       snipe_exemption_count = ?, snipe_exemptions = ?, entry_point = ?, exemption_source = ?,
+      creator_fee_recipient = ?, third_party_exempt = ?,
       creator_tax_bps = COALESCE(?, creator_tax_bps),
       buyback_enabled = COALESCE(?, buyback_enabled),
       launch_buy_amount = ?, launch_buy_recipient = ?,
@@ -243,6 +249,8 @@ export async function decodePending(
       cd.exemptions.length ? JSON.stringify(cd.exemptions) : null,
       cd.entryPoint,
       cd.source,
+      cd.creatorFeeRecipient,
+      cd.thirdPartyExempt,
       cd.creatorTaxBps,
       cd.buybackEnabled == null ? null : cd.buybackEnabled ? 1 : 0,
       cd.buyAmount == null ? null : String(cd.buyAmount),
@@ -277,7 +285,8 @@ export function decodeBacklog(): { pending: number; exhausted: number } {
   const unresolved = `(snipe_exemption_count IS NULL
       OR (entry_point = 'launchAndBuy' AND launch_buy_amount IS NULL)
       OR exemption_source IS NULL
-      OR exemption_source = 'calldata')`;
+      OR exemption_source = 'calldata'
+      OR third_party_exempt IS NULL)`;
   const q = (where: string, ...params: unknown[]) =>
     (db.prepare(`SELECT COUNT(*) AS n FROM launches WHERE ${where}`).get(...params) as { n: number }).n;
   return {

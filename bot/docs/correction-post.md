@@ -1,18 +1,20 @@
-# correction post, draft
+# correction post
 
 Dated 16 september 2026. Lowercase, vitals voice, no excuses.
 
-**The numbers below are from the working copy, not from production.** That
-database is eight days stale and its re-decode is still running, so the shares
-are stable but n is not final. Before posting, run the re-decode on production
-and take the figures from `/stats tax`:
+Production has been re-read: every decodable launch now has its exemption list
+from the curve's own events.
 
-```
-node dist/index.js decode
-```
+| | |
+| --- | --- |
+| rows read from the events | 478,610 |
+| exactly the deployer | 331,678 (69.3%) |
+| beyond the deployer | 146,932 (30.7%) |
+| undecodable, still undetermined | 422 |
 
-It is resumable and picks up every row whose `exemption_source` is null or
-`calldata`. The method is settled. Only the totals move.
+**The split of the 146,932 is not in this draft yet.** It needs one more pass,
+and the reason is in "what is still missing" at the bottom. Fill the two
+figures from `/stats tax` before posting, or cut those two lines.
 
 ---
 
@@ -35,28 +37,26 @@ we checked fourteen of those receipts by hand: fourteen of fourteen had
 exempted their deployer. none had exempted nobody. a count of zero was never
 possible and we published it anyway.
 
-what was wrong, exactly:
+we have re-read every launch we can decode, from the curve's own events.
 
-  /stats said "launches with pre-exempted wallets N (X% of decoded)". that
-  percentage counted the array, so it read a small number where the true
-  answer is every launch. the line is gone.
+over 478,610 launches:
 
-  the card had a branch that said "nobody got in tax-free at launch" and
-  marked it clean. it only fired on rows read from the curve's events, so it
-  reached very few cards, but it existed and it was wrong. a zero now reads
-  as a read that did not finish.
+  exactly the deployer   331,678  69.3%
+  beyond the deployer    146,932  30.7%
 
-  the 33% figure we quoted for "launches that exempted nobody" was the array
-  count. there is no such thing as a launch that exempted nobody.
+    of those, the creator's own other wallets only   PENDING_A
+    of those, at least one wallet outside them       PENDING_B
+    median strangers where there are any             PENDING_MEDIAN
 
-what is true, over the launches read back from the curve's own events:
+422 launches are still undetermined. their creation transactions use entry
+points we have no ABI for, so we cannot read them, and we report that as
+undetermined rather than as a number.
 
-  exactly the deployer   91.6%
-  beyond the deployer     8.4%
-  median where beyond    8 wallets
-
-the rest are still being re-read and are not in those percentages. the exact
-counts and the n are on /stats tax and move as the re-read finishes.
+what the numbers we published before actually were. 33%, 38% and 29% were a
+split of launches by the length of the exemptions array: none, one, and two
+or more. they were never a count of tax-free wallets. the 33% we described as
+"exempted nobody" was 33% of launches that named nobody in the array, and
+every one of them exempted its deployer.
 
 how we found it: our own launch rehearsal. the config said one exempt wallet,
 the chain emitted four events. the four were two wallets, and the rehearsal
@@ -82,18 +82,55 @@ calldata.
 
 ---
 
+## what the three old numbers were
+
+33 + 38 + 29 adds to 100, which is what they were: a partition of decoded
+launches by the length of the `exemptions` array in the calldata.
+
+| published as | what it actually counted |
+| --- | --- |
+| 33% "exempted nobody" | the array was empty. Every one of these launches exempted its deployer, and the fee recipient and buy recipient where those differ. |
+| 38% "exempt exactly one wallet" | the array had one entry. The launch exempted that wallet plus up to three creator slots. |
+| 29% | the array had two or more entries. |
+
+Only the 33% is traceable in this repository, in a source comment. The 38%
+came from a message and the 29% has no source here at all, so check what was
+actually posted before correcting a number nobody saw. The arithmetic above is
+what the three add up to, not a record of where they were published.
+
+## what is still missing
+
+The two-way split of "beyond the deployer" needs the creator's fee recipient,
+and that was never stored. It is in the launch calldata and nowhere else: not
+in `TokenLaunched`, not derivable from the exemption list, and not recoverable
+by arithmetic over the rows already read. A wallet that is exempt and is not
+the sender and not the buy recipient is either the fee recipient or a
+stranger, and without the fee recipient stored there is no way to say which.
+
+Two columns are added, `creator_fee_recipient` and `third_party_exempt`, both
+written by the decoder. Filling them for existing rows is the same resumable
+command as the last pass:
+
+```
+node dist/index.js decode
+```
+
+or `/decode start` in a DM, with `/decode status` for where it is.
+
+Until then `/stats tax` prints the two buckets over the rows that have the
+column and names the rest as not split yet. It never folds an unsplit row into
+either bucket, because a row that cannot be classified is not evidence for
+whichever side is larger.
+
 ## what to check before posting
 
-- Replace the three percentages with the production figures and add their n.
-  The working copy read 2,227 launches at the time of writing and gave 91.6%
-  deployer only, 8.4% beyond, median 8 where beyond, with 15,873 still unread.
-  A share taken from a seventh of the population is a share, not the answer.
-- The 33% figure was quoted in a source comment and possibly in a post. Check
-  the X history before claiming what was published where; if it was never
-  posted publicly, drop that paragraph rather than inventing a correction to
-  something nobody saw.
-- The rehearsal CA and transaction are public and can be linked:
-  token `0xae3020888aEd39556469C8A8026672D781FF5f84`, transaction
+- Fill PENDING_A, PENDING_B and PENDING_MEDIAN from `/stats tax`, or cut those
+  three lines. Do not estimate them: the whole point of this post is that we
+  published a number that was a count of something else.
+- The median strangers figure is withheld below thirty observations. If it is
+  withheld, cut the line rather than printing a floor notice in a post.
+- The rehearsal CA and transaction are public and can be linked: token
+  `0xae3020888aEd39556469C8A8026672D781FF5f84`, transaction
   `0xf8c440ccc8c880671f22732c31046227de07d2b25113599cee43798f82f3e213`.
 
 ## the two unverified figures, in detail
@@ -113,10 +150,8 @@ were the large majority.
 It is also bounded by something the sentence does not say: hold times come
 from `trades`, which is only populated for tokens somebody scanned.
 
-Measured on the working copy part way through the re-decode: median 27s over
-1,595 pairs. That is not a restatement, it is evidence the figure moves with
-the population. Recompute it after the production re-decode and publish the
-new figure with its n, or do not publish it.
+Recompute it now that the lists are the real ones, and publish the new figure
+with its n, or do not publish it.
 
 ### "57% of buyers inside that window"
 
@@ -134,13 +169,3 @@ node tools/exemption-slots.mjs
 Simulates a launch through `eth_simulateV1` against the live factory with a
 distinct address in each slot and prints which slot produced which event.
 Signs nothing, sends nothing.
-
-The re-decode is the existing decoder over the rows the old path settled:
-
-```
-node dist/index.js decode
-```
-
-It reads each launch transaction's receipt and takes the exemption list from
-the curve's own events, de-duplicated. Resumable, and it picks up every row
-whose `exemption_source` is null or `calldata`.

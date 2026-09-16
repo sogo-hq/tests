@@ -743,6 +743,14 @@ for (const [table, column, decl] of [
   // line names. All three are absent on every declaration made before they
   // existed, and absent is the correct reading: those declarations said
   // nothing about a room, a fee share or a page's contents.
+  // The creator's own slots, kept so "who was exempt" can be split into the
+  // creator's wallets and everybody else. The fee recipient is in the launch
+  // calldata and was never stored, so this cannot be filled by arithmetic over
+  // existing rows: it needs the launch transaction read again.
+  ['launches', 'creator_fee_recipient', 'TEXT'],
+  // Exempt wallets that are none of the three creator slots. NULL means the
+  // row predates the column, which is not the same as zero.
+  ['launches', 'third_party_exempt', 'INTEGER'],
   ['launch_declarations', 'room', 'TEXT'],
   ['launch_declarations', 'holder_fee_share', 'TEXT'],
   ['launch_declarations', 'docs_sha256', 'TEXT'],

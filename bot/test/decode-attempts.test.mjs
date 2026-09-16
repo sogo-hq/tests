@@ -44,14 +44,18 @@ function inTempDb(body, env = {}) {
       const L = await import('${CWD}/dist/indexer/launches.js');
       const { indexCoverage } = await import('${CWD}/dist/coverage.js');
       const A = (n) => '0x' + String(n).padStart(40, '0');
+      // third_party_exempt is part of a settled row now: a row read before the
+      // creator's slots were stored is still owed a read, so a fixture that
+      // means "fully decoded" has to say so.
       const launch = (n, opts = {}) => db.prepare(
         \`INSERT INTO launches (token, curve, deployer, pair_token, launch_config_id,
             graduation_threshold, block_number, tx_hash, launched_at, snipe_exemption_count,
-            exemption_source)
-          VALUES (?,?,?,?,0,'0',?,?,?,?,?)\`
+            exemption_source, third_party_exempt)
+          VALUES (?,?,?,?,0,'0',?,?,?,?,?,?)\`
       ).run(A(n), A(900000 + n), A(98), A(0), 1000 + n, '0x' + String(n).padStart(64, '0'),
             1_000_000 - n, opts.count ?? null,
-            'source' in opts ? opts.source : (opts.count == null ? null : 'logs'));
+            'source' in opts ? opts.source : (opts.count == null ? null : 'logs'),
+            'thirdParty' in opts ? opts.thirdParty : (opts.count == null ? null : 0));
       ${body}
     `], {
       cwd: CWD,
@@ -135,7 +139,7 @@ test('a row that decodes leaves the queue without needing the cap', async () => 
 
 test('a count that came from calldata alone is re-read from the events', async () => {
   const out = inTempDb(`
-    for (let i = 1; i <= 3; i++) launch(i, { count: 0, source: null });  // the old decoder
+    for (let i = 1; i <= 3; i++) launch(i, { count: 0, source: null, thirdParty: null });  // the old decoder
     launch(7, { count: 2, source: 'logs' });                             // already re-read
     console.log(JSON.stringify({ backlog: L.decodeBacklog() }));
   `);

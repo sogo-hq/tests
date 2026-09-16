@@ -364,11 +364,27 @@ export interface ExemptionDistribution {
   deployerOnly: number;
   /** The deployer and at least one other wallet. */
   beyondDeployer: number;
+  /**
+   * Beyond the deployer, but only the creator's own other slots: the fee
+   * recipient and the opening-buy recipient where they differ from the sender.
+   * Nobody outside the creator's wallets got in tax free.
+   */
+  creatorSlotsOnly: number;
+  /** At least one exempt wallet that is none of the creator's three slots. */
+  thirdParty: number;
+  /**
+   * Beyond the deployer, and which of the two it is cannot be said: these rows
+   * were read before the creator's slots were stored. Never folded into either.
+   */
+  unsplit: number;
   /** Rows the events have not settled yet, and impossible zeros. */
   notRead: number;
   /** Median wallet count among those that went beyond the deployer, or null. */
   medianBeyond: number | null;
   beyondSample: number;
+  /** Median third-party count where there are any, withheld below the floor. */
+  medianThirdParty: number | null;
+  thirdPartySample: number;
 }
 
 export function exemptionDistribution(): ExemptionDistribution {
@@ -377,15 +393,23 @@ export function exemptionDistribution(): ExemptionDistribution {
   const deployerOnly = n("SELECT COUNT(*) n FROM launches WHERE exemption_source = 'logs' AND snipe_exemption_count = 1");
   const beyondDeployer = n("SELECT COUNT(*) n FROM launches WHERE exemption_source = 'logs' AND snipe_exemption_count > 1");
   const notRead = n("SELECT COUNT(*) n FROM launches WHERE exemption_source IS NULL OR exemption_source <> 'logs' OR snipe_exemption_count IS NULL OR snipe_exemption_count < 1");
-  const counts = (db
-    .prepare("SELECT snipe_exemption_count AS c FROM launches WHERE exemption_source = 'logs' AND snipe_exemption_count > 1 ORDER BY c")
-    .all() as { c: number }[]).map((r) => r.c);
-  const medianBeyond = counts.length >= MIN_BENCHMARK_SAMPLES
-    ? (counts.length % 2
-      ? counts[counts.length >> 1]!
-      : (counts[(counts.length >> 1) - 1]! + counts[counts.length >> 1]!) / 2)
-    : null;
-  return { read, deployerOnly, beyondDeployer, notRead, medianBeyond, beyondSample: counts.length };
+  const beyond = "exemption_source = 'logs' AND snipe_exemption_count > 1";
+  const creatorSlotsOnly = n(`SELECT COUNT(*) n FROM launches WHERE ${beyond} AND third_party_exempt = 0`);
+  const thirdParty = n(`SELECT COUNT(*) n FROM launches WHERE ${beyond} AND third_party_exempt > 0`);
+  const unsplit = n(`SELECT COUNT(*) n FROM launches WHERE ${beyond} AND third_party_exempt IS NULL`);
+
+  const median = (xs: number[]) => (xs.length >= MIN_BENCHMARK_SAMPLES
+    ? (xs.length % 2 ? xs[xs.length >> 1]! : (xs[(xs.length >> 1) - 1]! + xs[xs.length >> 1]!) / 2)
+    : null);
+  const col = (sql: string) => (db.prepare(sql).all() as { c: number }[]).map((r) => r.c);
+  const counts = col(`SELECT snipe_exemption_count AS c FROM launches WHERE ${beyond} ORDER BY c`);
+  const thirds = col(`SELECT third_party_exempt AS c FROM launches WHERE ${beyond} AND third_party_exempt > 0 ORDER BY c`);
+
+  return {
+    read, deployerOnly, beyondDeployer, creatorSlotsOnly, thirdParty, unsplit, notRead,
+    medianBeyond: median(counts), beyondSample: counts.length,
+    medianThirdParty: median(thirds), thirdPartySample: thirds.length,
+  };
 }
 
 export function exemptionLines(d: ExemptionDistribution = exemptionDistribution()): string[] {
@@ -400,12 +424,22 @@ export function exemptionLines(d: ExemptionDistribution = exemptionDistribution(
   const pct = (a: number) => `${((a / d.read) * 100).toFixed(1)}%`;
   const out = [
     `tax-free at launch, over ${d.read.toLocaleString()} launches read from the curve's own events:`,
-    `  exactly the deployer   ${d.deployerOnly.toLocaleString()} (${pct(d.deployerOnly)})`,
-    `  beyond the deployer    ${d.beyondDeployer.toLocaleString()} (${pct(d.beyondDeployer)})`,
+    `  exactly the deployer     ${d.deployerOnly.toLocaleString()} (${pct(d.deployerOnly)})`,
+    `  beyond the deployer      ${d.beyondDeployer.toLocaleString()} (${pct(d.beyondDeployer)})`,
+    // The split that matters: a creator whose own fee and buy wallets are tax
+    // free is a different shape from one who let eight strangers in.
+    `    creator's own slots    ${d.creatorSlotsOnly.toLocaleString()} (${pct(d.creatorSlotsOnly)}), the fee recipient and the buy recipient`,
+    `    third parties          ${d.thirdParty.toLocaleString()} (${pct(d.thirdParty)}), wallets outside those slots`,
   ];
+  if (d.unsplit > 0) {
+    out.push(`    not split yet          ${d.unsplit.toLocaleString()}, read before the creator's slots were stored`);
+  }
+  out.push(d.medianThirdParty === null
+    ? `  median third parties where any: not published under ${MIN_BENCHMARK_SAMPLES} observations (n=${d.thirdPartySample.toLocaleString()})`
+    : `  median third parties where any  ${d.medianThirdParty} (n=${d.thirdPartySample.toLocaleString()})`);
   out.push(d.medianBeyond === null
-    ? `  median where beyond: not published under ${MIN_BENCHMARK_SAMPLES} observations (n=${d.beyondSample.toLocaleString()})`
-    : `  median where beyond    ${d.medianBeyond} wallets (n=${d.beyondSample.toLocaleString()})`);
+    ? `  median wallets where beyond: not published under ${MIN_BENCHMARK_SAMPLES} observations (n=${d.beyondSample.toLocaleString()})`
+    : `  median wallets where beyond     ${d.medianBeyond} (n=${d.beyondSample.toLocaleString()})`);
   // Never folded into the percentages. The unread rows are the ones that were
   // counted wrongly before, and hiding them would repeat the mistake.
   if (d.notRead > 0) {
