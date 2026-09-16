@@ -470,6 +470,28 @@ CREATE TABLE IF NOT EXISTS licences (
 -- One licence per holder, not one per group they can type in.
 CREATE UNIQUE INDEX IF NOT EXISTS idx_licence_user ON licences(user_id);
 
+-- Access granted by an admin: no holding, no payment, and an expiry.
+--
+-- Separate from licences and from premium_payments on purpose. Those two
+-- record a thing that happened (a holder licensed a group, a wallet paid), and
+-- neither expires; this records a decision someone took, which does. Keeping
+-- them apart means a grant can lapse without touching a payment record, and a
+-- holder who stops holding is not confused with a wallet an admin let in.
+--
+-- subject is a lowercased wallet for kind 'wallet' and a chat id as text for
+-- kind 'chat'. expires_at is unix seconds and is compared, never trusted to
+-- have been cleaned up: an expired row is the same as no row.
+CREATE TABLE IF NOT EXISTS access_grants (
+  kind       TEXT NOT NULL CHECK (kind IN ('wallet','chat')),
+  subject    TEXT NOT NULL,
+  expires_at INTEGER NOT NULL,
+  granted_by INTEGER NOT NULL,
+  granted_at INTEGER NOT NULL,
+  note       TEXT,
+  PRIMARY KEY (kind, subject)
+);
+CREATE INDEX IF NOT EXISTS idx_grants_expiry ON access_grants(kind, expires_at);
+
 -- Premium paid for, not held.
 --
 -- Keyed on the transaction hash so one payment entitles one wallet once: a hash

@@ -5,6 +5,7 @@ import { bulk } from './ratelimit.js';
 import { BURN_ADDRESS } from './config.js';
 import { db } from './db.js';
 import { normaliseWallet } from './ready.js';
+import { activeGrant } from './grants.js';
 
 /**
  * Who may use a paid feature, and where what they pay ends up.
@@ -79,7 +80,7 @@ export function treasuryAddress(): Address {
  * registration behind it.
  */
 export type Entitlement =
-  | { state: 'premium'; via: 'vitals' | 'payment'; vitals: bigint | null; wei: bigint | null }
+  | { state: 'premium'; via: 'vitals' | 'payment' | 'grant'; vitals: bigint | null; wei: bigint | null; until?: number }
   | { state: 'below'; vitals: bigint | null; wei: bigint }
   /**
    * The chain could not be read. NOT a refusal.
@@ -115,6 +116,15 @@ export async function entitlement(wallet: string): Promise<Entitlement> {
   const norm = normaliseWallet(wallet);
   if (!norm) return { state: 'undetermined', reason: 'that is not an address' };
   const addr = getAddress(norm);
+
+  // An admin grant is checked before anything that touches the chain: it is a
+  // local read that cannot fail for a network reason, and someone who was given
+  // access should not be told the feature is undetermined because an RPC is
+  // down. The holder path below is unchanged and still runs for everyone else.
+  const granted = activeGrant('wallet', addr);
+  if (granted) {
+    return { state: 'premium', via: 'grant', vitals: null, wei: null, until: granted.expiresAt };
+  }
 
   // A recorded payment was verified against chain when it was written, so this
   // is a local read and cannot fail for a network reason.
@@ -214,6 +224,11 @@ export async function recordPayment(
 export function entitlementLine(e: Entitlement): string {
   if (e.state === 'undetermined') return `could not check your holdings: ${e.reason}. try again`;
   if (e.state === 'premium') {
+    if (e.via === 'grant') {
+      const until = e.until ? new Date(e.until * 1000).toISOString().slice(0, 10) : 'an unstated date';
+      const days = e.until ? Math.max(0, Math.ceil((e.until * 1000 - Date.now()) / 86_400_000)) : null;
+      return `premium · granted by an admin, ${days === null ? '' : `${days} day${days === 1 ? '' : 's'} left, `}until ${until}`;
+    }
     return e.via === 'payment'
       ? `premium · ${(Number(e.wei) / 1e18).toFixed(3)} ETH paid`
       : `premium · ${e.vitals!.toLocaleString()} $VITALS held`;

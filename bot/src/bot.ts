@@ -16,6 +16,11 @@ import { LEGEND, claimLegend } from './legend.js';
 import { launchNotice, claimLaunchNotice } from './launchnotice.js';
 import { age } from './card.js';
 import { buildPosition, positionText } from './position.js';
+import {
+  grantAccess, revokeGrant as revokeAccessGrant, activeGrant, liveGrants, grantLine,
+  groupLicensed, MAX_GRANT_DAYS,
+} from './grants.js';
+import { entitlement, entitlementLine } from './premium.js';
 import { clamp, TELEGRAM_MAX_MESSAGE } from './text.js';
 import {
   tierOf, atLeast, thresholds, setThreshold, setVitalsToken, vitalsToken,
@@ -192,6 +197,7 @@ const HELP = [
   '  early buyers sold inside thirty minutes.',
   '/image <address> renders the card as a picture, for sharing outside Telegram.',
   '/stats shows what has been indexed.',
+  '/premium status shows how your access stands, and how long it lasts.',
   '',
   'Launch readiness:',
   '  • /ready in the group: the totals, and only the totals',
@@ -1809,6 +1815,50 @@ export function createBot(token = TELEGRAM_BOT_TOKEN): Bot {
     const userId = ctx.from?.id;
     if (userId === undefined || ctx.chat?.type !== 'private') return;
     const arg = (ctx.match ?? '').toString().trim();
+    const parts = arg.split(/\s+/).filter(Boolean);
+    const sub = parts[0]?.toLowerCase();
+
+    // Access without holding and without paying, for the people who are owed
+    // it: a launch partner, somebody who found a real bug, the crew. It expires
+    // on its own, and the holder path underneath it is untouched.
+    if (sub === 'grant' || sub === 'ungrant') {
+      if (!isAdmin(userId)) return;
+      if (sub === 'ungrant') {
+        await ctx.reply(revokeAccessGrant('wallet', parts[1] ?? '')
+          ? `${parts[1]}: grant removed. holding and payments are unaffected.`
+          : 'no grant on that wallet');
+        return;
+      }
+      const days = Number((parts[2] ?? '').replace(/d$/i, ''));
+      const res = grantAccess('wallet', parts[1] ?? '', days, userId, 'admin');
+      if (!res.ok) {
+        await ctx.reply(res.reason === 'subject'
+          ? '/premium grant <wallet> <days>'
+          : `days has to be a number from 1 to ${MAX_GRANT_DAYS}`);
+        return;
+      }
+      await ctx.reply(`${res.grant.subject}: premium ${res.extended ? 'extended' : 'granted'} `
+        + `until ${new Date(res.grant.expiresAt * 1000).toISOString().slice(0, 10)}`);
+      return;
+    }
+
+    if (sub === 'status') {
+      const wallet = linkedWallet(userId);
+      if (!wallet) {
+        await ctx.reply('no wallet linked. /holder link, then /premium status');
+        return;
+      }
+      const e = await entitlement(wallet);
+      const lines = [entitlementLine(e)];
+      if (isAdmin(userId)) {
+        const live = liveGrants('wallet');
+        lines.push('', live.length
+          ? `${live.length} wallet grant${live.length === 1 ? '' : 's'} live, soonest ${new Date(live[0]!.expiresAt * 1000).toISOString().slice(0, 10)}`
+          : 'no wallet grants live');
+      }
+      await ctx.reply(lines.join('\n'));
+      return;
+    }
 
     if (/^0x[0-9a-fA-F]{64}$/.test(arg)) {
       const res = await creditPayment(arg);
@@ -1875,6 +1925,53 @@ export function createBot(token = TELEGRAM_BOT_TOKEN): Bot {
   bot.command('license', async (ctx) => {
     const userId = ctx.from?.id;
     if (userId === undefined) return;
+    const lparts = (ctx.match ?? '').toString().trim().split(/\s+/).filter(Boolean);
+    const lsub = lparts[0]?.toLowerCase();
+
+    // A licence an admin hands to a group, with a date it lapses. The bought
+    // licence in `licences` is untouched: this is checked alongside it, and a
+    // group that holds one keeps it when the grant runs out.
+    if (lsub === 'grant' || lsub === 'ungrant') {
+      if (!isAdmin(userId)) return;
+      const target = lparts[1] ?? (ctx.chat?.id !== undefined ? String(ctx.chat.id) : '');
+      if (lsub === 'ungrant') {
+        await ctx.reply(revokeAccessGrant('chat', target)
+          ? `${target}: licence grant removed`
+          : 'no licence grant on that chat');
+        return;
+      }
+      const days = Number((lparts[2] ?? '').replace(/d$/i, ''));
+      const res = grantAccess('chat', target, days, userId, 'admin');
+      if (!res.ok) {
+        await ctx.reply(res.reason === 'subject'
+          ? '/license grant <chat id> <days>'
+          : `days has to be a number from 1 to ${MAX_GRANT_DAYS}`);
+        return;
+      }
+      await ctx.reply(`${res.grant.subject}: licensed ${res.extended ? 'for longer, ' : ''}`
+        + `until ${new Date(res.grant.expiresAt * 1000).toISOString().slice(0, 10)}`);
+      return;
+    }
+
+    if (lsub === 'status') {
+      const chatId = ctx.chat?.id;
+      const here = chatId === undefined ? null : groupLicensed(chatId);
+      const g = chatId === undefined ? null : activeGrant('chat', String(chatId));
+      const lines = ctx.chat?.type === 'private'
+        ? ['/license status in the group you want to check']
+        : [here?.licensed
+            ? (here.via === 'holder' ? 'licensed by a holder' : grantLine(g)!)
+            : 'not licensed'];
+      if (isAdmin(userId)) {
+        const live = liveGrants('chat');
+        lines.push('', live.length
+          ? `${live.length} licence grant${live.length === 1 ? '' : 's'} live, soonest ${new Date(live[0]!.expiresAt * 1000).toISOString().slice(0, 10)}`
+          : 'no licence grants live');
+      }
+      await ctx.reply(lines.join('\n'));
+      return;
+    }
+
     if (ctx.chat?.type === 'private') {
       const row = db.prepare('SELECT chat_id FROM licences WHERE user_id = ?').get(userId) as { chat_id: number } | undefined;
       await ctx.reply(row ? 'your licence is active in one group' : 'run /license in the group you want to license');
