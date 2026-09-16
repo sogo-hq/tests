@@ -17,18 +17,18 @@ import { checkSponsorText, sponsorLine, resetSponsor, MAX_SPONSOR_LEN } from '..
 
 const accept = (line) => {
   const r = checkSponsorText(line);
-  assert.ok(r.ok, `rejected a legitimate line — ${r.reason}\n  ${line}`);
+  assert.ok(r.ok, `rejected a legitimate line: ${r.reason}\n  ${line}`);
 };
 const reject = (line, why) => {
   const r = checkSponsorText(line);
-  assert.equal(r.ok, false, `accepted "${line}" — it ${why}`);
+  assert.equal(r.ok, false, `accepted "${line}": it ${why}`);
 };
 
 test('a token may be NAMED with a word it may not be PROMISED with', () => {
   // The spec's own example. $MOON is a subject; "will moon" is a claim.
-  accept('ad · $MOON is live on pons — scan it: 0xd5f1…');
-  accept('ad · $GEM just launched on pons — scan it');
-  accept('ad · $APE is live on pons — scan it');
+  accept('ad · $MOON is live on pons · scan it: 0xd5f1…');
+  accept('ad · $GEM just launched on pons · scan it');
+  accept('ad · $APE is live on pons · scan it');
   reject('ad · $TOKEN is going to moon', 'promises a direction');
   reject('ad · this one is a gem', 'calls it a gem');
   reject('ad · ape into $TOKEN', 'says ape');
@@ -37,10 +37,10 @@ test('a token may be NAMED with a word it may not be PROMISED with', () => {
 test('it points at a scan, never at a buy', () => {
   for (const [line, why] of [
     ['ad · buy $TOKEN now on pons', 'says buy'],
-    ['ad · $TOKEN — don\'t miss this', 'says do not miss'],
+    ['ad · $TOKEN · don\'t miss this', 'says do not miss'],
     ['ad · $TOKEN, dont miss it', 'says dont miss'],
     ['ad · $TOKEN is pumping right now', 'says pumping'],
-    ['ad · $TOKEN — send it', 'says send it'],
+    ['ad · $TOKEN · send it', 'says send it'],
     ['ad · $TOKEN did 100x since launch', 'states a multiple'],
     ['ad · $TOKEN 2.5x today', 'states a multiple'],
   ]) reject(line, why);
@@ -48,14 +48,14 @@ test('it points at a scan, never at a buy', () => {
 
 test('no percentage and no price', () => {
   for (const [line, why] of [
-    ['ad · $TOKEN is 40% to graduation — scan it', 'states a percentage'],
-    ['ad · $TOKEN up 12 percent — scan it', 'states a percentage'],
-    ['ad · $TOKEN at $0.004 — scan it', 'states a price'],
-    ['ad · $TOKEN has 1.7 ETH in the curve — scan it', 'states a price'],
-    ['ad · $TOKEN mcap is climbing — scan it', 'talks about market cap'],
+    ['ad · $TOKEN is 40% to graduation · scan it', 'states a percentage'],
+    ['ad · $TOKEN up 12 percent · scan it', 'states a percentage'],
+    ['ad · $TOKEN at $0.004 · scan it', 'states a price'],
+    ['ad · $TOKEN has 1.7 ETH in the curve · scan it', 'states a price'],
+    ['ad · $TOKEN mcap is climbing · scan it', 'talks about market cap'],
   ]) reject(line, why);
   // The ticker's dollar sign is not a price.
-  accept('ad · $MOON is live on pons — scan it');
+  accept('ad · $MOON is live on pons · scan it');
 });
 
 test('shape limits: one line, bounded', () => {
@@ -64,7 +64,7 @@ test('shape limits: one line, bounded', () => {
   assert.equal(checkSponsorText('   ').ok, false, 'blank is not a line');
 });
 
-test('nothing configured renders nothing at all — no line, no gap', async () => {
+test('nothing configured renders nothing at all · no line, no gap', async () => {
   const saved = process.env.SPONSOR_LINE;
   try {
     delete process.env.SPONSOR_LINE;
@@ -95,13 +95,13 @@ test('a rejected line renders nothing rather than something', () => {
 test('an addressless line is live immediately, and read at send time', () => {
   const saved = process.env.SPONSOR_LINE;
   try {
-    process.env.SPONSOR_LINE = 'ad · $MOON is live on pons — scan it';
+    process.env.SPONSOR_LINE = 'ad · $MOON is live on pons · scan it';
     resetSponsor();
-    assert.equal(sponsorLine(), 'ad · $MOON is live on pons — scan it');
+    assert.equal(sponsorLine(), 'ad · $MOON is live on pons · scan it');
 
     // Changed without a deploy: the next read picks it up.
-    process.env.SPONSOR_LINE = 'ad · $OTHER is live on pons — scan it';
-    assert.equal(sponsorLine(), 'ad · $OTHER is live on pons — scan it');
+    process.env.SPONSOR_LINE = 'ad · $OTHER is live on pons · scan it';
+    assert.equal(sponsorLine(), 'ad · $OTHER is live on pons · scan it');
 
     // And a change to something forbidden takes it down again.
     process.env.SPONSOR_LINE = 'ad · buy $OTHER';
@@ -123,11 +123,11 @@ test('a full address is held back until the factory confirms it', async () => {
       const b = JSON.parse(init.body);
       asked++;
       // eth_call returning a struct with exists=false is fiddly to encode; the
-      // decode failing is enough — an unverifiable address must not render.
+      // decode failing is enough · an unverifiable address must not render.
       return new Response(JSON.stringify({ jsonrpc: '2.0', id: b.id, result: '0x' }),
         { headers: { 'content-type': 'application/json' } });
     };
-    process.env.SPONSOR_LINE = `ad · $TOKEN is live on pons — scan it: ${real}`;
+    process.env.SPONSOR_LINE = `ad · $TOKEN is live on pons · scan it: ${real}`;
     resetSponsor();
 
     // Synchronous first read must NOT render it: the chain has not answered.
@@ -155,12 +155,12 @@ test('the sponsor sits second from last, and the disclaimer is always last', asy
   const { makeScan } = await import('./fixtures.mjs');
   const saved = process.env.SPONSOR_LINE;
   try {
-    process.env.SPONSOR_LINE = 'ad · $MOON is live on pons — scan it';
+    process.env.SPONSOR_LINE = 'ad · $MOON is live on pons · scan it';
     resetSponsor();
     const lines = renderDefaultCard(makeScan({}), 'vitalscheck_bot').split('\n');
     assert.equal(lines[lines.length - 1], '@vitalscheck_bot · @vitalsofficial · not financial advice',
       'whatever was paid for, it does not get the last word');
-    assert.equal(lines[lines.length - 2], 'ad · $MOON is live on pons — scan it');
+    assert.equal(lines[lines.length - 2], 'ad · $MOON is live on pons · scan it');
     assert.match(lines[lines.length - 3], /no finding ≠ clean/,
       'the doctrine line sits above the paid one');
 
@@ -199,7 +199,7 @@ test('the same line reaches the image, and the image footer is clickable-free', 
   const { makeScan } = await import('./fixtures.mjs');
   const saved = process.env.SPONSOR_LINE;
   try {
-    process.env.SPONSOR_LINE = 'ad · $MOON is live on pons — scan it';
+    process.env.SPONSOR_LINE = 'ad · $MOON is live on pons · scan it';
     resetSponsor();
     const svg = cardSvg(makeScan({}));
     const drawn = [...svg.matchAll(/<text[^>]*>([^<]*)<\/text>/g)].map((m) => m[1]);
@@ -225,7 +225,7 @@ test('one line, identical on every card', async () => {
     ({ key: k, label: k, state, detail: k, compactDetail: k, plain, severity: sev });
   const saved = process.env.SPONSOR_LINE;
   try {
-    process.env.SPONSOR_LINE = 'ad · $MOON is live on pons — scan it';
+    process.env.SPONSOR_LINE = 'ad · $MOON is live on pons · scan it';
     resetSponsor();
     // Wildly different cards: clean, alarming, undetermined, graduated.
     const cards = [
@@ -235,7 +235,7 @@ test('one line, identical on every card', async () => {
       makeScan({ buyers: 0, roundTrippers: 0, phaseName: 'Graduated' }),
     ].map((r) => renderDefaultCard(r, 'b').split('\n').find((l) => l.startsWith('ad ·')));
     assert.equal(new Set(cards).size, 1, `the paid line varied by card: ${JSON.stringify(cards)}`);
-    assert.equal(cards[0], 'ad · $MOON is live on pons — scan it');
+    assert.equal(cards[0], 'ad · $MOON is live on pons · scan it');
   } finally {
     if (saved === undefined) delete process.env.SPONSOR_LINE; else process.env.SPONSOR_LINE = saved;
     resetSponsor();
@@ -261,7 +261,7 @@ test('a change reaches the next card, not the next minute', async () => {
     assert.doesNotMatch(scanCache.get(token).defaultCard, /\bad ·/);
 
     // A sponsor arrives. The cached card is now the wrong card.
-    process.env.SPONSOR_LINE = 'ad · $MOON is live on pons — scan it';
+    process.env.SPONSOR_LINE = 'ad · $MOON is live on pons · scan it';
     resetSponsor();
     sponsorLine();
     assert.equal(scanCache.get(token), null,
@@ -270,5 +270,15 @@ test('a change reaches the next card, not the next minute', async () => {
     scanCache.drop(token);
     if (saved === undefined) delete process.env.SPONSOR_LINE; else process.env.SPONSOR_LINE = saved;
     resetSponsor();
+  }
+});
+
+test('an em dash is refused: an accepted line is printed as it was written', () => {
+  const EM = String.fromCharCode(0x2014);
+  const EN = String.fromCharCode(0x2013);
+  for (const dash of [EM, EN]) {
+    const r = checkSponsorText(`ad · $MOON is live on pons ${dash} scan it`);
+    assert.equal(r.ok, false, `a ${dash === EM ? 'em' : 'en'} dash was accepted`);
+    assert.match(r.reason, /dash this bot does not print/);
   }
 });

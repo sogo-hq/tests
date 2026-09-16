@@ -109,7 +109,7 @@ function strongestSignal(
 
 
 // ---------------------------------------------------------------------------
-// Early mode — under EARLY_WINDOW_SECONDS old
+// Early mode: under EARLY_WINDOW_SECONDS old
 // ---------------------------------------------------------------------------
 
 /** Exact seconds, because at this age "1m" would throw away the useful part. */
@@ -596,7 +596,7 @@ export function headerMcap(r: ScanResult): string | null {
   return `${compactAmount(v)} ${unit} mc`;
 }
 
-/** 0.42, 1.7, 12, 340, 5.2K, 1.1M — two significant figures of scale, no more. */
+/** 0.42, 1.7, 12, 340, 5.2K, 1.1M: two significant figures of scale, no more. */
 export function compactAmount(v: number): string {
   const abs = Math.abs(v);
   if (abs >= 1_000_000) return `${trimZeros((v / 1_000_000).toFixed(1))}M`;

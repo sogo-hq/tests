@@ -47,7 +47,7 @@ export class PhaseTimer {
     );
   }
 
-  /** `reads=656 trades=120 concentration=2000` — ordered as they ran. */
+  /** `reads=656 trades=120 concentration=2000`, ordered as they ran. */
   breakdown(): string {
     return this.phases.map((p) => `${p.name}=${p.ms}`).join(' ');
   }

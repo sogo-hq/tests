@@ -47,13 +47,14 @@ const at = (chatType, text) => ({
     ...(text.startsWith('/') ? { entities: [{ type: 'bot_command', offset: 0, length: text.split(' ')[0].length }] } : {}),
   },
 });
-// The one-time legend follows a first DM and would displace the message under
-// test; it has its own file.
-const isLegend = (x) => /^\u{1F6A9} a finding —/u.test(x.payload?.text ?? '');
+// The one-time legend has its own file. It used to be filtered out here by a
+// helper matching a first line that had since changed, so the filter matched
+// nothing and every assertion below was already written against the unfiltered
+// calls. Removed rather than repaired: two of them read the legend itself.
 const send = async (chatType, text) => {
   calls.length = 0;
   await bot.handleUpdate(at(chatType, text));
-  return calls.filter((x) => !isLegend(x));
+  return calls;
 };
 
 test('/declare in a group points at the DM and does nothing else', async () => {
@@ -171,7 +172,7 @@ test('the launch notice ends /start and /legend, once per user', async () => {
   const other = { ...at('private', '/legend') };
   other.message.from = { id: 9999, is_bot: false, first_name: 'V' };
   await bot.handleUpdate(other);
-  assert.ok(calls.filter((x) => !isLegend(x))[0].payload.text.endsWith(LINE));
+  assert.ok(calls[0].payload.text.endsWith(LINE));
 
   delete process.env.LAUNCH_NOTICE;
   N.resetLaunchNotice();

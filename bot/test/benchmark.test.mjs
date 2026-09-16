@@ -218,7 +218,7 @@ test('measuredAtAge is true only while the window is the token\'s whole life', (
 
 test('a malformed sample floor falls back rather than switching the floor off', () => {
   const out = inTempDb(`console.log(String(MIN_BENCHMARK_SAMPLES));`, { MIN_BENCHMARK_SAMPLES: 'not-a-number' });
-  assert.equal(out.trim(), '30', 'Number("not-a-number") is NaN and n < NaN is false — the floor would vanish');
+  assert.equal(out.trim(), '30', 'Number("not-a-number") is NaN and n < NaN is false, so the floor would vanish');
 });
 
 test('a buyer is the wallet that ends up holding, not the sender', () => {

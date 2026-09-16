@@ -77,6 +77,15 @@ const TICKER_RE = /\$[A-Za-z][A-Za-z0-9_]{0,15}\b/g;
 export const MAX_SPONSOR_LEN = 120;
 
 /**
+ * The dashes this bot does not print, by code point.
+ *
+ * Written as code points rather than as characters or escapes because the
+ * guard that keeps them out of the source would otherwise flag this line,
+ * which is the line that keeps them out of the product.
+ */
+const LONG_DASHES = [0x2013, 0x2014].map((c) => String.fromCharCode(c));
+
+/**
  * Blank out the things a line is allowed to NAME before checking what it SAYS.
  *
  * Without this, a sponsor called $MOON could never be named, and an address
@@ -102,6 +111,13 @@ export function checkSponsorText(raw: string): SponsorCheck {
     return { ok: false, reason: `longer than ${MAX_SPONSOR_LEN} characters`, addresses };
   }
   if (/[\n\r]/.test(line)) return { ok: false, reason: 'contains a line break', addresses };
+  // The one surface where user-facing bot text is written by somebody else.
+  // The house rule against em dashes is enforced here or not at all: an
+  // accepted line is rendered as it was submitted.
+  const dash = LONG_DASHES.find((d) => line.includes(d));
+  if (dash) {
+    return { ok: false, reason: 'contains a dash this bot does not print. use a colon or a middle dot', addresses };
+  }
 
   const subject = maskSubjects(line);
   for (const re of BANNED) {
