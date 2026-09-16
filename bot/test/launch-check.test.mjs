@@ -130,16 +130,42 @@ test('a pair other than ETH and a config other than 0 both fail', () => {
 
 // ------------------------------------------------------------- exemptions
 
-test('exemptions are the deployer alone', () => {
-  const r = row(checkConfig(GOOD, CURVE), 'extraExemptions');
+test('exemptions are the deployer alone, counted as the union of the slots', () => {
+  const rows = checkConfig(GOOD, CURVE);
+  const r = row(rows, 'tax free at launch');
   assert.equal(r.verdict, 'pass');
-  assert.match(r.note, /deployer alone/);
+  assert.equal(r.value, '1 wallet');
+  // Three events, one wallet: the sender, the creatorFeeRecipient and the
+  // opening-buy recipient are all 0x447c on this config.
+  assert.match(r.note, /the deployer alone, from 3 events/);
+  assert.equal(row(rows, 'extraExemptions').verdict, 'pass');
+});
+
+test('a creatorFeeRecipient that is somebody else is a second exempt wallet', () => {
+  // The case the array length cannot see: nothing is added to extraExemptions
+  // and a second wallet goes tax free anyway.
+  const other = '0x' + '11'.repeat(20);
+  const rows = checkConfig(clone({ creatorFeeRecipient: other }), CURVE);
+  const r = row(rows, 'tax free at launch');
+  assert.equal(r.verdict, 'fail');
+  assert.equal(r.value, '2 wallets');
+  assert.match(r.note, new RegExp(other));
+  assert.match(r.note, /would be tax free besides the deployer/);
+});
+
+test('a recipient that is somebody else is a second exempt wallet too', () => {
+  const other = '0x' + '22'.repeat(20);
+  const r = row(checkConfig(clone({ recipient: other }), CURVE), 'tax free at launch');
+  assert.equal(r.verdict, 'fail');
+  assert.equal(r.value, '2 wallets');
 });
 
 test('one extra exempt wallet fails and is counted', () => {
-  const r = row(checkConfig(clone({ extraExemptions: ['0x' + '11'.repeat(20)] }), CURVE), 'extraExemptions');
+  const rows = checkConfig(clone({ extraExemptions: ['0x' + '11'.repeat(20)] }), CURVE);
+  assert.equal(row(rows, 'extraExemptions').verdict, 'fail');
+  const r = row(rows, 'tax free at launch');
   assert.equal(r.verdict, 'fail');
-  assert.match(r.note, /1 wallet beyond the deployer/);
+  assert.equal(r.value, '2 wallets');
 });
 
 // ---------------------------------------------------------------- socials

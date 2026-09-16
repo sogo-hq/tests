@@ -2,7 +2,7 @@
  * A card that arrives after the decision is worth nothing.
  *
  * Holder concentration put a whole-life Transfer read on the critical path and
- * scans went from 1.1s to 56s on a busy token — 9,001 logs across four million
+ * scans went from 1.1s to 56s on a busy token, 9,001 logs across four million
  * blocks. A tester read the delay as the bot being broken rather than slow, and
  * they were right to: nobody waits a minute on a launch.
  *
@@ -24,7 +24,7 @@ const MIN_HOLDERS = Number(process.env.LATENCY_MIN_HOLDERS || 300);
  * The token this regression was found on: 206 holders and 9,001 Transfer logs
  * across four million blocks, which is what a whole-life read costs. Named
  * rather than discovered, so the suite works against a fresh database like
- * every other live suite here — discovering it from holder_snapshots meant the
+ * every other live suite here, discovering it from holder_snapshots meant the
  * test only ran when something else had already warmed the index, which is to
  * say it did not run.
  */
@@ -48,7 +48,7 @@ const SUBJECT = process.env.LATENCY_TOKEN || '0x2ca41249485eb6f71981872461d0fca3
 const biggest = db
   .prepare('SELECT token, holders FROM holder_snapshots WHERE token = ?')
   .get(SUBJECT.toLowerCase());
-assert.ok(biggest, 'the first reading recorded nothing — cannot measure what it costs to serve');
+assert.ok(biggest, 'the first reading recorded nothing, cannot measure what it costs to serve');
 
 if (biggest.holders < MIN_HOLDERS) {
   // Stated, never skipped silently: a latency ceiling asserted against a
@@ -59,7 +59,7 @@ if (biggest.holders < MIN_HOLDERS) {
     `        Asserting against it anyway; set LATENCY_TOKEN to a heavier one.`,
   );
 }
-console.log(`  token ${biggest.token.slice(0, 12)}… — ${biggest.holders} holders`);
+console.log(`  token ${biggest.token.slice(0, 12)}…, ${biggest.holders} holders`);
 
 let uid = 900_000;
 async function timed(label) {
@@ -86,7 +86,7 @@ async function timed(label) {
     const { ms, result } = await timed('cold');
     assert.ok(
       ms < SCAN_BUDGET_MS,
-      `cold scan took ${ms}ms, over the ${SCAN_BUDGET_MS}ms ceiling — phases: ${result.phases ?? 'n/a'}`,
+      `cold scan took ${ms}ms, over the ${SCAN_BUDGET_MS}ms ceiling, phases: ${result.phases ?? 'n/a'}`,
     );
     ok(`cold scan (no stored reading, live read bounded): ${ms}ms`);
   } finally {
@@ -111,8 +111,8 @@ async function timed(label) {
 // is about this code. `readToken` is seventeen parallel eth_calls and the node
 // serves them in anywhere from 0.9s to 5.8s depending on its own load; asserting
 // a wall-clock ceiling on every scan therefore tests the node. What this code
-// controls is everything else — whether a completed trade window is re-indexed,
-// whether holder concentration blocks — and that is asserted exactly, per scan.
+// controls is everything else, whether a completed trade window is re-indexed,
+// whether holder concentration blocks, and that is asserted exactly, per scan.
 {
   const runs = [];
   for (let i = 0; i < 4; i++) runs.push(await timed(`repeat ${i + 1}`));
@@ -124,7 +124,7 @@ async function timed(label) {
     );
     // Everything the scan does apart from waiting on the node's own reads.
     const ours = ms - (phases.reads ?? 0);
-    assert.ok(ours < 1_500, `${ours}ms of scan overhead outside reads — phases: ${result.phases}`);
+    assert.ok(ours < 1_500, `${ours}ms of scan overhead outside reads, phases: ${result.phases}`);
     assert.equal(phases.trades ?? 0, 0, `a completed window was re-indexed: ${result.phases}`);
     assert.ok(!/concentration=/.test(result.phases ?? ''), `concentration blocked the card: ${result.phases}`);
   }
@@ -136,7 +136,7 @@ async function timed(label) {
     median < SCAN_BUDGET_MS,
     `median of four consecutive scans was ${median}ms: ${times.join(', ')}`,
   );
-  ok(`four consecutive scans: ${times.join('ms, ')}ms — median ${median}ms, overhead outside reads under 1.5s each`);
+  ok(`four consecutive scans: ${times.join('ms, ')}ms, median ${median}ms, overhead outside reads under 1.5s each`);
 }
 
 // --- 4. the breakdown is in the log ----------------------------------------

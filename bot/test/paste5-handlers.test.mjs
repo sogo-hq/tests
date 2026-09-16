@@ -88,7 +88,7 @@ test('/numbers from an admin sends a PNG with the caption', async () => {
   assert.equal(c[0].method, 'sendPhoto');
   assert.match(c[0].payload.caption, /daily numbers/);
   assert.match(c[0].payload.caption, /launches indexed/);
-  assert.doesNotMatch(c[0].payload.caption, /—/);
+  assert.doesNotMatch(c[0].payload.caption, new RegExp(String.fromCharCode(0x2014)));
 });
 
 test('/stats tax reaches the tax text, /stats the plain one', async () => {
@@ -105,7 +105,7 @@ test('none of the three prints a verdict word or an em dash', async () => {
     const c = await send(t, from, DM(from));
     for (const x of c) {
       const s = x.payload.text ?? x.payload.caption ?? '';
-      assert.doesNotMatch(s, /\bclean\b|\bsafe\b|looks good|—|!/, `${t}: ${s.slice(0, 80)}`);
+      assert.doesNotMatch(s, new RegExp(`\\bclean\\b|\\bsafe\\b|looks good|${String.fromCharCode(0x2014)}|!`), `${t}: ${s.slice(0, 80)}`);
     }
   }
 });

@@ -51,8 +51,8 @@ assert.doesNotMatch(full, /progress velocity/i, '/full printed progress velocity
 // the default card carries no traction verdict at any age -- the label was the
 // problem, and it is gone from this shape entirely
 assert.doesNotMatch(compact, /traction/i, 'the default card names traction at all');
-assert.match(full, new RegExp(`launched ${r.ageSeconds}s ago — too early for traction`));
-assert.match(full, /traction unavailable — the snipe tax window is still open\. re-scan in 2 minutes\./);
+assert.match(full, new RegExp(`launched ${r.ageSeconds}s ago, too early for traction`));
+assert.match(full, /traction unavailable, the snipe tax window is still open\. re-scan in 2 minutes\./);
 // The header carries the market cap after the age when the curve can be read,
 // and nothing when it cannot -- so the age is no longer the last field.
 assert.match(
@@ -82,7 +82,7 @@ ok(`inline description carries no traction verdict: "${d}"`);
 // ---- what it stored --------------------------------------------------------
 const row = db.prepare('SELECT * FROM scans WHERE id = ?').get(r.scanId);
 assert.ok(row, 'scan row written');
-assert.equal(row.traction, 'early', `traction column was ${JSON.stringify(row.traction)} — check INSERT column alignment`);
+assert.equal(row.traction, 'early', `traction column was ${JSON.stringify(row.traction)}, check INSERT column alignment`);
 for (const col of [
   'unique_buyers_30m', 'unique_buyers_10m', 'buyer_growth_ratio', 'buy_tx_count',
   'sell_tx_count', 'buy_sell_ratio', 'median_buy_size', 'progress_pct',
@@ -90,7 +90,7 @@ for (const col of [
 ]) {
   assert.equal(row[col], null, `${col} must be NULL for an early scan, was ${JSON.stringify(row[col])}`);
 }
-ok('every traction column stored NULL, label stored "early" — not a measured-looking zero');
+ok('every traction column stored NULL, label stored "early", not a measured-looking zero');
 
 // columns that ARE known at this age must still be populated, which also proves
 // the INSERT did not shift
@@ -101,7 +101,7 @@ assert.equal(row.flags_raised, r.flags.raised, 'flags_raised intact');
 assert.equal(row.creator_tax_bps, r.reads.creatorTaxBps, 'creator_tax_bps intact');
 assert.ok(row.scanned_at > 0 && row.launched_at > 0, 'timestamps intact');
 assert.equal(row.age_seconds, r.ageSeconds, 'age_seconds intact');
-ok('all creation- and index-derived columns intact — no column shift in the 37-column INSERT');
+ok('all creation- and index-derived columns intact, no column shift in the 37-column INSERT');
 
 // ---- rechecks were still scheduled ----------------------------------------
 const rechecks = db.prepare('SELECT COUNT(*) n FROM rechecks WHERE scan_id = ?').get(r.scanId).n;
@@ -140,7 +140,7 @@ ok('an early scan still queues its +1h/+6h/+24h/+7d rechecks');
   assert.ok(answer, 'inline query was not answered');
   const expected = Math.max(1, Math.floor(EARLY_CACHE_TTL_MS / 1000));
   assert.equal(answer.payload.cache_time, expected,
-    `early inline answer cache_time was ${answer.payload.cache_time}s, expected ${expected}s — 60s would keep serving a stale "launched Ns ago" to every user`);
+    `early inline answer cache_time was ${answer.payload.cache_time}s, expected ${expected}s, 60s would keep serving a stale "launched Ns ago" to every user`);
   const text = answer.payload.results[0].input_message_content.message_text;
   // inline sends the same default card as every other surface
   assert.match(text, /^VITALS  /, `inline message_text was: ${text.split('\n')[0]}`);
@@ -161,7 +161,7 @@ ok('an early scan still queues its +1h/+6h/+24h/+7d rechecks');
   }
   const added = db.prepare('SELECT COUNT(*) n FROM scans').get().n - before;
   const addedRechecks = db.prepare('SELECT COUNT(*) n FROM rechecks WHERE token = ?').get(r.reads.token.toLowerCase()).n - beforeRechecks;
-  assert.equal(added, 0, `5 early re-scans added ${added} extra scans rows — the table this product is built on must not fill with all-NULL duplicates`);
+  assert.equal(added, 0, `5 early re-scans added ${added} extra scans rows, the table this product is built on must not fill with all-NULL duplicates`);
   assert.equal(addedRechecks, 0, `5 early re-scans queued ${addedRechecks} extra rechecks`);
   assert.equal(ids.size, 1, 'every early re-scan reuses the first row');
   ok('5 early re-scans reused one row and queued no extra rechecks');

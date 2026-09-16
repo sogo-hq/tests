@@ -7,7 +7,7 @@ import { join } from 'node:path';
 
 /**
  * The decode loop retried every undecoded row on every pass, forever, at nought
- * percent success — 11,966 rows re-fetched every fifteen seconds against a
+ * percent success, 11,966 rows re-fetched every fifteen seconds against a
  * rate-limited node the scan path competes for. Sampling sixty of them found
  * eight distinct unknown selectors and one that is constructor bytecode rather
  * than a call at all, so this is a long tail of launch contracts with no ABI
@@ -94,7 +94,7 @@ test('an exhausted row is out of the queue, not answered', async () => {
   assert.equal(r.backlog.pending, 0);
   assert.equal(r.backlog.exhausted, 3);
   for (const row of r.rows) {
-    assert.equal(row.c, null, 'the exemption count stays NULL — undetermined, never a clean zero');
+    assert.equal(row.c, null, 'the exemption count stays NULL, undetermined, never a clean zero');
     assert.equal(row.a, 2);
   }
 });
@@ -102,7 +102,7 @@ test('an exhausted row is out of the queue, not answered', async () => {
 test('exhausted rows never unlock an index-derived negative', async () => {
   // The collision check refuses to say "no match" until enough DECODED rows
   // exist. Rows given up on must not count toward that, or giving up on the
-  // retry would quietly convert undetermined into clean — the one failure mode
+  // retry would quietly convert undetermined into clean, the one failure mode
   // this product exists to avoid.
   const out = inTempDb(`
     for (let i = 1; i <= 60; i++) launch(i);

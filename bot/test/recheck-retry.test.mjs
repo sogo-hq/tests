@@ -52,7 +52,7 @@ test('a rate-limited recheck is re-armed, not marked complete', async () => {
     limiting = false;
   }
   const row = rowOf(id);
-  assert.equal(row.completed_at, null, 'a limit must not file the recheck as done — the observation is lost forever');
+  assert.equal(row.completed_at, null, 'a limit must not file the recheck as done, the observation is lost forever');
   assert.equal(row.attempts, 1, 'the attempt must be counted so it cannot retry forever');
   assert.ok(row.due_at > now, `due_at must move forward, got ${row.due_at} vs ${now}`);
   assert.ok(row.error, 'the reason is still recorded');

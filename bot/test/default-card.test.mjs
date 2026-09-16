@@ -78,7 +78,7 @@ test('more than three raised flags adds "+N more"', () => {
   assert.equal(roles.filter((x) => x === 'concern-top').length, 1, 'exactly one is lifted');
 });
 
-test('undetermined is never hidden — with flags raised or without', () => {
+test('undetermined is never hidden, with flags raised or without', () => {
   const withRaised = makeScan({ flags: [
     f('a', 'raised one', 90), f('u1', 'x', 5, 'unknown'), f('u2', 'y', 5, 'unknown'),
   ]});
@@ -137,7 +137,7 @@ test('metadata the default card must not carry', () => {
 
 // ------------------------------------------------------ built to be forwarded
 test('plain text: no tags, no HTML entities, survives a copy-paste', () => {
-  // an ampersand must appear as itself, not as &amp; — the card is copied out of
+  // an ampersand must appear as itself, not as &amp;, the card is copied out of
   // Telegram and pasted elsewhere, and an entity there is a visible artefact
   const r = makeScan({ symbol: 'A&B', flags: [f('a', 'x & y', 90)] });
   const text = renderDefaultCard(r, 'vitalscheck_bot');
@@ -270,7 +270,7 @@ test('the worst concern gets its own line, its own marker, and room under it', (
   assert.ok(i > 0, `the worst concern is not lifted:\n${lines.join('\n')}`);
   assert.equal(lines[i + 1], '', 'a blank line under it is what does the lifting');
   assert.equal(lines[i + 2], '\u{1F6A9} creator takes 3% of every trade',
-    'the rest carry the same marker — one state, one symbol; the lifting is the blank above');
+    'the rest carry the same marker, one state, one symbol; the lifting is the blank above');
 });
 
 test('one concern is the top one, with nothing below it', () => {
@@ -291,7 +291,7 @@ test('exactly one concern is ever lifted, at any count', () => {
     assert.equal(top.length, 1, `${n} concerns lifted ${top.length}`);
     assert.equal(top[0].text, '\u{1F6A9} finding 0', 'and it is the highest severity');
     assert.equal(lines.filter((l) => l.startsWith('\u26a0\ufe0f')).length, 0,
-      'the old warning glyph is gone — three states, three symbols, no fourth');
+      'the old warning glyph is gone, three states, three symbols, no fourth');
   }
 });
 
@@ -327,7 +327,7 @@ test('the header carries the market cap, in the asset the launch is priced in', 
   assert.equal(
     head({ symbol: 'NPC', ageSeconds: 158400, mcapInQuote: 57000, pairSymbol: 'NVDA' }),
     'VITALS  $NPC · 44h · 57K NVDA mc',
-    'priced in a tokenised equity, and said so — there is no stablecoin pair on this chain to read dollars from',
+    'priced in a tokenised equity, and said so, there is no stablecoin pair on this chain to read dollars from',
   );
 });
 

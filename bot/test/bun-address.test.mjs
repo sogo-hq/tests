@@ -1,7 +1,7 @@
 /**
  * The address a tester reported as a broken scan.
  *
- * Reported as: "$BUN, Bundle Cat, graduated V2, ~$36M MC — pasted the token
+ * Reported as: "$BUN, Bundle Cat, graduated V2, ~$36M MC, pasted the token
  * address and got 'not a pons v2 launch'." Measured against chain 4663:
  *
  *   0x232f26fF2C2F4CB6F548eF1Be7e817bdb4C397cd

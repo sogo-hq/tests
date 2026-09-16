@@ -118,7 +118,7 @@ test('a curve the index has not seen resolves by asking the contract', async () 
   } finally { globalThis.fetch = saved; }
 });
 
-test('the factory keeps the final say — no launch is ever invented', async () => {
+test('the factory keeps the final say, no launch is ever invented', async () => {
   // A contract with a token() getter pointing at something the factory denies.
   // Accepting it would assert a pons launch that the authoritative registry
   // says does not exist, which is the false positive this must never produce.
@@ -165,7 +165,7 @@ test('a factory read that FAILS is never rendered as "no launch"', async () => {
     if (body.method !== 'eth_call') return reply({ result: '0x' });
     const to = body.params[0].to.toLowerCase();
     if (to === '0x7ed598bcef8bd9edd8c97a195c6d13f40801ec7e') {
-      // The factory is unreachable. Not an answer — an absence of one.
+      // The factory is unreachable. Not an answer, an absence of one.
       factoryCalls++;
       return new Response('upstream connect error', { status: 502 });
     }

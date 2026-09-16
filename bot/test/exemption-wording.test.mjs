@@ -77,12 +77,25 @@ test('an undecodable creation is still undetermined, and never clean', () => {
   assert.match(f.plain, /tax-free wallets unknown/);
 });
 
-test('a zero from the events is a real zero, and common', () => {
-  // 139 of 420 sampled launches exempted nobody at all, so this is a third of
-  // the chain, not an anomaly worth flagging.
+test('a zero is impossible, so it reads as a read that did not finish', () => {
+  // The factory exempts four slots: the sender, the creatorFeeRecipient, the
+  // opening-buy recipient and every entry of the exemptions array. Measured
+  // through eth_simulateV1 with a distinct address in each, and against
+  // fourteen real receipts the index had stored as zero, every one of which
+  // had exempted its deployer. The earlier "a third of the chain exempted
+  // nobody" reading counted the calldata array, which names none of the first
+  // three slots.
   const f = flagFor(0, 'logs');
+  assert.equal(f.state, 'unknown');
+  assert.match(f.plain, /undetermined/);
+  assert.doesNotMatch(f.plain, /nobody/);
+  assert.equal(f.value, null, 'a count that cannot be true must not be published as a value');
+});
+
+test('one exempt wallet is the deployer, and says so', () => {
+  const f = flagFor(1, 'logs');
   assert.equal(f.state, 'clean');
-  assert.equal(f.plain, 'nobody got in tax-free at launch');
+  assert.match(f.plain, /the deployer only/);
 });
 
 test('"0 of 32" can never be produced, at any count or source', () => {

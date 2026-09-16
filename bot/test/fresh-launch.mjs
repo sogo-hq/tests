@@ -29,7 +29,7 @@ for (let end = head; end > head - 200_000n && !newest; end -= 20_000n) {
   });
   if (logs.length) newest = logs[logs.length - 1];
 }
-assert.ok(newest, 'no launch found in the last 200k blocks — cannot run this check');
+assert.ok(newest, 'no launch found in the last 200k blocks, cannot run this check');
 const token = newest.args.token;
 const ageBlocks = Number(head - newest.blockNumber);
 console.log(`  subject ${token.slice(0, 12)}… launched ${ageBlocks} blocks ago (~${(ageBlocks * 0.1).toFixed(0)}s)`);
@@ -112,7 +112,7 @@ scanCache.drop(token);
   assert.equal(
     r.kind, 'ok',
     `the curve should have placed this launch without the logs, got ${r.kind}` +
-      `${r.kind === 'unreadable' ? ' — the fallback did not fire' : ''}`,
+      `${r.kind === 'unreadable' ? ', the fallback did not fire' : ''}`,
   );
   assert.ok(!NOT_A_LAUNCH.test(r.defaultCard), `card claimed it is not a launch:\n${r.defaultCard}`);
   ok('with the factory logs empty, the curve places the launch and the card renders');

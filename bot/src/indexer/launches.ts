@@ -198,9 +198,15 @@ export async function decodePending(
            -- also repair rows whose exemption count was decoded while the
            -- creator's opening buy was dropped by the old upsert
            OR (entry_point = 'launchAndBuy' AND launch_buy_amount IS NULL)
-           -- and rows counted from calldata alone, which omits the deployer the
-           -- curve exempts automatically: measured one short on 61 of 64
-           OR exemption_source IS NULL)
+           -- and rows counted from calldata alone, which omitted three of the
+           -- four slots the factory exempts: the sender, the creatorFeeRecipient
+           -- and the opening-buy recipient. That counted the exemptions array
+           -- and nothing else, so 3,168 launches were stored as exempting
+           -- nobody when every receipt sampled had exempted its deployer.
+           -- 'calldata' is re-queued too: the old array-only count and the new
+           -- union cannot be told apart by their source alone.
+           OR exemption_source IS NULL
+           OR exemption_source = 'calldata')
        ORDER BY launched_at DESC LIMIT ?`,
     )
     .all(MAX_DECODE_ATTEMPTS, Number.isFinite(limit) ? limit : -1) as { token: string; tx_hash: string; curve: string }[];
@@ -270,7 +276,8 @@ export function decodeBacklog(): { pending: number; exhausted: number } {
   // quietly works for an hour.
   const unresolved = `(snipe_exemption_count IS NULL
       OR (entry_point = 'launchAndBuy' AND launch_buy_amount IS NULL)
-      OR exemption_source IS NULL)`;
+      OR exemption_source IS NULL
+      OR exemption_source = 'calldata')`;
   const q = (where: string, ...params: unknown[]) =>
     (db.prepare(`SELECT COUNT(*) AS n FROM launches WHERE ${where}`).get(...params) as { n: number }).n;
   return {

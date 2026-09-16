@@ -5,7 +5,7 @@
  * had buyers:
  *
  *   VITALS  $BULL · 23d
- *   no buyers yet — median in the first 30 min is 14
+ *   no buyers yet, median in the first 30 min is 14
  *
  * Nothing was broken in the renderer. Its opening window had never been
  * indexed, the count came back zero because there were no rows to count, and

@@ -62,6 +62,31 @@ function reportUndecodable(selector: string, err: unknown): void {
   );
 }
 
+/**
+ * The wallets a launch call will exempt, from the call alone.
+ *
+ * The union, lowercased, in slot order. Duplicates collapse: a config where the
+ * sender is also the fee recipient and the buy recipient exempts one wallet and
+ * emits three events, which is what VITALSRH1 did.
+ */
+export function unionOfSlots(opts: {
+  sender?: string | null;
+  creatorFeeRecipient?: string | null;
+  recipient?: string | null;
+  exemptions?: readonly string[];
+}): string[] {
+  const out: string[] = [];
+  const add = (a?: string | null) => {
+    const v = (a ?? '').trim().toLowerCase();
+    if (/^0x[0-9a-f]{40}$/.test(v) && !out.includes(v)) out.push(v);
+  };
+  add(opts.sender);
+  add(opts.creatorFeeRecipient);
+  add(opts.recipient);
+  for (const a of opts.exemptions ?? []) add(a);
+  return out;
+}
+
 const UNKNOWN: LaunchCalldata = {
   exemptionCount: null,
   exemptions: [],
@@ -93,7 +118,7 @@ const UNKNOWN: LaunchCalldata = {
  * non-zero exemption list there is the creator opening a position across wallets
  * that skip the opening tax.
  */
-export function decodeLaunchCalldata(input: Hex): LaunchCalldata {
+export function decodeLaunchCalldata(input: Hex, sender?: string | null): LaunchCalldata {
   if (!input || input.length < 10) return UNKNOWN;
 
   let selector: Hex;
@@ -111,9 +136,18 @@ export function decodeLaunchCalldata(input: Hex): LaunchCalldata {
     try {
       const d = decodeFunctionData({ abi: launchDecodeAbi, data: input });
       const p = d.args![0] as any;
-      return {
-        exemptionCount: 0,
+      const union = unionOfSlots({
+        sender,
+        creatorFeeRecipient: p?.creatorFeeRecipient as string | undefined,
+        recipient: null,
         exemptions: [],
+      });
+      return {
+        // Never 0. launchToken names no wallets and the factory still exempts
+        // the sender and the creator fee recipient, which is what the receipts
+        // show: fourteen of fourteen launches stored as 0 had emitted one.
+        exemptionCount: sender ? union.length : null,
+        exemptions: union,
         entryPoint: 'launchToken',
         name: p.name ?? null,
         symbol: p.symbol ?? null,
@@ -155,9 +189,22 @@ export function decodeLaunchCalldata(input: Hex): LaunchCalldata {
         return UNKNOWN;
     }
 
+    // The array is one of four slots the factory exempts, not the whole set.
+    // Measured through eth_simulateV1 with a distinct address in each slot:
+    // the sender, the creatorFeeRecipient, the opening-buy recipient and every
+    // array entry each emit one SnipeTaxExempted. Counting the array alone
+    // reported 0 for 3,168 launches that had each exempted their deployer.
+    const union = unionOfSlots({
+      sender,
+      creatorFeeRecipient: p?.creatorFeeRecipient as string | undefined,
+      recipient: buyRecipient,
+      exemptions,
+    });
     return {
-      exemptionCount: exemptions.length,
-      exemptions: exemptions.map((a) => a.toLowerCase()),
+      // Without the sender the union is missing a slot, and a number known to
+      // be short is worse than no number: it reads as a measurement.
+      exemptionCount: sender ? union.length : null,
+      exemptions: union,
       entryPoint: d.functionName,
       name: p?.name ?? null,
       symbol: p?.symbol ?? null,
@@ -229,7 +276,7 @@ export async function fetchLaunchCalldata(txHash: Hex, curve?: string): Promise<
     return UNKNOWN;
   }
 
-  const fromCalldata = tx?.input ? decodeLaunchCalldata(tx.input) : UNKNOWN;
+  const fromCalldata = tx?.input ? decodeLaunchCalldata(tx.input, tx.from) : UNKNOWN;
   if (!receipt?.logs) return fromCalldata;
 
   const fromLogs = exemptionsFromReceipt(receipt.logs, curve);
@@ -244,6 +291,15 @@ export async function fetchLaunchCalldata(txHash: Hex, curve?: string): Promise<
       `[exemptions] ${txHash} calldata says ${fromCalldata.exemptionCount} exemptions, ` +
       `the curve emitted ${fromLogs.length}. using the logs.`,
     );
+  }
+
+  // A launch cannot exempt nobody: the sender and the creatorFeeRecipient are
+  // exempted whatever the call says, measured on fourteen of fourteen receipts.
+  // So zero events is a read that missed them, not a launch that exempted no
+  // one, and it is reported as undetermined rather than as a finding of none.
+  if (fromLogs.length === 0) {
+    console.warn(`[exemptions] ${txHash} emitted no SnipeTaxExempted at all, which the factory cannot do. undetermined.`);
+    return { ...fromCalldata, exemptionCount: null, exemptions: [], source: null };
   }
 
   return {

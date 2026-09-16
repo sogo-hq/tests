@@ -73,7 +73,7 @@ test('early full card reports an undecoded creation tx as undetermined, never cl
   const r = makeScan({ ageSeconds: 9, snipeExemptionCount: null });
   const text = renderCardText(r);
   assert.match(text, /not decoded, not confirmed clean/);
-  assert.doesNotMatch(text, /none — no wallets pre-exempted/);
+  assert.doesNotMatch(text, /none, no wallets pre-exempted/);
 });
 
 // --------------------------------------------------------------- compact card

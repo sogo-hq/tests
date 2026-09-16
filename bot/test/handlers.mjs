@@ -164,7 +164,7 @@ c = drain();
 assert.equal(c.length, 1);
 const r = c[0].payload.results[0];
 assert.equal(r.type, 'article');
-assert.match(r.title, /^VITALS — \$/, `title was: ${r.title}`);
+assert.match(r.title, /^VITALS, \$/, `title was: ${r.title}`);
 assert.ok(r.description.length > 0 && r.description.length <= 120);
 assert.ok(r.input_message_content.message_text.startsWith('VITALS  '), 'message_text is the default card');
 assert.equal(r.input_message_content.parse_mode, undefined, 'inline sends plain text, like every other surface');
@@ -298,7 +298,7 @@ assert.match(stats, /^holder concentration: (live \(n=[\d,]+\)|not enough data y
 // The index's own health leads, above the counts, because it decides whether
 // any of them mean anything -- the index once failed for a day while /stats
 // reported its stale numbers without qualification.
-assert.match(stats, /^index (current, last advanced .+ ago|stalled .+ ago — index-derived checks are withheld|has never advanced — nothing below is current)$/m);
+assert.match(stats, /^index (current, last advanced .+ ago|stalled .+ ago, index-derived checks are withheld|has never advanced, nothing below is current)$/m);
 assert.equal(stats.split('\n')[0].startsWith('index '), true, 'the health line comes first');
 assert.match(stats, /^provider (accepts [\d,]+ block ranges|log range not yet measured)$/m);
 assert.equal(stats.split('\n').length, 8, '/stats is two health lines and six counters, nothing else');
@@ -325,7 +325,7 @@ assert.ok(!/&(amp|lt|gt|quot);/.test(help), '/help carries an HTML entity');
 assert.ok(help.includes('/scan <token address>'), 'angle brackets survive as themselves');
 assert.ok(/^\s*\/status .*\u00b7 admin/m.test(help), '/help marks the admin commands');
 assert.ok(help.includes('/position <wallet> <token address>'), '/help is generated from the table');
-// the contact block, last and unlinked — Telegram autolinks bare handles
+// the contact block, last and unlinked, Telegram autolinks bare handles
 const tail = help.trimEnd().split('\n').slice(-3);
 assert.deepEqual(tail, [
   'checkvitals.xyz',
@@ -644,7 +644,7 @@ await bot.handleUpdate(inline(SOL, 9500));
 
   // /full carries the reference point and the audit trail
   const full = renderCard(withBoth);
-  assert.match(full, /buyer benchmark: 12 — median over the same first 20 min, across 412 indexed launches that reached it/,
+  assert.match(full, /buyer benchmark: 12, median over the same first 20 min, across 412 indexed launches that reached it/,
     'the reference point must say what it measured and over which set');
   assert.match(full, /age band: 5-30m/, 'the age band describes this token, separately from the population');
   ok('the benchmark reaches DM, group and /full');
@@ -765,7 +765,7 @@ await bot.handleUpdate(inline(SOL, 9500));
   const top = drawn.find((d) => /38 other tokens/.test(d.t));
   const second = drawn.find((d) => /creator takes/.test(d.t));
   assert.ok(top && second, `the PNG lost a concern: ${JSON.stringify(drawn.map((d) => d.t))}`);
-  assert.ok(top.size > second.size, `top is ${top.size}px, second ${second.size}px — no emphasis`);
+  assert.ok(top.size > second.size, `top is ${top.size}px, second ${second.size}px, no emphasis`);
   assert.notEqual(top.fill, second.fill, 'the rest should sit at a lower tone');
   // Emphasis by size and tone only. A red or a green here would be read as a
   // verdict, and this card does not give one.
@@ -879,14 +879,14 @@ await bot.handleUpdate(inline(SOL, 9500));
 
     // The group is on every surface a user can see.
     const saved = process.env.SPONSOR_LINE;
-    process.env.SPONSOR_LINE = 'ad · $MOON is live on pons — scan it';
+    process.env.SPONSOR_LINE = 'ad · $MOON is live on pons, scan it';
     resetSponsor();
     await bot.handleUpdate(msg('private', `/scan ${TOKEN}`, -9003));
     const card = drain().pop().payload.text;
     assert.ok(card.trim().endsWith('@vitalscheck_bot · @vitalsofficial · not financial advice'),
       `footer missing the group:\n${card.split('\n').slice(-3).join('\n')}`);
     const cl = card.trim().split('\n');
-    assert.equal(cl[cl.length - 2], 'ad · $MOON is live on pons — scan it',
+    assert.equal(cl[cl.length - 2], 'ad · $MOON is live on pons, scan it',
       'the paid line must sit directly above the disclaimer');
     if (saved === undefined) delete process.env.SPONSOR_LINE; else process.env.SPONSOR_LINE = saved;
     resetSponsor();

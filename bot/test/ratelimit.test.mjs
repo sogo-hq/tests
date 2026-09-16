@@ -153,7 +153,7 @@ test('a range that is genuinely too wide is still split', async () => {
     // More than one request is the property: it narrowed until the provider
     // served it. The exact count belonged to the old parallel-halving version,
     // which revisited every leaf; discovery-then-walk gets there in fewer.
-    assert.ok(calls > 1, `only ${calls} request — it did not narrow at all`);
+    assert.ok(calls > 1, `only ${calls} request, it did not narrow at all`);
   } finally {
     globalThis.fetch = saved;
   }

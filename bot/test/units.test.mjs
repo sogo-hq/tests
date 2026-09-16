@@ -286,7 +286,7 @@ test('regression: an over-long card keeps its disclaimer as the last line', asyn
   const out = clampMessage(html);
   assert.ok(out.length <= TELEGRAM_MAX_MESSAGE, `clamped to ${out.length}`);
   assert.ok(out.endsWith('<i>Signals and flags only. Not financial advice.</i>'),
-    'the disclaimer must survive truncation — a card without it must never be sent');
+    'the disclaimer must survive truncation, a card without it must never be sent');
   assert.ok(out.includes('card truncated'), 'truncation is disclosed, not silent');
 });
 
@@ -297,7 +297,7 @@ test('regression: truncation never cuts a card mid-tag', async () => {
   for (const tag of ['b', 'i', 'code']) {
     const open = (out.match(new RegExp(`<${tag}>`, 'g')) || []).length;
     const close = (out.match(new RegExp(`</${tag}>`, 'g')) || []).length;
-    assert.equal(open, close, `unbalanced <${tag}> after truncation — Telegram would reject the message`);
+    assert.equal(open, close, `unbalanced <${tag}> after truncation, Telegram would reject the message`);
   }
   assert.ok(!/<[a-z]*$/.test(out), 'output does not end mid-tag');
 });

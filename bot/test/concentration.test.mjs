@@ -214,7 +214,7 @@ test('a malformed sample floor or percentile falls back rather than switching of
     `console.log(JSON.stringify([C.MIN_CONCENTRATION_SAMPLES, C.CONCENTRATION_PERCENTILE]));`,
     { MIN_CONCENTRATION_SAMPLES: 'thirty', CONCENTRATION_PERCENTILE: '' },
   );
-  assert.deepEqual(JSON.parse(out), [30, 90], 'NaN comparisons are all false — the floor would vanish');
+  assert.deepEqual(JSON.parse(out), [30, 90], 'NaN comparisons are all false, the floor would vanish');
 });
 
 test('an observation is one row per token, refreshed not appended', () => {

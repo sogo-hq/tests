@@ -19,7 +19,7 @@ const ok = (m) => console.log(`  PASS  ${m}`);
 // This used to be 0x49bac477…, described here as "not a pons launch". It is
 // one: the factory reports exists=true, phase=2, launched 23 days ago. The
 // scan called it "not a pons v2 launch" only because it is older than the
-// ten-day log lookback, and this test asserted that answer was correct — which
+// ten-day log lookback, and this test asserted that answer was correct, which
 // is how a real launch being reported as not-a-launch survived until a user hit
 // it. The replacement is verified against getLaunchedToken: the pair asset
 // $NVDA is a genuine contract the factory has never launched.
@@ -89,7 +89,7 @@ async function checkInline(label, addr, expect, user) {
   scanCache.sweep();
   await bot.handleUpdate(inline(addr, user));
   const c = drain();
-  assert.equal(c.length, 1, `${label}: inline was not answered — the client would spin forever`);
+  assert.equal(c.length, 1, `${label}: inline was not answered, the client would spin forever`);
   assert.equal(c[0].method, 'answerInlineQuery');
   assert.ok(c[0].payload.results.length >= 1, `${label}: inline answered with zero results`);
   const r = c[0].payload.results[0];

@@ -39,6 +39,7 @@ const { factoryAbi, forwarderAbi, TokenLaunched, CurveBuy } = await import(join(
 const { FACTORY, LAUNCH_FORWARDER, RPC_URL } = await import(join(ROOT, 'dist/config.js'));
 const { calibrate, quoteLaunchBuy, CALIBRATION } = await import(join(ROOT, 'dist/curve.js'));
 const P = await import(join(ROOT, 'dist/launchplan.js'));
+const C = await import(join(ROOT, 'dist/launchcheck.js'));
 
 const SnipeTaxExempted = parseAbiItem('event SnipeTaxExempted(address indexed wallet)');
 const ZERO = '0x0000000000000000000000000000000000000000';
@@ -220,6 +221,15 @@ const params = {
 };
 const recipient = isRehearsal ? deployer : getAddress(cfg.recipient);
 const args = [params, BigInt(cfg.launchConfigId), getAddress(cfg.pairToken), devBuyWei, BigInt(cfg.minTokensOut), recipient, exemptions];
+
+// What this config will actually make tax free, which is the union of four
+// slots and not the length of the array we pass.
+const expectedWallets = C.expectedExemptWallets({
+  deployer,
+  creatorFeeRecipient: cfg.creatorFeeRecipient,
+  recipient,
+  extraExemptions: cfg.extraExemptions,
+});
 const value = launchFee + devBuyWei;
 
 h('the transaction');
@@ -233,8 +243,9 @@ console.log(`  buyback vest ${cfg.buybackEnabled}`);
 console.log(`  recipient    ${recipient}  ${dim('receives the opening buy')}`);
 console.log(`  economics    ${cfg.expectedEconomics}`);
 console.log(`  salt         ${cfg.salt}`);
-console.log(`  exemptions   ${bold(`${exemptions.length} wallet${exemptions.length === 1 ? '' : 's'}`)}`);
-exemptions.forEach((a, i) => console.log(`     ${i + 1}. ${a}${i === 0 ? dim('  (the deployer, exempted by the protocol)') : ''}`));
+console.log(`  exemptions   ${bold(`${expectedWallets.length} wallet${expectedWallets.length === 1 ? '' : 's'}`)}`
+  + dim(`  ${C.expectedExemptEvents({ deployer, creatorFeeRecipient: cfg.creatorFeeRecipient, recipient, extraExemptions: cfg.extraExemptions })} events, one per slot`));
+expectedWallets.forEach((a, i) => console.log(`     ${i + 1}. ${getAddress(a)}`));
 
 // ----------------------------------------------------------- the simulation
 
@@ -306,7 +317,7 @@ function printDiff(actual) {
     devBuyEth: formatEther(devBuyWei),
     openingBuyTokens: formatUnits(quote.tokensOut, 18),
     openingBuyPct: `${quote.supplyPct.toFixed(4)}%`,
-    exemptions: String(exemptions.length),
+    exemptions: `${expectedWallets.length} wallet${expectedWallets.length === 1 ? '' : 's'}`,
     token: predicted.token,
     curve: predicted.curve,
   }, actual)));
@@ -385,11 +396,30 @@ for (const log of receipt.logs) {
 }
 if (!landed) die(`no TokenLaunched event in ${txHash}. the transaction succeeded but did not launch.`);
 
+// The curve emits one event per SLOT, not one per wallet: the sender, the
+// creator fee recipient, the opening-buy recipient and every entry of the
+// exemptions array, duplicates included. VITALSRH1 emitted four for two
+// wallets. The number that means anything is the size of the distinct set.
+const distinctExempt = [...new Set(exempted.map((a) => a.toLowerCase()))].map(getAddress);
+
 h('landed');
 console.log(`  token (CA)   ${bold(landed.token)}`);
 console.log(`  curve        ${landed.curve}`);
 console.log(`  block        ${receipt.blockNumber}`);
 console.log(`  gas used     ${receipt.gasUsed} units`);
+console.log(`  exempt       ${bold(`${distinctExempt.length} wallet${distinctExempt.length === 1 ? '' : 's'}`)}`
+  + dim(`  from ${exempted.length} event${exempted.length === 1 ? '' : 's'}, one per slot filled`));
+distinctExempt.forEach((a, i) => {
+  const times = exempted.filter((e) => e.toLowerCase() === a.toLowerCase()).length;
+  const slots = [
+    a.toLowerCase() === deployer.toLowerCase() ? 'sender' : null,
+    a.toLowerCase() === getAddress(cfg.creatorFeeRecipient).toLowerCase() ? 'creatorFeeRecipient' : null,
+    a.toLowerCase() === recipient.toLowerCase() ? 'recipient' : null,
+    cfg.extraExemptions.some((x) => getAddress(x).toLowerCase() === a.toLowerCase()) ? 'extraExemptions' : null,
+    exemptions.some((x) => x.toLowerCase() === a.toLowerCase()) ? 'exemptions[]' : null,
+  ].filter(Boolean);
+  console.log(`     ${i + 1}. ${a}  ${dim(`x${times}: ${slots.join(', ') || 'no slot in this config'}`)}`);
+});
 if (buy) {
   const pct = Number((buy.tokensOut * 1_000_000n) / chainCfg.supply) / 10_000;
   console.log(`  opening buy  ${Number(formatUnits(buy.tokensOut, 18)).toLocaleString('en-US', { maximumFractionDigits: 3 })} tokens (${pct.toFixed(4)}% of supply)`);
@@ -423,7 +453,7 @@ printDiff({
   devBuyEth: buy ? formatEther(buy.quoteIn) : formatEther(devBuyWei),
   openingBuyTokens: buy ? formatUnits(buy.tokensOut, 18) : null,
   openingBuyPct: buy ? `${(Number((buy.tokensOut * 1_000_000n) / chainCfg.supply) / 10_000).toFixed(4)}%` : null,
-  exemptions: String(exempted.length || exemptions.length),
+  exemptions: `${distinctExempt.length} wallet${distinctExempt.length === 1 ? '' : 's'}`,
   token: landed.token,
   curve: landed.curve,
 });

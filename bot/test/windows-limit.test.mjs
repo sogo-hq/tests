@@ -64,7 +64,7 @@ test('a rate limit ends the pass instead of being paid once per launch', async (
   // One launch's worth of backoff, not twenty-five. With a 200ms budget the
   // difference is small in wall clock; what is asserted is that it stopped
   // after the FIRST refusal rather than working through the batch.
-  assert.ok(elapsed < 5_000, `pass took ${elapsed}ms — it argued with the node`);
+  assert.ok(elapsed < 5_000, `pass took ${elapsed}ms, it argued with the node`);
 });
 
 test('and the next pass picks up where it stopped', async () => {

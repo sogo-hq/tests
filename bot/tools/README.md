@@ -14,6 +14,7 @@ Both need the repo built first: `npm run build`.
 | `pay.mjs` | the ledger's transfers |
 | `fomo_intersect.mjs` | nothing on chain, but it spends USDC on paid robinx calls |
 | `dayrun.mjs` | telegram posts, and dust from a burner key when one is in the shell |
+| `exemption-slots.mjs` | nothing. simulation only, no key, no send |
 
 ## launch.mjs
 
@@ -248,3 +249,25 @@ is what the confirmation in `pay.mjs` is for.
 
 Before the public post goes out, the text is checked against the live roster
 for a handle or a wallet. If it contains either, nothing is sent.
+
+## exemption-slots.mjs
+
+```
+node tools/exemption-slots.mjs
+```
+
+Which launch parameter produces which `SnipeTaxExempted` event, simulated
+through `eth_simulateV1` against the live factory. Nothing is signed or sent.
+
+Run it when the config-vs-chain diff disagrees about exemptions, or before
+trusting any figure built on the exemption count.
+
+It established that the factory exempts **four slots**, each emitting one
+event: the transaction sender, the `creatorFeeRecipient`, the opening-buy
+recipient, and every entry of the `exemptions` array. Duplicates are emitted
+rather than collapsed, so the number of events is the number of slots filled
+and the number of wallets is the size of the union. No protocol contract is
+ever in the set: no curve, no router, no hook, no locker, no factory.
+
+VITALSRH1 emitted 4 events for 2 wallets. A config where the deployer is also
+the fee recipient and the buy recipient emits 3 events for 1 wallet.

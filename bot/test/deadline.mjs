@@ -34,7 +34,7 @@ const busy = await performScan({ token: TOKEN, source: 'inline', userId: 31337, 
 const elapsed = Date.now() - t0;
 assert.equal(busy.kind, 'busy', `expected busy, got ${busy.kind}`);
 assert.equal(busy.message, 'still indexing, try again in a moment');
-assert.ok(elapsed < 1000, `returned in ${elapsed}ms — must not wait for the scan`);
+assert.ok(elapsed < 1000, `returned in ${elapsed}ms, must not wait for the scan`);
 ok(`deadline exceeded -> "${busy.message}" in ${elapsed}ms`);
 
 // --- 2. it was logged as a timeout, never silently dropped ------------------
@@ -62,7 +62,7 @@ const retryMs = Date.now() - t1;
 assert.equal(retry.kind, 'ok', `retry returned ${retry.kind}`);
 assert.equal(retry.cacheHit, true, 'retry should be served from cache');
 assert.ok(retryMs < 50, `retry took ${retryMs}ms`);
-ok(`retry served from cache in ${retryMs}ms — the message was honest`);
+ok(`retry served from cache in ${retryMs}ms, the message was honest`);
 
 // --- 5. a generous deadline does not interfere ------------------------------
 // The launch row is indexed first, deliberately. On a completely cold index
@@ -90,7 +90,7 @@ ok(`a deadline well past any scan does not interfere: ${fine.kind} in ${fineMs}m
 // The production inline deadline is 10s, and on a cold index it is genuinely
 // not always enough: findLaunch walks the factory's logs backwards and measured
 // 8.3s, 10.5s, 14.0s and 19.4s across runs against this node. So what is
-// asserted here is the CONTRACT, not a stopwatch — either a real card, or a
+// asserted here is the CONTRACT, not a stopwatch, either a real card, or a
 // "busy" that says what to do about it. Asserting that ten seconds always wins
 // would be asserting something untrue about production.
 scanCache.drop(FINE_TOKEN);
@@ -102,7 +102,7 @@ if (real.kind === 'busy') {
   assert.match(real.message, /still indexing|try again/i, `a deadline must explain itself: ${real.message}`);
   assert.ok(!/failed/i.test(real.message), 'a deadline is not a failure');
 }
-ok(`under the real 10s inline deadline: ${real.kind} in ${realMs}ms${real.kind === 'busy' ? ' — reported honestly' : ''}`);
+ok(`under the real 10s inline deadline: ${real.kind} in ${realMs}ms${real.kind === 'busy' ? ', reported honestly' : ''}`);
 
 // --- 6. and a cold index is reported, never silently slow --------------------
 // No persistent volume means the index is empty after every deploy, so this is

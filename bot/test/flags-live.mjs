@@ -122,7 +122,7 @@ ok('pair-ticker comparison folds homoglyphs');
   // of the time: 2 requests, or 4 on the one pass in ten that sweeps lifecycle
   const idleAvg = (9 * 2 + 4) / 10;
   assert.ok(idleAvg / 3 < 1.0, `an idle tail loop averages ${(idleAvg / 3).toFixed(2)} req/s`);
-  ok(`tail pass: ${plain.reqs} req over ${plain.launches} launch(es), ${sweep.reqs} with the sweep — idle steady state ${(idleAvg / 3).toFixed(2)} req/s`);
+  ok(`tail pass: ${plain.reqs} req over ${plain.launches} launch(es), ${sweep.reqs} with the sweep, idle steady state ${(idleAvg / 3).toFixed(2)} req/s`);
 }
 
 // ---- 5. a cursor far behind is bounded, not one giant blocking pass --------

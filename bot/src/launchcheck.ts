@@ -142,11 +142,26 @@ export function checkConfig(cfg: LaunchConfigFile, curve: CurveConfig | null): C
     `the only config the factory accepts is ${EXPECTED_CONFIG_ID}`);
   add('buybackEnabled', cfg.buybackEnabled, 'pass', cfg.buybackEnabled ? 'creator fees vest' : 'no buyback vest');
 
+  // Not the length of the array: the factory exempts four slots and the union
+  // of them is what goes tax free. A config whose creatorFeeRecipient or
+  // recipient is somebody else exempts that somebody, whatever the array says.
   const extra = cfg.extraExemptions ?? [];
+  const wallets = expectedExemptWallets({
+    deployer: EXPECTED_DEPLOYER,
+    creatorFeeRecipient: cfg.creatorFeeRecipient,
+    recipient: cfg.recipient,
+    extraExemptions: extra,
+  });
+  const beyondDeployer = wallets.filter((w) => w !== EXPECTED_DEPLOYER.toLowerCase());
+  add('tax free at launch', `${wallets.length} wallet${wallets.length === 1 ? '' : 's'}`,
+    beyondDeployer.length === 0 ? 'pass' : 'fail',
+    beyondDeployer.length === 0
+      ? `the deployer alone, from ${expectedExemptEvents({ deployer: EXPECTED_DEPLOYER, creatorFeeRecipient: cfg.creatorFeeRecipient, recipient: cfg.recipient, extraExemptions: extra })} events across the sender, creatorFeeRecipient, recipient and exemptions slots`
+      : `${beyondDeployer.join(' ')} would be tax free besides the deployer`);
   add('extraExemptions', extra.length ? extra.join(' ') : '(none)', extra.length === 0 ? 'pass' : 'fail',
     extra.length === 0
-      ? 'the deployer alone, which the protocol exempts anyway'
-      : `${extra.length} wallet${extra.length === 1 ? '' : 's'} beyond the deployer would be tax free at launch`);
+      ? 'nobody named beyond the four slots'
+      : `${extra.length} wallet${extra.length === 1 ? '' : 's'} named on top of the slots`);
 
   // The create path carries socials: the launch params tuple has a socials
   // struct, and 28 of the last 30 launches on this chain filled at least one.
@@ -365,3 +380,65 @@ export function gatewayNote(f: LogoFetch): string {
   if (!f.attempts.length) return 'nothing to fetch';
   return `no gateway served it: ${f.attempts.map((a) => `${gatewayHost(a.url)} ${a.reason}`).join(', ')}`;
 }
+
+// -------------------------------------------------------------- exemptions
+
+/**
+ * Every wallet a launch will exempt from the opening tax.
+ *
+ * The factory exempts four slots, not one. Measured on chain through
+ * eth_simulateV1 with a distinct address in each slot: the transaction sender,
+ * the creatorFeeRecipient, the opening-buy recipient, and every entry of the
+ * exemptions array each emit one SnipeTaxExempted, and the curve emits nothing
+ * for itself, the router, the hook or the locker.
+ *
+ * So the number that matters is the size of the UNION, not the length of the
+ * array and not the number of events. VITALSRH1 emitted four events for two
+ * wallets: the rehearsal sender filled three slots at once.
+ *
+ * Reproduced against the real receipt of
+ * 0xf8c440ccc8c880671f22732c31046227de07d2b25113599cee43798f82f3e213.
+ */
+export function expectedExemptWallets(opts: {
+  deployer: string;
+  creatorFeeRecipient: string;
+  recipient: string;
+  extraExemptions?: readonly string[];
+}): string[] {
+  const out: string[] = [];
+  const add = (a: string) => {
+    const v = (a ?? '').trim().toLowerCase();
+    if (v && !out.includes(v)) out.push(v);
+  };
+  add(opts.deployer);
+  add(opts.creatorFeeRecipient);
+  add(opts.recipient);
+  for (const a of opts.extraExemptions ?? []) add(a);
+  return out;
+}
+
+/**
+ * How many SnipeTaxExempted events a config produces, which is not the same
+ * number. One per slot, duplicates included, because the curve does not
+ * de-duplicate before emitting.
+ */
+export function expectedExemptEvents(opts: {
+  deployer: string;
+  creatorFeeRecipient: string;
+  recipient: string;
+  extraExemptions?: readonly string[];
+  /** launchToken has no opening buy, so no recipient slot. */
+  withBuy?: boolean;
+}): number {
+  return 2 + (opts.withBuy === false ? 0 : 1) + (opts.extraExemptions?.length ?? 0);
+}
+
+/**
+ * The floor. A launch cannot exempt nobody.
+ *
+ * The sender and the creatorFeeRecipient are exempted whatever the call says,
+ * so a decoded count of zero is a read that missed the events rather than a
+ * launch that exempted no one. Measured: fourteen launches the index had
+ * stored as zero had emitted one each, the deployer, in every case.
+ */
+export const MIN_EXEMPT_WALLETS = 1;

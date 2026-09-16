@@ -203,7 +203,7 @@ test('a too-wide range is narrowed whatever the provider calls it', async () => 
       'response size should not greater than 150000000 bytes',      // generic
     ]) {
       const r = await runWith(message);
-      assert.ok(r.ok, `"${message}" was not narrowed — it threw: ${r.message}`);
+      assert.ok(r.ok, `"${message}" was not narrowed, it threw: ${r.message}`);
       // The property is that it narrowed until the provider served it, NOT that
       // it made a particular number of requests. This asserted `> 8` when
       // narrowing meant halving in parallel and revisiting every leaf; the

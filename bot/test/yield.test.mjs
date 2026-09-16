@@ -107,6 +107,6 @@ test('sustained scanning starves background work without deadlocking it', async 
   stop = true;
   await Promise.race([bulkLoop, new Promise((r) => setTimeout(r, 2_000))]);
 
-  assert.ok(served > 0, 'background work made no progress at all in five seconds — that is a stall, not a yield');
+  assert.ok(served > 0, 'background work made no progress at all in five seconds, that is a stall, not a yield');
   assert.ok(served < 25, `background work took ${served} tokens while scans were arriving constantly`);
 });

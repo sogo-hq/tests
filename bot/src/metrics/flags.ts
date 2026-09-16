@@ -325,21 +325,26 @@ export function computeFlags(opts: {
       severity: UNKNOWN_BAND.snipe_exemptions!,
     });
   } else if (exCount === 0) {
-    // A real and common zero, not an anomaly: measured across 420 launches, 139
-    // of them (33%) exempted nobody at all. An earlier reading of this said the
-    // protocol always exempts its deployer, which came from a sample drawn only
-    // from launches that had exemptions, and was wrong.
+    // A zero here is impossible, so it is reported as a failed read.
+    //
+    // The factory exempts four slots: the transaction sender, the
+    // creatorFeeRecipient, the opening-buy recipient and every entry of the
+    // exemptions array. Measured through eth_simulateV1 with a distinct
+    // address in each, and against fourteen real receipts the index had stored
+    // as zero, all fourteen of which had exempted their deployer. The old
+    // "33% exempted nobody" reading counted the calldata array alone, which
+    // names none of the first three slots.
     flags.push({
       key: 'snipe_exemptions',
       label: 'Snipe-tax exemptions',
-      state: 'clean',
-      detail: 'none, the curve exempted no wallet from the opening tax',
-      compactDetail: 'no pre-exempted wallets',
-      plain: 'nobody got in tax-free at launch',
+      state: 'unknown',
+      detail: 'the curve emitted no exemption event, which it cannot do: the sender and the fee recipient are always exempt. this read did not finish',
+      compactDetail: 'exemption read did not finish',
+      plain: 'tax-free wallets: the read did not finish, undetermined',
       source: SOURCE.snipe_exemptions_logs,
-      value: { wallets: 0, beyond_deployer: 0, supply_share: 0, slots: EXEMPT_SLOTS },
+      value: null,
       reference: null,
-      severity: 0,
+      severity: UNKNOWN_BAND.snipe_exemptions!,
     });
   } else if (exCount === 1) {
     // When a launch exempts anyone at all, the deployer is among them: measured

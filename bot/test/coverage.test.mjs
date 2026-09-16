@@ -50,7 +50,7 @@ test('with an empty database the collision flag is undetermined, not "no match"'
   const collision = flags.find((f) => f.key === 'collision');
   assert.ok(collision, 'collision flag must still be present');
   assert.equal(collision.state, 'unknown',
-    `collision was "${collision.state}" on an empty index — "${collision.detail}" is a confident negative derived from zero rows`);
+    `collision was "${collision.state}" on an empty index, "${collision.detail}" is a confident negative derived from zero rows`);
   assert.doesNotMatch(collision.detail, /no match against indexed pons tokens/,
     'the false all-clear this whole project exists to avoid');
   assert.doesNotMatch(collision.plain, /no other token uses this ticker/);
