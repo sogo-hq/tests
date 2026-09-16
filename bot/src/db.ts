@@ -549,7 +549,7 @@ CREATE TABLE IF NOT EXISTS launch_declarations (
 );
 CREATE INDEX IF NOT EXISTS idx_decl_deployer ON launch_declarations(deployer, block_number);
 
--- One open form per user, so the six questions survive a restart.
+-- One open form per user, so the questions survive a restart.
 CREATE TABLE IF NOT EXISTS declare_drafts (
   user_id    INTEGER PRIMARY KEY,
   step       INTEGER NOT NULL,
@@ -739,6 +739,13 @@ for (const [table, column, decl] of [
   // that is merely one short and showing "undetermined" for a day would be a
   // worse answer than the one it replaces.
   ['launches', 'exemption_source', 'TEXT'],
+  // The two optional declaration blocks, and the hash of the page the docs
+  // line names. All three are absent on every declaration made before they
+  // existed, and absent is the correct reading: those declarations said
+  // nothing about a room, a fee share or a page's contents.
+  ['launch_declarations', 'room', 'TEXT'],
+  ['launch_declarations', 'holder_fee_share', 'TEXT'],
+  ['launch_declarations', 'docs_sha256', 'TEXT'],
   // What the pre-exempted wallets took in the tax-free opening window, and the
   // deployer's own share of it, as percentages of total supply. Measured by
   // metrics/opening.ts over the first forty blocks, NOT from the launch

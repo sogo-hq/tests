@@ -1,4 +1,5 @@
 import { recoverMessageAddress, isAddress, getAddress, type Hex } from 'viem';
+import { createHash } from 'node:crypto';
 import { db } from './db.js';
 import { client } from './chain.js';
 import { effectiveTier, atLeast, vitalsBalance, tierForBalance } from './tiers.js';
@@ -39,6 +40,15 @@ const EM_DASH = String.fromCharCode(0x2014);
 /** Free text fields are bounded so the canonical text stays a readable page. */
 export const MAX_FREE_TEXT = 120;
 
+/**
+ * The two optional blocks are longer than a field and shorter than a page.
+ *
+ * A room's terms or a fee-share policy does not fit in 120 characters and is
+ * not worth signing if it has to be abbreviated into a slogan. Bounded anyway:
+ * what is signed has to stay readable by the person signing it.
+ */
+export const MAX_BLOCK_TEXT = 700;
+
 /** Each "declared:" line on a card, so it cannot push a finding off it. */
 export const MAX_DECLARED_LINE = 59;
 
@@ -54,7 +64,12 @@ export interface Declaration {
   creatorTaxBps: number;
   taxSplit: string;
   vesting: string;
+  /** Optional blocks. Empty means the line is absent from the signed text. */
+  room: string;
+  holderFeeShare: string;
   docsUrl: string;
+  /** sha256 of the docs page as it was when the draft was built, or ''. */
+  docsSha256: string;
   canonical: string;
   signature: string;
   freeSlot: number | null;
@@ -67,12 +82,16 @@ export interface DeclarationAnswers {
   creatorTaxBps: number;
   taxSplit: string;
   vesting: string;
+  room: string;
+  holderFeeShare: string;
   docsUrl: string;
+  docsSha256: string;
 }
 
 // ------------------------------------------------------------------ the form
 
-export type StepKey = 'deployer' | 'devBuy' | 'exemptions' | 'tax' | 'vesting' | 'docs';
+export type StepKey =
+  | 'deployer' | 'devBuy' | 'exemptions' | 'tax' | 'vesting' | 'room' | 'holderFeeShare' | 'docs';
 
 export interface Step {
   key: StepKey;
@@ -115,8 +134,36 @@ function parseFreeText(input: string): { ok: true; value: string } | { ok: false
   const t = input.trim().replace(/\s+/g, ' ');
   if (!t) return { ok: false, error: 'say something, or say none' };
   if (t.length > MAX_FREE_TEXT) return { ok: false, error: `${t.length} characters, keep it under ${MAX_FREE_TEXT}` };
-  // The bot never prints an em dash, and neither does anything it quotes back.
-  return { ok: true, value: t.split(EM_DASH).join(', ') };
+  return { ok: true, value: withoutEmDash(t) };
+}
+
+/**
+ * The one character the bot never prints, taken out of somebody else's text.
+ *
+ * The spaces around it go with it: "50 seats <dash> no more" became
+ * "50 seats , no more", which is the bot printing a typo instead of a dash.
+ */
+function withoutEmDash(t: string): string {
+  return t.split(new RegExp(`\\s*${EM_DASH}\\s*`)).join(', ');
+}
+
+/**
+ * An optional block: several sentences, possibly several lines, or nothing.
+ *
+ * Kept verbatim apart from trailing space and the em dash, because the value
+ * IS the line that gets signed. Collapsing its newlines the way parseFreeText
+ * does would silently rewrite a declaration between the draft a person read
+ * and the text they signed.
+ */
+function parseBlock(input: string): { ok: true; value: string } | { ok: false; error: string } {
+  const t = input.trim().split('\r\n').join('\n').split('\n').map((l) => l.trim()).join('\n');
+  // Blank, or an explicit skip. Both mean the line is left out entirely, which
+  // is not the same as declaring it empty.
+  if (!t || /^(skip|none|no|n\/?a|nothing)\.?$/i.test(t)) return { ok: true, value: '' };
+  if (t.length > MAX_BLOCK_TEXT) {
+    return { ok: false, error: `${t.length} characters, keep it under ${MAX_BLOCK_TEXT}` };
+  }
+  return { ok: true, value: withoutEmDash(t) };
 }
 
 export const STEPS: Step[] = [
@@ -182,6 +229,20 @@ export const STEPS: Step[] = [
       }
       return parsed;
     },
+  },
+  {
+    key: 'room',
+    prompt: 'if a group of people is owed a share of what this launch earns, say what '
+      + 'they are owed and how a place in it is given and lost. write it as the line '
+      + 'you want signed, starting "the room:". say skip if there is no such group.',
+    parse: parseBlock,
+  },
+  {
+    key: 'holderFeeShare',
+    prompt: 'if holding the token pays a share of fees, say so and say on what terms. '
+      + 'if it does not, saying so here is worth more than leaving it out. write it as '
+      + 'the lines you want signed. say skip to leave it out.',
+    parse: parseBlock,
   },
   {
     key: 'docs',
@@ -292,7 +353,10 @@ function answersOf(d: Draft): DeclarationAnswers {
     creatorTaxBps: tax.bps,
     taxSplit: tax.split,
     vesting: d.answers.vesting as string,
+    room: (d.answers.room as string) ?? '',
+    holderFeeShare: (d.answers.holderFeeShare as string) ?? '',
     docsUrl: d.answers.docs as string,
+    docsSha256: (d.answers.docsSha256 as string) ?? '',
   };
 }
 
@@ -334,7 +398,17 @@ export function canonicalText(a: DeclarationAnswers, nonce: string): string {
     ...a.exemptList.map((w) => `  ${w}`),
     `creator tax: ${a.creatorTaxBps} bps`,
     `tax split: ${a.taxSplit}`,
+    // Optional, and omitted rather than emitted empty. A declaration that
+    // carries "the room:" with nothing after it has declared something about a
+    // room, and what it has declared is unreadable.
+    ...(a.room ? [a.room] : []),
+    ...(a.holderFeeShare ? [a.holderFeeShare] : []),
     `docs: ${a.docsUrl}`,
+    // The docs line names a page, and a page can be rewritten after it is
+    // signed. This pins the bytes it had at the time. Absent when the page
+    // could not be read, which is an absence rather than a zero: no line at
+    // all says nothing about the page, and that is the honest state.
+    ...(a.docsSha256 ? [`docs sha256: ${a.docsSha256}`] : []),
     `nonce: ${nonce}`,
   ].join('\n');
 }
@@ -402,12 +476,14 @@ export async function signDraft(
   const info = db.prepare(
     `INSERT INTO launch_declarations
        (deployer, declared_by, declared_at, block_number, dev_buy_pct, exempt_list, exempt_count,
-        creator_tax_bps, tax_split, vesting, docs_url, canonical, signature, free_slot)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        creator_tax_bps, tax_split, vesting, room, holder_fee_share, docs_url, docs_sha256,
+        canonical, signature, free_slot)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
   ).run(
     answers.deployer.toLowerCase(), userId, Math.floor(now / 1000), block,
     answers.devBuyPct, JSON.stringify(answers.exemptList), declaredExemptCount(answers),
-    answers.creatorTaxBps, answers.taxSplit, answers.vesting, answers.docsUrl,
+    answers.creatorTaxBps, answers.taxSplit, answers.vesting,
+    answers.room, answers.holderFeeShare, answers.docsUrl, answers.docsSha256,
     canonical, signature.trim(), ent.freeSlot,
   );
   clearDraft(userId);
@@ -474,6 +550,9 @@ function rowToDeclaration(row: any): Declaration {
     devBuyPct: row.dev_buy_pct,
     exemptList,
     exemptCount: row.exempt_count,
+    room: row.room ?? '',
+    holderFeeShare: row.holder_fee_share ?? '',
+    docsSha256: row.docs_sha256 ?? '',
     creatorTaxBps: row.creator_tax_bps,
     taxSplit: row.tax_split,
     vesting: row.vesting,
@@ -566,4 +645,93 @@ export function declarationOutcome(d: Declaration): string {
   return recheck.still_trading === 1
     ? `launched ${short}, still trading at +24h`
     : `launched ${short}, not trading at +24h`;
+}
+
+// -------------------------------------------------------------- the docs hash
+
+/**
+ * Pinning the page the docs line names.
+ *
+ * `docs:` names a URL, and a URL is a promise about a page that can be
+ * rewritten the day after it is signed. The hash is of the bytes that page
+ * served when the draft was built, so the claim becomes checkable: either the
+ * page still hashes to what was signed or it does not, and both are facts.
+ *
+ * A page that cannot be read at draft time produces no line at all. An absent
+ * line says nothing about the page, which is the honest state; a line of zeros
+ * or a line saying "unreachable" would be a claim about a page nobody read.
+ */
+
+export type DocsHashState = 'match' | 'differs' | 'undetermined' | 'unpinned';
+
+export function sha256Hex(body: Uint8Array | string): string {
+  return createHash('sha256').update(typeof body === 'string' ? Buffer.from(body, 'utf8') : body).digest('hex');
+}
+
+export type DocsGet = (url: string) => Promise<{ ok: boolean; status: number; bytes: Uint8Array }>;
+
+const realGet: DocsGet = async (url) => {
+  const res = await fetch(url, { signal: AbortSignal.timeout(15_000), redirect: 'follow' });
+  return {
+    ok: res.ok,
+    status: res.status,
+    bytes: res.ok ? new Uint8Array(await res.arrayBuffer()) : new Uint8Array(),
+  };
+};
+
+/** The hash of the page as it is now, or null when it could not be read. */
+export async function fetchDocsHash(url: string, get: DocsGet = realGet): Promise<string | null> {
+  if (!/^https:\/\//i.test(url)) return null;
+  try {
+    const res = await get(url);
+    if (!res.ok) return null;
+    return sha256Hex(res.bytes);
+  } catch (err) {
+    // A page that did not answer is not a page that changed.
+    console.warn(`[declare] docs page unreadable: ${String((err as Error)?.message ?? err).slice(0, 90)}`);
+    return null;
+  }
+}
+
+/**
+ * Read the docs page and put its hash into the finished draft.
+ *
+ * Called once the form is complete and before the text is shown for signing,
+ * so the bytes that are hashed are the bytes that were there when the person
+ * read the page. Returns the canonical text as it will be signed.
+ */
+export async function pinDocsHash(
+  userId: number, get: DocsGet = realGet,
+): Promise<{ canonical: string; hash: string | null } | null> {
+  const d = readDraft(userId);
+  if (!d) return null;
+  const url = d.answers.docs as string | undefined;
+  if (!url) return null;
+  const hash = await fetchDocsHash(url, get);
+  d.answers.docsSha256 = hash ?? '';
+  writeDraft(d);
+  return { canonical: canonicalText(answersOf(d), d.nonce), hash };
+}
+
+/** What the page says today against what was signed. */
+export function docsHashState(signed: string, observed: string | null): DocsHashState {
+  if (!signed) return 'unpinned';
+  if (observed === null) return 'undetermined';
+  return observed === signed ? 'match' : 'differs';
+}
+
+/** One line for a card or a listing. Never a verdict about the launch. */
+export function docsHashLine(state: DocsHashState): string {
+  if (state === 'match') return 'docs page: the same bytes that were signed';
+  if (state === 'differs') return 'docs page: changed since it was signed';
+  if (state === 'undetermined') return 'docs page: could not be read, undetermined';
+  return 'docs page: not pinned when this was signed';
+}
+
+/** The state of the page a stored declaration points at, read now. */
+export async function checkDocsPage(
+  d: Pick<Declaration, 'docsUrl' | 'docsSha256'>, get: DocsGet = realGet,
+): Promise<DocsHashState> {
+  if (!d.docsSha256) return 'unpinned';
+  return docsHashState(d.docsSha256, await fetchDocsHash(d.docsUrl, get));
 }

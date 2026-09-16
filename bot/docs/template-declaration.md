@@ -14,6 +14,13 @@ the exact thing a declaration exists to prevent.
 This is what the bot builds and what the wallet signs. Nothing is added to it
 by hand; the fields come from the answers given to `/declare`.
 
+One line is missing from the block below and is added by the bot at draft
+time: `docs sha256:`, the hash of the page the `docs:` line names, read as it
+was at that moment. It cannot be written here, because the page is generated
+from this document and the hash of a page cannot be part of the page. A page
+that does not answer produces no line at all, which says nothing about the
+page rather than something false about it.
+
 ```
 vitals declaration
 deployer: 0x447c8dc55B88C09830E123f9fB3e7C484714ED93

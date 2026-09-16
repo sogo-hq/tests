@@ -22,6 +22,7 @@ import {
 } from './grants.js';
 import { entitlement, entitlementLine } from './premium.js';
 import { statusReport, statusText, resetWatchdog } from './watchdog.js';
+import { pinDocsHash, checkDocsPage, docsHashLine } from './declare.js';
 import { shouldOnboard, markOnboarded, onboardingText } from './onboard.js';
 import { commandList, COMMANDS, registeredNames } from './commands.js';
 import { clamp, clampMessage, TELEGRAM_MAX_MESSAGE, ADDRESS_PATTERN, containsAddress } from './text.js';
@@ -1318,6 +1319,9 @@ export function createBot(token = TELEGRAM_BOT_TOKEN): Bot {
         await ctx.reply('no declaration with that id');
         return;
       }
+      // Read now, not when it was signed: the point of the hash is that the
+      // page can change afterwards, so the answer has to come from today.
+      const docs = await checkDocsPage(d);
       await ctx.reply([
         d.freeSlot !== null ? `founding declared launch #${d.freeSlot}` : `declaration ${d.id}`,
         '',
@@ -1326,6 +1330,7 @@ export function createBot(token = TELEGRAM_BOT_TOKEN): Bot {
         `signed at block ${d.blockNumber.toLocaleString()}`,
         d.signature,
         '',
+        docsHashLine(docs),
         declarationOutcome(d),
         '',
         'a claim made before the launch. nothing in it was checked against a chain.',
@@ -2745,7 +2750,7 @@ export function createBot(token = TELEGRAM_BOT_TOKEN): Bot {
       return;
     }
 
-    // What this costs, before the six questions rather than after them. The
+    // What this costs, before the questions rather than after them. The
     // entitlement is checked again at the signature, where it is enforced; this
     // is only so nobody fills a form in to be turned away by it.
     const used = declarationCount();
@@ -2755,7 +2760,8 @@ export function createBot(token = TELEGRAM_BOT_TOKEN): Bot {
 
     const first = startDraft(userId);
     await ctx.reply([
-      'six questions, one answer per message. /declare cancel to stop.',
+      `${STEPS.length} questions, one answer per message. the last two may be skipped. `
+        + '/declare cancel to stop.',
       price,
       '',
       `1 of ${STEPS.length}. ${first}`,
@@ -2967,10 +2973,19 @@ export function createBot(token = TELEGRAM_BOT_TOKEN): Bot {
         return;
       }
       if (res.state === 'complete') {
+        // The docs page is read now, before the text is shown, so the bytes
+        // that get hashed are the bytes the person just linked to. A page that
+        // does not answer adds no line: signing is not blocked on a web server.
+        const pinned = await pinDocsHash(userId);
+        const canonical = pinned?.canonical ?? res.canonical;
         await ctx.reply([
           'sign this exact text with the deployer wallet:',
           '',
-          res.canonical,
+          canonical,
+          '',
+          pinned?.hash
+            ? 'the docs line is pinned to the page as it is right now. change the page after signing and the card says so.'
+            : 'the docs page could not be read, so there is no hash line. the link is signed, its contents are not.',
           '',
           'then send: /declare sign <signature>',
         ].join('\n'), { link_preview_options: { is_disabled: true } });

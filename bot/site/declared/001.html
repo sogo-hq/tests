@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DECLARED #001 . VITALS</title>
+<meta name="description" content="What the VITALS launch declared before it happened, signed with the deployer wallet.">
+<style>
+  :root {
+    --bg: #080B09;
+    --ink: #E8F0DE;
+    --dim: #6E7A66;
+    --ref: #C6F73A;
+    --rule: #1B241A;
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font: 400 17px/1.65 Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    padding: 0 20px 96px;
+  }
+  main { max-width: 760px; margin: 0 auto; }
+  header { padding: 72px 0 40px; border-bottom: 1px solid var(--rule); }
+  .eyebrow {
+    font: 400 13px/1 "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--ref);
+    margin: 0 0 18px;
+  }
+  h1 { font-size: 40px; line-height: 1.15; margin: 0 0 16px; font-weight: 700; letter-spacing: -0.01em; }
+  h2 {
+    font-size: 13px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--dim);
+    font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-weight: 400;
+    margin: 56px 0 16px;
+  }
+  p { margin: 0 0 18px; }
+  .lede { color: var(--dim); font-size: 18px; margin: 0; }
+  pre {
+    background: #0C100B;
+    border: 1px solid var(--rule);
+    border-left: 2px solid var(--ref);
+    border-radius: 3px;
+    padding: 20px 22px;
+    margin: 0 0 20px;
+    overflow-x: auto;
+    font: 400 14px/1.75 "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  .note { color: var(--dim); font-size: 15px; }
+  ul { margin: 0 0 18px; padding-left: 22px; }
+  li { margin: 0 0 10px; }
+  a { color: var(--ref); text-decoration: none; border-bottom: 1px solid var(--rule); }
+  a:hover { border-bottom-color: var(--ref); }
+  footer {
+    margin-top: 72px;
+    padding-top: 28px;
+    border-top: 1px solid var(--rule);
+    color: var(--dim);
+    font-size: 15px;
+  }
+  @media (max-width: 600px) {
+    header { padding: 48px 0 32px; }
+    h1 { font-size: 30px; }
+    body { font-size: 16px; }
+    pre { font-size: 13px; padding: 16px; }
+  }
+</style>
+</head>
+<body>
+<main>
+
+<header>
+  <p class="eyebrow">Declared #001</p>
+  <h1>What this launch declared before it happened</h1>
+  <p class="lede">Signed with the wallet that deploys, before the token exists.
+  Every line below is something a launch transaction or a payout hash either
+  matches or does not.</p>
+</header>
+
+<h2>The signed text</h2>
+<pre>vitals declaration
+deployer: 0x447c8dc55B88C09830E123f9fB3e7C484714ED93
+dev buy: 5% of supply, held by the deployer wallet, 2% team and 3% partnerships, vesting contracts in october, nothing distributed at launch
+tax-free at launch: the deployer only
+creator tax: 400 bps
+tax split: 10% the room, 10% ecosystem, 80% the build, treasury rules as declared
+the room: 50 seats. the room is owed 10% of the fee wallet's cumulative gross income, paid daily in ETH for 30 days by shares (T1 5, T2 2, T3 1), every payout printed before it leaves and recorded with its hash. a seat is given by the deployer, its tier is fixed when taken and reviewed once after the 30 days. a seat given up is reused and both occupants stay in the history. 10% of gross income goes to ecosystem integrations, 80% to the build.
+holder fee share is off at launch. the token is access, not yield: 250k = watch, 1M = the holder feed, 10M = desk.
+nothing changes in the first 10 days. the room reviews it with holders on 5 oct. any change is announced 7 days ahead.
+docs: https://checkvitals.xyz/declared/001
+nonce: &lt;issued by the bot, one per draft&gt;</pre>
+<p class="note">This is the text the deployer wallet signs, with one line added
+at the moment of signing: <code>docs sha256:</code>, the hash of this page as it
+was then. It cannot be printed here, because the hash of a page cannot be part
+of the page. The bot stores the signed bytes and the signature together, so the
+claim stays checkable against the launch that follows it.</p>
+
+<h2>Treasury rules</h2>
+<pre>treasury: 0x138826536Ca720C4D614550D5DB2b22216d136ad.
+funded by sweeps from the fee wallet after each room payout, every sweep recorded with its hash.
+it may hold up to 10% of its ETH in other robinhood chain tokens. positions are discussed in BLOCK ZERO, executed and signed by one wallet, and every trade is posted with its hash on X within the hour.
+realized gains return to the treasury and count as income, so the room receives its 10% through the same ledger. no separate profit share, no promises.
+the treasury does not trade $VITALS.
+one signer. no other wallets. no OTC.</pre>
+
+<h2>Holder fee sharing</h2>
+<pre>holder fee share is off at launch. the token is access, not yield: 250k = watch, 1M = the holder feed, 10M = desk.
+nothing changes in the first 10 days. the room reviews it with holders on 5 oct. any change is announced 7 days ahead.</pre>
+
+<h2>The room</h2>
+<pre>the room: 50 seats. the room is owed 10% of the fee wallet's cumulative gross income, paid daily in ETH for 30 days by shares (T1 5, T2 2, T3 1), every payout printed before it leaves and recorded with its hash. a seat is given by the deployer, its tier is fixed when taken and reviewed once after the 30 days. a seat given up is reused and both occupants stay in the history. 10% of gross income goes to ecosystem integrations, 80% to the build.</pre>
+
+<h2>What can be checked, and where</h2>
+<ul>
+  <li><strong>The deployer</strong> is the sender of the launch transaction.</li>
+  <li><strong>The dev buy</strong> is the opening buy on the curve, as a share of supply.</li>
+  <li><strong>Tax-free at launch</strong> is the list of wallets the launch transaction pre-exempts.</li>
+  <li><strong>The creator tax</strong> is a field in the launch parameters.</li>
+  <li><strong>The room's payouts</strong> are transaction hashes, published after each run.</li>
+  <li><strong>Sweeps into the treasury</strong> are transaction hashes, recorded as they happen.</li>
+  <li><strong>One signer, no other wallets, no OTC</strong> is readable off the treasury
+      address's own transaction list.</li>
+</ul>
+
+<h2>What this page is not</h2>
+<p>It is a claim made in advance, not a finding. Nothing in it was checked
+against a chain at the time it was made. After the launch, the scanner compares
+what the chain shows against what was signed here, and where they differ it
+says so and the original finding still stands.</p>
+<p>There is no score, no grade and no verdict anywhere in this project. A check
+that found nothing is not a check that found the launch to be fine, and the
+card says how many checks ran and how many could not be determined.</p>
+
+<footer>
+  <p>The declaration is stored with its signature by
+  <a href="https://t.me/vitalscheck_bot">@vitalscheck_bot</a>.
+  This page is pinned by its sha256 inside the signed text above: change it
+  after signing and the card says the page changed.</p>
+  <p><a href="https://checkvitals.xyz">checkvitals.xyz</a>
+  . <a href="https://x.com/vitalsxyz">x.com/vitalsxyz</a>
+  . <a href="https://t.me/vitalsofficial">t.me/vitalsofficial</a></p>
+</footer>
+
+</main>
+</body>
+</html>

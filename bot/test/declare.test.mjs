@@ -32,7 +32,7 @@ const NOW = 1_789_000_000_000;
 const answers = (over = {}) => ({
   deployer: DEPLOYER, devBuyPct: 2.5, exemptList: [], creatorTaxBps: 400,
   taxSplit: 'half to the artist', vesting: 'held by the deployer, vesting contracts in october, nothing distributed at launch',
-  docsUrl: 'https://docs.checkvitals.xyz', ...over,
+  room: '', holderFeeShare: '', docsUrl: 'https://docs.checkvitals.xyz', docsSha256: '', ...over,
 });
 
 /** Walk the six questions with the answers a real creator would type. */
@@ -48,6 +48,8 @@ const GOOD = [
   'dev wallet only',
   '400, half to the artist',
   'held by the deployer, vesting contracts in october, nothing distributed at launch',
+  'skip',
+  'skip',
   'https://docs.checkvitals.xyz',
 ];
 
@@ -65,9 +67,10 @@ test('the form asks six questions and refuses a bad answer without losing the pl
   assert.equal(ok.step, 1);
 
   const done = ['2.5', 'dev wallet only', '400, half to the artist',
-    'held by the deployer, vesting contracts in october, nothing distributed at launch', 'https://docs.checkvitals.xyz'].map((t) => D.answerDraft(u, t)).pop();
+    'held by the deployer, vesting contracts in october, nothing distributed at launch',
+    'skip', 'skip', 'https://docs.checkvitals.xyz'].map((t) => D.answerDraft(u, t)).pop();
   assert.equal(done.state, 'complete');
-  assert.equal(D.STEPS.length, 6);
+  assert.equal(D.STEPS.length, 8);
   D.clearDraft(u);
 });
 
@@ -90,6 +93,8 @@ test('free text is bounded and carries no em dash', () => {
   D.answerDraft(u, '400, half to the artist');
   const dash = D.answerDraft(u, `held by the deployer ${String.fromCharCode(0x2014)} vesting in october`);
   assert.equal(dash.state, 'asked');
+  D.answerDraft(u, 'skip');
+  D.answerDraft(u, 'skip');
   const complete = D.answerDraft(u, 'https://docs.checkvitals.xyz');
   assert.ok(!complete.canonical.includes(String.fromCharCode(0x2014)));
   D.clearDraft(u);
@@ -230,7 +235,7 @@ const declare = db.prepare(
  */
 function flagsWith(launch = {}, declared = {}, at = LAUNCH_BLOCK - 1) {
   const L = { exemptCount: 1, taxBps: 100, openPct: 0.5, ...launch };
-  const C = { devBuyPct: 0.5, exemptCount: 1, taxBps: 100, vesting: 'held by the deployer, vesting contracts in october, nothing distributed at launch', ...declared };
+  const C = { devBuyPct: 0.5, exemptCount: 1, taxBps: 100, vesting: 'held by the deployer, vesting contracts in october, nothing distributed at launch', room: '', holderFeeShare: '', docsSha256: '', ...declared };
   db.prepare('DELETE FROM launch_declarations').run();
   insertLaunch.run(TOKEN, '0x' + 'c'.repeat(40), DEPLOYER, PAIR, LAUNCH_BLOCK,
     '0x' + 'f'.repeat(64), 1_780_000_000, 'NEW', 'UNIQ', 'new', 'uniq',

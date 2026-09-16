@@ -35,6 +35,13 @@ bot.api.config.use(async (_prev, method, payload) => {
 
 const USER = 6701;
 const DEPLOYER = '0x' + '9'.repeat(40);
+const ROOM_LINE =
+  "the room: 50 seats. the room is owed 10% of the fee wallet's cumulative gross income, "
+  + 'paid daily in ETH for 30 days by shares (T1 5, T2 2, T3 1), every payout printed before '
+  + 'it leaves and recorded with its hash. a seat is given by the deployer, its tier is fixed '
+  + 'when taken and reviewed once after the 30 days. a seat given up is reused and both '
+  + 'occupants stay in the history. 10% of gross income goes to ecosystem integrations, '
+  + '80% to the build.';
 let uid = 0;
 const at = (chatType, text) => ({
   update_id: ++uid,
@@ -65,26 +72,28 @@ test('/declare in a group points at the DM and does nothing else', async () => {
 
 test('the form walks six questions and keeps its place on a bad answer', async () => {
   let c = await send('private', '/declare');
-  assert.match(c[0].payload.text, /six questions/);
+  assert.match(c[0].payload.text, /8 questions/);
   // What it costs, before six answers rather than after them.
   assert.match(c[0].payload.text, /the first 100 declarations are free\. this would be #1\./);
-  assert.match(c[0].payload.text, /1 of 6\./);
+  assert.match(c[0].payload.text, /1 of 8\./);
 
   c = await send('private', 'my main wallet');
   assert.match(c[0].payload.text, /not an address/);
-  assert.match(c[0].payload.text, /1 of 6\./, 'a rejected answer must not advance the form');
+  assert.match(c[0].payload.text, /1 of 8\./, 'a rejected answer must not advance the form');
 
   // An address typed into an open form is an ANSWER, never a scan. Without
   // this the very first question would have its answer scanned instead.
   c = await send('private', DEPLOYER);
-  assert.match(c[0].payload.text, /2 of 6\./);
+  assert.match(c[0].payload.text, /2 of 8\./);
   assert.ok(!c.some((x) => /^VITALS {2}/.test(x.payload?.text ?? '')));
 
   for (const [answer, expect] of [
-    ['2.5', /3 of 6\./],
-    ['dev wallet only', /4 of 6\./],
-    ['400, half to the artist', /5 of 6\./],
-    ['held by the deployer, vesting contracts in october, nothing distributed at launch', /6 of 6\./],
+    ['2.5', /3 of 8\./],
+    ['dev wallet only', /4 of 8\./],
+    ['400, half to the artist', /5 of 8\./],
+    ['held by the deployer, vesting contracts in october, nothing distributed at launch', /6 of 8\./],
+    [ROOM_LINE, /7 of 8\./],
+    ['holder fee share is off at launch.', /8 of 8\./],
   ]) {
     c = await send('private', answer);
     assert.match(c[0].payload.text, expect);
