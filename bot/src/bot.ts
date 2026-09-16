@@ -3149,9 +3149,6 @@ export function statsText(): string {
   const q = (sql: string) => (db.prepare(sql).get() as { n: number }).n;
 
   const launches = q('SELECT COUNT(*) n FROM launches');
-  const decoded = q('SELECT COUNT(*) n FROM launches WHERE snipe_exemption_count IS NOT NULL');
-  const withExempt = q('SELECT COUNT(*) n FROM launches WHERE snipe_exemption_count > 0');
-  const pct = decoded > 0 ? ((withExempt / decoded) * 100).toFixed(1) : '0.0';
 
   /**
    * Exemptions BEYOND the deployer, over the rows the curve's own events
@@ -3190,7 +3187,11 @@ export function statsText(): string {
     // slow index without anyone having to read the log.
     providerLimitLine(),
     `launches indexed ${launches.toLocaleString()}`,
-    `launches with pre-exempted wallets ${withExempt.toLocaleString()} (${pct}% of ${decoded.toLocaleString()} decoded)`,
+    // "launches with pre-exempted wallets" used to sit here as a share of every
+    // decoded row. It counted the exemptions array, so a launch that exempted
+    // only its deployer counted as exempting nobody, and the line read 6.8%
+    // where the true answer is every launch. It is gone rather than repaired:
+    // the split below is the question anybody was asking it.
     `exempting beyond the deployer ${beyond.toLocaleString()} (${beyondPct}% of ${fromLogs.toLocaleString()} read from the curve)`,
     medianBeyond === null
       ? `median count where any went beyond the deployer: not published under ${MIN_BENCHMARK_SAMPLES} observations (n=${beyondCounts.length.toLocaleString()})`

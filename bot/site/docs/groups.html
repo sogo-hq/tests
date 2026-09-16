@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Groups . VITALS docs</title>
+<meta name="description" content="VITALS documentation. Groups.">
+<style>
+  :root { --bg: #080B09; --ink: #E8F0DE; --dim: #6E7A66; --ref: #C6F73A; --rule: #1B241A; }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; scroll-behavior: smooth; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 400 16px/1.7 Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  .wrap { display: flex; align-items: flex-start; max-width: 1180px; margin: 0 auto; gap: 48px; padding: 0 24px; }
+  nav { position: sticky; top: 0; flex: 0 0 210px; padding: 48px 0 64px; max-height: 100vh; overflow-y: auto; }
+  nav .brand {
+    font: 400 13px/1 "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    letter-spacing: 0.14em; text-transform: uppercase; color: var(--ref);
+    display: block; margin-bottom: 26px; text-decoration: none; border: 0;
+  }
+  nav a { display: block; color: var(--dim); text-decoration: none; border: 0; padding: 6px 0; font-size: 15px; }
+  nav a:hover { color: var(--ink); }
+  nav a.on { color: var(--ink); border-left: 2px solid var(--ref); padding-left: 12px; margin-left: -14px; }
+  nav .sub { margin: 4px 0 18px 0; padding-left: 12px; border-left: 1px solid var(--rule); }
+  nav .sub a { font-size: 14px; padding: 4px 0; }
+  main { flex: 1 1 auto; min-width: 0; padding: 48px 0 120px; }
+  h1 { font-size: 34px; line-height: 1.2; margin: 0 0 28px; font-weight: 700; letter-spacing: -0.01em; }
+  h2 {
+    font-size: 13px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--dim);
+    font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-weight: 400; margin: 52px 0 14px; padding-top: 14px; border-top: 1px solid var(--rule);
+  }
+  h3 { font-size: 19px; margin: 34px 0 12px; font-weight: 600; }
+  h4 { font-size: 16px; margin: 26px 0 10px; font-weight: 600; color: var(--dim); }
+  p { margin: 0 0 16px; }
+  ul, ol { margin: 0 0 16px; padding-left: 22px; }
+  li { margin: 0 0 8px; }
+  a { color: var(--ref); text-decoration: none; border-bottom: 1px solid var(--rule); }
+  a:hover { border-bottom-color: var(--ref); }
+  code {
+    font: 400 0.88em/1.5 "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    background: #0C100B; border: 1px solid var(--rule); border-radius: 3px; padding: 1px 5px;
+  }
+  pre {
+    background: #0C100B; border: 1px solid var(--rule); border-left: 2px solid var(--ref);
+    border-radius: 3px; padding: 16px 18px; margin: 0 0 18px; overflow-x: auto;
+  }
+  pre code { background: none; border: 0; padding: 0; font-size: 13.5px; line-height: 1.7; }
+  .scroll { overflow-x: auto; margin: 0 0 20px; }
+  table { border-collapse: collapse; width: 100%; font-size: 14.5px; }
+  th, td { text-align: left; padding: 9px 14px 9px 0; border-bottom: 1px solid var(--rule); vertical-align: top; }
+  th {
+    font: 400 12px/1.4 "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    letter-spacing: 0.08em; text-transform: uppercase; color: var(--dim); white-space: nowrap;
+  }
+  hr { border: 0; border-top: 1px solid var(--rule); margin: 36px 0; }
+  strong { font-weight: 600; }
+  footer { margin-top: 64px; padding-top: 24px; border-top: 1px solid var(--rule); color: var(--dim); font-size: 14px; }
+  .cards { display: grid; gap: 14px; margin: 0 0 28px; }
+  .card { display: block; border: 1px solid var(--rule); border-radius: 4px; padding: 18px 20px; text-decoration: none; color: var(--ink); }
+  .card:hover { border-color: var(--ref); }
+  .card b { display: block; font-weight: 600; margin-bottom: 4px; }
+  .card span { color: var(--dim); font-size: 14.5px; }
+  @media (max-width: 860px) {
+    .wrap { display: block; padding: 0 20px; }
+    nav { position: static; max-height: none; padding: 32px 0 0; border-bottom: 1px solid var(--rule); }
+    nav .sub { display: none; }
+    main { padding: 32px 0 80px; }
+    h1 { font-size: 27px; }
+  }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <nav>
+      <a class="brand" href="./">VITALS docs</a>
+      <a href="./">Overview</a>
+      <a href="./api">API</a>
+      <a href="./groups" class="on">Groups</a><div class="sub"><a href="#the-install">The install</a><a href="#what-it-does-not-do">What it does not do</a><a href="#what-the-room-controls">What the room controls</a><a href="#licences">Licences</a><a href="#removing-it">Removing it</a></div>
+      <a href="./vitals">VITALS</a>
+    </nav>
+    <main>
+      <h1 id="vitals-in-your-group">VITALS in your group</h1>
+      <h2 id="the-install">The install</h2>
+      <p>Add <a href="https://t.me/vitalscheck_bot">@vitalscheck_bot</a> to the group and make it an admin. It posts three lines saying what it reads and then stays quiet. An admin turns on <code>/autoscan on</code>, and from then on every contract address posted in the room gets a card: who was tax free at launch, what the deployer took for itself, what the holders look like, and the reference point each of those is measured against. It is off by default in every group, because a bot that scans everything it sees in somebody else's room was not asked to. Anyone can also ask for one scan at a time with <code>/scan &lt;address&gt;</code>, in the group or in a DM, and <code>/full &lt;address&gt;</code> for the detail behind every line.</p>
+      <h2 id="what-it-does-not-do">What it does not do</h2>
+      <ul><li>No score, no grade, no traffic light, no verdict. The card states facts and what they are measured against, and the reader decides.</li><li>A card with no finding on it is <strong>not</strong> a clean bill. It is the list of questions that could be answered from the data available, and everything else on it says undetermined.</li><li>No price, no direction, no targets, no entry, no exit, in any message.</li><li>No wallet, no handle and no user id is ever printed in a group.</li></ul>
+      <h2 id="what-the-room-controls">What the room controls</h2>
+      <div class="scroll"><table>
+      <thead><tr><th>command</th><th>who</th><th>what</th></tr></thead>
+      <tbody>
+      <tr><td><code>/autoscan on</code> / <code>/autoscan off</code></td><td>a group admin</td><td>whether pasted addresses get a card</td></tr>
+      <tr><td><code>/scan &lt;address&gt;</code></td><td>anyone</td><td>one card</td></tr>
+      <tr><td><code>/full &lt;address&gt;</code></td><td>anyone</td><td>the detail behind every line</td></tr>
+      <tr><td><code>/position &lt;wallet&gt; &lt;ca&gt;</code></td><td>anyone</td><td>where one wallet stood in one launch</td></tr>
+      <tr><td><code>/leaderboard</code></td><td>anyone</td><td>who called what here, and how far it ran afterwards</td></tr>
+      </tbody></table></div>
+      <p>Turning autoscan off leaves it off. A licence does not turn it back on: an admin who decided has decided.</p>
+      <h2 id="licences">Licences</h2>
+      <p>A group licence opens the premium commands to everyone in the room, and a licensed group has autoscan on unless an admin has said otherwise. A licence comes from holding, or from an admin grant with a date on it. <code>/license status</code> in the group says which, and how long it has left.</p>
+      <h2 id="removing-it">Removing it</h2>
+      <p>Remove the bot. Nothing is kept about the group except which chats it has been in, and the scan history it would have had anyway from the chain.</p>
+      <footer>
+        <p><a href="https://checkvitals.xyz">checkvitals.xyz</a>
+        . <a href="https://t.me/vitalscheck_bot">@vitalscheck_bot</a>
+        . <a href="https://x.com/vitalsxyz">x.com/vitalsxyz</a>
+        . <a href="https://t.me/vitalsofficial">t.me/vitalsofficial</a></p>
+        <p>No score, no grade, no verdict. A check that found nothing is not a
+        check that found the launch to be fine.</p>
+      </footer>
+    </main>
+  </div>
+</body>
+</html>

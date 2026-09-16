@@ -1,0 +1,317 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>API . VITALS docs</title>
+<meta name="description" content="VITALS documentation. API.">
+<style>
+  :root { --bg: #080B09; --ink: #E8F0DE; --dim: #6E7A66; --ref: #C6F73A; --rule: #1B241A; }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; scroll-behavior: smooth; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 400 16px/1.7 Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  .wrap { display: flex; align-items: flex-start; max-width: 1180px; margin: 0 auto; gap: 48px; padding: 0 24px; }
+  nav { position: sticky; top: 0; flex: 0 0 210px; padding: 48px 0 64px; max-height: 100vh; overflow-y: auto; }
+  nav .brand {
+    font: 400 13px/1 "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    letter-spacing: 0.14em; text-transform: uppercase; color: var(--ref);
+    display: block; margin-bottom: 26px; text-decoration: none; border: 0;
+  }
+  nav a { display: block; color: var(--dim); text-decoration: none; border: 0; padding: 6px 0; font-size: 15px; }
+  nav a:hover { color: var(--ink); }
+  nav a.on { color: var(--ink); border-left: 2px solid var(--ref); padding-left: 12px; margin-left: -14px; }
+  nav .sub { margin: 4px 0 18px 0; padding-left: 12px; border-left: 1px solid var(--rule); }
+  nav .sub a { font-size: 14px; padding: 4px 0; }
+  main { flex: 1 1 auto; min-width: 0; padding: 48px 0 120px; }
+  h1 { font-size: 34px; line-height: 1.2; margin: 0 0 28px; font-weight: 700; letter-spacing: -0.01em; }
+  h2 {
+    font-size: 13px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--dim);
+    font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-weight: 400; margin: 52px 0 14px; padding-top: 14px; border-top: 1px solid var(--rule);
+  }
+  h3 { font-size: 19px; margin: 34px 0 12px; font-weight: 600; }
+  h4 { font-size: 16px; margin: 26px 0 10px; font-weight: 600; color: var(--dim); }
+  p { margin: 0 0 16px; }
+  ul, ol { margin: 0 0 16px; padding-left: 22px; }
+  li { margin: 0 0 8px; }
+  a { color: var(--ref); text-decoration: none; border-bottom: 1px solid var(--rule); }
+  a:hover { border-bottom-color: var(--ref); }
+  code {
+    font: 400 0.88em/1.5 "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    background: #0C100B; border: 1px solid var(--rule); border-radius: 3px; padding: 1px 5px;
+  }
+  pre {
+    background: #0C100B; border: 1px solid var(--rule); border-left: 2px solid var(--ref);
+    border-radius: 3px; padding: 16px 18px; margin: 0 0 18px; overflow-x: auto;
+  }
+  pre code { background: none; border: 0; padding: 0; font-size: 13.5px; line-height: 1.7; }
+  .scroll { overflow-x: auto; margin: 0 0 20px; }
+  table { border-collapse: collapse; width: 100%; font-size: 14.5px; }
+  th, td { text-align: left; padding: 9px 14px 9px 0; border-bottom: 1px solid var(--rule); vertical-align: top; }
+  th {
+    font: 400 12px/1.4 "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    letter-spacing: 0.08em; text-transform: uppercase; color: var(--dim); white-space: nowrap;
+  }
+  hr { border: 0; border-top: 1px solid var(--rule); margin: 36px 0; }
+  strong { font-weight: 600; }
+  footer { margin-top: 64px; padding-top: 24px; border-top: 1px solid var(--rule); color: var(--dim); font-size: 14px; }
+  .cards { display: grid; gap: 14px; margin: 0 0 28px; }
+  .card { display: block; border: 1px solid var(--rule); border-radius: 4px; padding: 18px 20px; text-decoration: none; color: var(--ink); }
+  .card:hover { border-color: var(--ref); }
+  .card b { display: block; font-weight: 600; margin-bottom: 4px; }
+  .card span { color: var(--dim); font-size: 14.5px; }
+  @media (max-width: 860px) {
+    .wrap { display: block; padding: 0 20px; }
+    nav { position: static; max-height: none; padding: 32px 0 0; border-bottom: 1px solid var(--rule); }
+    nav .sub { display: none; }
+    main { padding: 32px 0 80px; }
+    h1 { font-size: 27px; }
+  }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <nav>
+      <a class="brand" href="./">VITALS docs</a>
+      <a href="./">Overview</a>
+      <a href="./api" class="on">API</a><div class="sub"><a href="#the-two-guarantees">The two guarantees</a><a href="#check-ids-are-permanent">Check ids are permanent</a><a href="#endpoints">Endpoints</a><a href="#auth-and-rate-limits">Auth and rate limits</a><a href="#what-this-api-will-not-do">What this API will not do</a></div>
+      <a href="./groups">Groups</a>
+      <a href="./vitals">VITALS</a>
+    </nav>
+    <main>
+      <h1 id="vitals-api-v1">VITALS API v1</h1>
+      <p>Read-only facts about pons v2 launches on Robinhood Chain (chain id <code>4663</code>), read from the chain.</p>
+      <p>Base URL: <code>https://api.checkvitals.xyz/v1</code> Machine-readable: <code>GET /v1/openapi.json</code></p>
+      <hr>
+      <h2 id="the-two-guarantees">The two guarantees</h2>
+      <p>These are the reason the API has this shape, and they are enforced by tests that run on every build rather than by convention.</p>
+      <p><strong>1. There is no score, and there will not be one.</strong></p>
+      <p>Every check reports a <code>state</code> that is exactly one of three words:</p>
+      <div class="scroll"><table>
+      <thead><tr><th>state</th><th>means</th></tr></thead>
+      <tbody>
+      <tr><td><code>finding</code></td><td>the chain shows this, stated as a fact</td></tr>
+      <tr><td><code>undetermined</code></td><td>the check could not be answered from the data available</td></tr>
+      <tr><td><code>none</code></td><td>the check ran and found nothing</td></tr>
+      </tbody></table></div>
+      <p>There is no grade, no rating, no risk level, no confidence and no <code>safe</code> boolean anywhere in any response. A consumer who wants to rank launches decides for themselves what matters; publishing the checks instead of a number is the whole design. If you need a single number for your own UI, build it from the checks you care about, but it will be yours, and you will know what is in it.</p>
+      <p><strong>2. <code>none</code> is not an all-clear, and <code>undetermined</code> never carries a value.</strong></p>
+      <p><code>state: "none"</code> means this particular check found nothing. It is never described as clean, in any field or message, because the absence of one finding says nothing about the launch as a whole.</p>
+      <p><code>state: "undetermined"</code> means the check could not be answered. Such a check has <code>value: null</code> and <code>reference: null</code>, always. A zero there would be read as a measurement, and it is not one.</p>
+      <p>A launch with <code>summary.findings === 0</code> and <code>summary.undetermined === 4</code> has not passed anything. It has four unanswered questions.</p>
+      <hr>
+      <h2 id="check-ids-are-permanent">Check ids are permanent</h2>
+      <p>A consumer keys their own logic off <code>check.id</code>. <strong>Adding a check is a compatible change. Renaming or removing one is not</strong>, and will not happen.</p>
+      <p><code>summary.checks_run</code> is 11 on a launch with no declaration, and 12 on one with a declaration. Nine of those ids are the committed v1 set; the rest were added after v1 and a client written against the nine can ignore them.</p>
+      <p>Every <code>value</code> and every <code>reference</code> is <strong>an object or null</strong>, never a number, a string or a boolean. A bare scalar cannot gain a second field later without breaking every client that read it. The keys below are part of the contract.</p>
+      <p><strong>Shares are fractions, not percentages: <code>0.174</code> is 17.4% of supply.</strong></p>
+      <div class="scroll"><table>
+      <thead><tr><th>id</th><th>v1</th><th>what it reports</th><th><code>value</code> keys</th></tr></thead>
+      <tbody>
+      <tr><td><code>snipe_tax_exemptions</code></td><td>✓</td><td>wallets pre-exempted from the opening tax, and their share of supply</td><td><code>wallets</code>, <code>beyond_deployer</code>, <code>supply_share</code>, <code>slots</code></td></tr>
+      <tr><td><code>creator_opening_buy</code></td><td>✓</td><td>what the deployer took for itself in the opening window</td><td><code>supply_share</code></td></tr>
+      <tr><td><code>deployer_history</code></td><td>✓</td><td>how often this wallet has launched recently</td><td><code>launches_7d</code></td></tr>
+      <tr><td><code>ticker_collision</code></td><td>✓</td><td><strong>other</strong> indexed launches using this ticker</td><td><code>matches</code></td></tr>
+      <tr><td><code>ticker_vs_pair</code></td><td>✓</td><td>the token wearing the ticker of the asset it trades against</td><td><code>differs</code></td></tr>
+      <tr><td><code>creator_tax</code></td><td>✓</td><td>the creator's cut per trade, against the index median</td><td><code>bps</code></td></tr>
+      <tr><td><code>buyback_vesting</code></td><td>✓</td><td>whether creator fees are locked into a 5-year vest</td><td><code>enabled</code></td></tr>
+      <tr><td><code>pair_asset</code></td><td>✓</td><td>what the launch is priced in</td><td><code>asset</code>, <code>address</code></td></tr>
+      <tr><td><code>holder_concentration</code></td><td>✓</td><td>what the largest wallets hold</td><td><code>top5_share</code>, <code>largest_share</code>, <code>holders</code></td></tr>
+      <tr><td><code>deployer_prior_peaks</code></td><td>added after v1</td><td>how far this deployer's previous tokens got</td><td><code>median_peak_mcap</code>, <code>priors</code></td></tr>
+      <tr><td><code>deployer_prior_survival</code></td><td>added after v1</td><td>whether those tokens still traded a day later</td><td><code>still_trading_share</code>, <code>priors</code></td></tr>
+      <tr><td><code>launch_vs_declaration</code></td><td>added after v1</td><td>the chain against what the deployer declared beforehand, <strong>present only on a declared launch</strong></td><td><code>mismatches</code>, <code>fields</code></td></tr>
+      </tbody></table></div>
+      <p>The <code>reference</code> object is the thing the value is measured against, and is <code>null</code> whenever there is nothing to measure against yet:</p>
+      <div class="scroll"><table>
+      <thead><tr><th>id</th><th><code>reference</code> keys</th></tr></thead>
+      <tbody>
+      <tr><td><code>creator_tax</code></td><td><code>median_bps</code>, <code>n</code></td></tr>
+      <tr><td><code>creator_opening_buy</code></td><td><code>median_share</code>, <code>n</code>, null until the index has 30 measured launches</td></tr>
+      <tr><td><code>ticker_collision</code></td><td><code>indexed</code>, <code>flag_at_or_above</code></td></tr>
+      <tr><td><code>deployer_history</code></td><td><code>flag_above</code></td></tr>
+      <tr><td><code>deployer_prior_peaks</code></td><td><code>index_median_peak_mcap</code></td></tr>
+      <tr><td><code>deployer_prior_survival</code></td><td><code>flag_below</code></td></tr>
+      <tr><td><code>launch_vs_declaration</code></td><td><code>declared_at_block</code></td></tr>
+      <tr><td><code>ticker_vs_pair</code></td><td><code>pair_symbol</code></td></tr>
+      <tr><td><code>pair_asset</code></td><td><code>native</code></td></tr>
+      <tr><td><code>holder_concentration</code></td><td><code>flag_at_share</code>, <code>percentile</code>, <code>n</code>, null until a distribution exists</td></tr>
+      <tr><td><code>snipe_tax_exemptions</code></td><td>always null: the count is the finding, there is no baseline for it</td></tr>
+      </tbody></table></div>
+      <h3 id="a-measurement-with-no-reference-is-not-undetermined">A measurement with no reference is not undetermined</h3>
+      <p>If the window was read and the number is real, the check states it, with <code>reference: null</code> and the reason in the headline:</p>
+      <pre><code>{
+        "id": "creator_opening_buy",
+        "state": "none",
+        "headline": "creator opened with 1.0% of supply · no index median yet, n=12, needs 30",
+        "value": { "supply_share": 0.0103 },
+        "reference": null,
+        "severity": 0,
+        "source": "CurveBuy events over the first 40 blocks, against the index median"
+      }</code></pre>
+      <p><code>undetermined</code> is reserved for a window that was <strong>not read</strong>. Such a check states no number at all, in any field, including the headline.</p>
+      <hr>
+      <h2 id="endpoints">Endpoints</h2>
+      <h3 id="get-v1-launch-address"><code>GET /v1/launch/{address}</code></h3>
+      <p>One launch, as structured checks.</p>
+      <pre><code>curl -s https://api.checkvitals.xyz/v1/launch/0xd384722f6adfe7d79e8e6623896df199afd31b76 \
+        -H 'Authorization: Bearer YOUR_KEY'</code></pre>
+      <p>Full response: <a href="../examples/sample-response.json"><code>examples/sample-response.json</code></a>. Abridged:</p>
+      <pre><code>{
+        "token": "0xd384722f6adfe7d79e8e6623896df199afd31b76",
+        "chain": 4663,
+        "launchpad": "pons_v2",
+        "symbol": "CHIPPER",
+        "launch_block": 45790066,
+        "launch_tx": "0xf2185b971c3b2a996c62dbedeeed19f3fc562b9be50625f113a3ce2761461f43",
+        "age_seconds": 1560043,
+        "pair": {
+          "asset": "ETH",
+          "address": "0x0000000000000000000000000000000000000000"
+        },
+        "checks": [
+          {
+            "id": "snipe_tax_exemptions",
+            "state": "finding",
+            "headline": "9 wallets tax-free at launch, 1 of them the deployer, together 17.4% of supply",
+            "value": {
+              "wallets": 9,
+              "beyond_deployer": 8,
+              "supply_share": 0.173623,
+              "slots": 32
+            },
+            "reference": null,
+            "severity": 917,
+            "source": "the curve's own SnipeTaxExempted events, from the launch transaction receipt"
+          },
+          {
+            "id": "creator_opening_buy",
+            "state": "none",
+            "headline": "creator opened with 1.0% of supply · no index median yet, n=1, needs 30",
+            "value": {
+              "supply_share": 0.010322
+            },
+            "reference": null,
+            "severity": 0,
+            "source": "CurveBuy events over the first 40 blocks, against the index median"
+          },
+          {
+            "id": "holder_concentration",
+            "state": "none",
+            "headline": "top 5 hold 92.9% (no reference yet)",
+            "value": {
+              "top5_share": 0.929,
+              "largest_share": null,
+              "holders": 9
+            },
+            "reference": null,
+            "severity": 0,
+            "source": "the token's Transfer log, excluding the curve and the protocol"
+          },
+          {
+            "id": "ticker_collision",
+            "state": "undetermined",
+            "headline": "can't check this ticker against other launches yet",
+            "value": null,
+            "reference": null,
+            "severity": 110,
+            "source": "indexed launch symbols and names, homoglyph-normalised"
+          }
+        ],
+        "summary": {
+          "checks_run": 11,
+          "findings": 1,
+          "undetermined": 5
+        },
+        "as_of": "2026-09-12T15:32:29.797Z",
+        "index": {
+          "launches": 18100
+        }
+      }</code></pre>
+      <p>Four of the eleven checks are shown. <code>examples/sample-response.json</code> in the repository is the full response, byte for byte as the endpoint returned it.</p>
+      <p><strong>About this capture.</strong> It was taken against an index that was a long way behind the chain head, which is why <code>ticker_collision</code> and the deployer checks come back <code>undetermined</code> rather than <code>none</code>: the index had not read the window those questions are about, so it does not answer them. That is the guarantee working, not a gap in the data, and against a current index those same checks resolve. Regenerate at any time with <code>node scripts/gen-examples.mjs</code>.</p>
+      <p>Field notes:</p>
+      <ul><li><strong><code>value</code></strong> is the measured quantity, apart from the sentence, and is always <strong>an object or null</strong>, never a bare number, string or boolean. Use this, not <code>headline</code>. Keys are per check id and listed above. Shares are fractions: <code>0.174</code> is 17.4% of supply. A key whose quantity was not read is <code>null</code>, never <code>0</code>, because a zero there is indistinguishable from a measurement.</li><li><strong><code>reference</code></strong> is what the value is measured against, also an object or null: an index median with its sample size, a threshold, a denominator. Null when there is nothing to measure against yet, in which case the headline says so.</li><li><strong><code>severity</code></strong> orders the checks, highest first. It is an <strong>integer</strong>, it is <strong>not a score</strong>, and it is not comparable between launches; it exists so you can render the same order the cards do. The quantity that drove it is in <code>value</code>, never encoded in the severity's own digits.</li><li><strong><code>source</code></strong> is what the check was read from. It is published because it varies in a way that matters: an exemption count read from the curve's own events includes the deployer, one decoded from calldata does not, and they are different quantities.</li></ul>
+      <p>Status codes:</p>
+      <div class="scroll"><table>
+      <thead><tr><th>code</th><th>body</th><th>when</th></tr></thead>
+      <tbody>
+      <tr><td><code>200</code></td><td>the launch</td><td></td></tr>
+      <tr><td><code>400</code></td><td><code>{"error":"invalid_address","resolved_as":null}</code></td><td>not a 20-byte hex address</td></tr>
+      <tr><td><code>404</code></td><td>`{"error":"not_a_pons_v2_launch","resolved_as":"deployer"\</td><td>"curve"\</td><td>null}`</td><td>the factory has no record of this token</td></tr>
+      <tr><td><code>429</code></td><td><code>{"error":"rate_limited",...}</code> + <code>Retry-After</code></td><td>over your rate</td></tr>
+      <tr><td><code>503</code></td><td><code>{"error":"index_lagging","lag_blocks":N,"max_lag_blocks":500}</code></td><td>the index is more than 500 blocks behind</td></tr>
+      <tr><td><code>503</code></td><td><code>{"error":"scan_unavailable"}</code></td><td>the chain could not be read well enough to answer</td></tr>
+      </tbody></table></div>
+      <p><code>resolved_as</code> is worth handling. A deployer address and a curve address are both things people paste expecting a token; a 404 that says which one you have is the difference between a useful error and a dead end.</p>
+      <h3 id="post-v1-launches"><code>POST /v1/launches</code></h3>
+      <p>Up to <strong>50</strong> addresses. Partial results: one bad address does not fail the batch.</p>
+      <pre><code>curl -s https://api.checkvitals.xyz/v1/launches \
+        -H 'Authorization: Bearer YOUR_KEY' \
+        -H 'Content-Type: application/json' \
+        -d '{"addresses":["0xd384722f6adfe7d79e8e6623896df199afd31b76","0x5a05ff9c0d10e89701bae5b35d64adf99903073b"]}'</code></pre>
+      <p>Returns an array, in the order given:</p>
+      <pre><code>[
+        { "address": "0xd384…1b76", "ok": true,  "launch": { "...": "the same object as above" } },
+        { "address": "0x5a05…073b", "ok": false, "error": { "error": "not_a_pons_v2_launch", "resolved_as": null } }
+      ]</code></pre>
+      <p>Addresses are scanned in sequence, not concurrently: fifty at once would put the API ahead of the Telegram bot by sheer count. Budget accordingly.</p>
+      <h3 id="get-v1-stats"><code>GET /v1/stats</code></h3>
+      <pre><code>curl -s https://api.checkvitals.xyz/v1/stats</code></pre>
+      <pre><code>{
+        "index": { "launches": 18099, "decoded": 3400, "read_from_curve_events": 1 },
+        "exemptions": {
+          "with_any": 232,
+          "beyond_deployer": 1,
+          "beyond_deployer_pct": 100,
+          "median_count_beyond_deployer": null,
+          "median_sample": 1
+        },
+        "declarations": 0,
+        "as_of": "2026-09-12T10:41:07.000Z"
+      }</code></pre>
+      <p><code>median_count_beyond_deployer</code> is <code>null</code> below 30 observations. No median is published on a sample too small to mean anything, here or anywhere else in this product.</p>
+      <h3 id="get-v1-health"><code>GET /v1/health</code></h3>
+      <pre><code>curl -s https://api.checkvitals.xyz/v1/health</code></pre>
+      <pre><code>{
+        "ok": true,
+        "head_block": 45830412,
+        "indexed_to_block": 45830401,
+        "lag_blocks": 11,
+        "as_of": "2026-09-12T10:41:07.000Z"
+      }</code></pre>
+      <p><code>ok</code> goes false once <code>lag_blocks</code> exceeds 500, which is the same condition that makes the launch endpoints return 503. <code>lag_blocks: null</code> means one end could not be read, which is not the same as zero.</p>
+      <p><code>/v1/health</code> and <code>/v1/stats</code> keep answering while the index lags. They are how you find out that the rest will not.</p>
+      <h3 id="get-v1-openapi-json"><code>GET /v1/openapi.json</code></h3>
+      <pre><code>curl -s https://api.checkvitals.xyz/v1/openapi.json</code></pre>
+      <p>OpenAPI 3.1, generated from the same constants the handlers branch on. The check ids, the states, the batch ceiling and the rates in that document are the identifiers in the code, not a copy of them. Served without a key.</p>
+      <hr>
+      <h2 id="auth-and-rate-limits">Auth and rate limits</h2>
+      <p>Pass a key as <code>Authorization: Bearer KEY</code>, <code>X-API-Key: KEY</code>, or <code>?key=KEY</code>.</p>
+      <div class="scroll"><table>
+      <thead><tr><th>tier</th><th>rate</th><th>how</th></tr></thead>
+      <tbody>
+      <tr><td>keyless</td><td>1 rps</td><td>no key. Enough to evaluate the contract, not enough to build on.</td></tr>
+      <tr><td>public</td><td>5 rps</td><td>a public key</td></tr>
+      <tr><td>partner</td><td>60 rps</td><td>a partner key</td></tr>
+      </tbody></table></div>
+      <ul><li>Token bucket per key, with a 2-second burst.</li><li>An <strong>unrecognised key is not an error</strong>, it is served as keyless. A 401 in the way of an evaluation is worse than a low rate.</li><li><code>429</code> carries <code>Retry-After</code> in whole seconds, plus <code>X-RateLimit-Limit</code> and <code>X-RateLimit-Tier</code>.</li><li>Answers are cached <strong>30 seconds per token</strong>. A burst of requests for one address costs one scan.</li><li>CORS is open for GET. There is nothing here that is not public.</li></ul>
+      <p><strong>Priority.</strong> The API runs in the same process as the Telegram bot and shares its rate limiter, deliberately: an API answer and a <code>/scan</code> answer then come from one cache and one index and cannot disagree. API requests sit *below* the bot in that limiter: they are served only when no interactive request is waiting, and they stop short of a reserve so a fanned-out batch cannot empty the bucket in the instant before somebody's card renders. In practice you will not notice; under load, the person who typed a command wins.</p>
+      <hr>
+      <h2 id="what-this-api-will-not-do">What this API will not do</h2>
+      <ul><li>It will not tell you whether to buy something.</li><li>It will not score, grade or rank a launch.</li><li>It will not describe the absence of a finding as clean or safe.</li><li>It will not report a number it did not read from the chain. There is no price oracle behind any of it, and every market figure this project publishes is denominated in the asset the token actually trades against.</li></ul>
+      <p>If any response ever violates the two guarantees at the top of this document, that is a bug. Report it and it will be fixed as one.</p>
+      <footer>
+        <p><a href="https://checkvitals.xyz">checkvitals.xyz</a>
+        . <a href="https://t.me/vitalscheck_bot">@vitalscheck_bot</a>
+        . <a href="https://x.com/vitalsxyz">x.com/vitalsxyz</a>
+        . <a href="https://t.me/vitalsofficial">t.me/vitalsofficial</a></p>
+        <p>No score, no grade, no verdict. A check that found nothing is not a
+        check that found the launch to be fine.</p>
+      </footer>
+    </main>
+  </div>
+</body>
+</html>

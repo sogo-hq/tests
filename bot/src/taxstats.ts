@@ -309,6 +309,9 @@ export function taxStatsText(now = Math.floor(Date.now() / 1000)): string {
   lines.push(
     ...distributionLines(taxDistribution('all')),
     ...distributionLines(taxDistribution('graduated')),
+    '',
+    ...exemptionLines(),
+    '',
   );
 
   for (const b of TAX_BRACKETS) {
@@ -337,4 +340,77 @@ export function taxStatsText(now = Math.floor(Date.now() / 1000)): string {
 
   lines.push(POOL_TRADES_NOTE);
   return lines.join('\n');
+}
+
+// ------------------------------------------------------- exemption distribution
+
+/**
+ * How many launches exempted the deployer alone, and how many went beyond it.
+ *
+ * Counted only over rows the curve's own events settled. Every other row is
+ * reported as not read rather than pooled in, because the calldata path that
+ * produced most of them counted the exemptions array and nothing else, and the
+ * array names none of the three slots the factory fills by itself: the sender,
+ * the creatorFeeRecipient and the opening-buy recipient.
+ *
+ * That is the correction. A count of zero cannot happen, so a zero here is a
+ * read that did not finish and is counted as unread, not as a launch that
+ * exempted nobody.
+ */
+export interface ExemptionDistribution {
+  /** Rows whose count came from the curve's events. */
+  read: number;
+  /** Exactly the deployer, and nobody else. */
+  deployerOnly: number;
+  /** The deployer and at least one other wallet. */
+  beyondDeployer: number;
+  /** Rows the events have not settled yet, and impossible zeros. */
+  notRead: number;
+  /** Median wallet count among those that went beyond the deployer, or null. */
+  medianBeyond: number | null;
+  beyondSample: number;
+}
+
+export function exemptionDistribution(): ExemptionDistribution {
+  const n = (sql: string) => (db.prepare(sql).get() as { n: number }).n;
+  const read = n("SELECT COUNT(*) n FROM launches WHERE exemption_source = 'logs' AND snipe_exemption_count >= 1");
+  const deployerOnly = n("SELECT COUNT(*) n FROM launches WHERE exemption_source = 'logs' AND snipe_exemption_count = 1");
+  const beyondDeployer = n("SELECT COUNT(*) n FROM launches WHERE exemption_source = 'logs' AND snipe_exemption_count > 1");
+  const notRead = n("SELECT COUNT(*) n FROM launches WHERE exemption_source IS NULL OR exemption_source <> 'logs' OR snipe_exemption_count IS NULL OR snipe_exemption_count < 1");
+  const counts = (db
+    .prepare("SELECT snipe_exemption_count AS c FROM launches WHERE exemption_source = 'logs' AND snipe_exemption_count > 1 ORDER BY c")
+    .all() as { c: number }[]).map((r) => r.c);
+  const medianBeyond = counts.length >= MIN_BENCHMARK_SAMPLES
+    ? (counts.length % 2
+      ? counts[counts.length >> 1]!
+      : (counts[(counts.length >> 1) - 1]! + counts[counts.length >> 1]!) / 2)
+    : null;
+  return { read, deployerOnly, beyondDeployer, notRead, medianBeyond, beyondSample: counts.length };
+}
+
+export function exemptionLines(d: ExemptionDistribution = exemptionDistribution()): string[] {
+  // A table of zeros over a population of none is not a distribution, it is a
+  // shape where a distribution will be.
+  if (d.read === 0) {
+    return [
+      `tax-free at launch: no launch has been read from the curve's own events yet`
+      + (d.notRead > 0 ? `, ${d.notRead.toLocaleString()} waiting` : ''),
+    ];
+  }
+  const pct = (a: number) => `${((a / d.read) * 100).toFixed(1)}%`;
+  const out = [
+    `tax-free at launch, over ${d.read.toLocaleString()} launches read from the curve's own events:`,
+    `  exactly the deployer   ${d.deployerOnly.toLocaleString()} (${pct(d.deployerOnly)})`,
+    `  beyond the deployer    ${d.beyondDeployer.toLocaleString()} (${pct(d.beyondDeployer)})`,
+  ];
+  out.push(d.medianBeyond === null
+    ? `  median where beyond: not published under ${MIN_BENCHMARK_SAMPLES} observations (n=${d.beyondSample.toLocaleString()})`
+    : `  median where beyond    ${d.medianBeyond} wallets (n=${d.beyondSample.toLocaleString()})`);
+  // Never folded into the percentages. The unread rows are the ones that were
+  // counted wrongly before, and hiding them would repeat the mistake.
+  if (d.notRead > 0) {
+    out.push(`  ${d.notRead.toLocaleString()} launches not read from the events yet, not counted above`);
+  }
+  out.push('  a launch cannot exempt nobody: the sender and the fee recipient are always exempt');
+  return out;
 }

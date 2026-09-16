@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VITALS . VITALS docs</title>
+<meta name="description" content="VITALS documentation. VITALS.">
+<style>
+  :root { --bg: #080B09; --ink: #E8F0DE; --dim: #6E7A66; --ref: #C6F73A; --rule: #1B241A; }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; scroll-behavior: smooth; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 400 16px/1.7 Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  .wrap { display: flex; align-items: flex-start; max-width: 1180px; margin: 0 auto; gap: 48px; padding: 0 24px; }
+  nav { position: sticky; top: 0; flex: 0 0 210px; padding: 48px 0 64px; max-height: 100vh; overflow-y: auto; }
+  nav .brand {
+    font: 400 13px/1 "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    letter-spacing: 0.14em; text-transform: uppercase; color: var(--ref);
+    display: block; margin-bottom: 26px; text-decoration: none; border: 0;
+  }
+  nav a { display: block; color: var(--dim); text-decoration: none; border: 0; padding: 6px 0; font-size: 15px; }
+  nav a:hover { color: var(--ink); }
+  nav a.on { color: var(--ink); border-left: 2px solid var(--ref); padding-left: 12px; margin-left: -14px; }
+  nav .sub { margin: 4px 0 18px 0; padding-left: 12px; border-left: 1px solid var(--rule); }
+  nav .sub a { font-size: 14px; padding: 4px 0; }
+  main { flex: 1 1 auto; min-width: 0; padding: 48px 0 120px; }
+  h1 { font-size: 34px; line-height: 1.2; margin: 0 0 28px; font-weight: 700; letter-spacing: -0.01em; }
+  h2 {
+    font-size: 13px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--dim);
+    font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-weight: 400; margin: 52px 0 14px; padding-top: 14px; border-top: 1px solid var(--rule);
+  }
+  h3 { font-size: 19px; margin: 34px 0 12px; font-weight: 600; }
+  h4 { font-size: 16px; margin: 26px 0 10px; font-weight: 600; color: var(--dim); }
+  p { margin: 0 0 16px; }
+  ul, ol { margin: 0 0 16px; padding-left: 22px; }
+  li { margin: 0 0 8px; }
+  a { color: var(--ref); text-decoration: none; border-bottom: 1px solid var(--rule); }
+  a:hover { border-bottom-color: var(--ref); }
+  code {
+    font: 400 0.88em/1.5 "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    background: #0C100B; border: 1px solid var(--rule); border-radius: 3px; padding: 1px 5px;
+  }
+  pre {
+    background: #0C100B; border: 1px solid var(--rule); border-left: 2px solid var(--ref);
+    border-radius: 3px; padding: 16px 18px; margin: 0 0 18px; overflow-x: auto;
+  }
+  pre code { background: none; border: 0; padding: 0; font-size: 13.5px; line-height: 1.7; }
+  .scroll { overflow-x: auto; margin: 0 0 20px; }
+  table { border-collapse: collapse; width: 100%; font-size: 14.5px; }
+  th, td { text-align: left; padding: 9px 14px 9px 0; border-bottom: 1px solid var(--rule); vertical-align: top; }
+  th {
+    font: 400 12px/1.4 "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    letter-spacing: 0.08em; text-transform: uppercase; color: var(--dim); white-space: nowrap;
+  }
+  hr { border: 0; border-top: 1px solid var(--rule); margin: 36px 0; }
+  strong { font-weight: 600; }
+  footer { margin-top: 64px; padding-top: 24px; border-top: 1px solid var(--rule); color: var(--dim); font-size: 14px; }
+  .cards { display: grid; gap: 14px; margin: 0 0 28px; }
+  .card { display: block; border: 1px solid var(--rule); border-radius: 4px; padding: 18px 20px; text-decoration: none; color: var(--ink); }
+  .card:hover { border-color: var(--ref); }
+  .card b { display: block; font-weight: 600; margin-bottom: 4px; }
+  .card span { color: var(--dim); font-size: 14.5px; }
+  @media (max-width: 860px) {
+    .wrap { display: block; padding: 0 20px; }
+    nav { position: static; max-height: none; padding: 32px 0 0; border-bottom: 1px solid var(--rule); }
+    nav .sub { display: none; }
+    main { padding: 32px 0 80px; }
+    h1 { font-size: 27px; }
+  }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <nav>
+      <a class="brand" href="./">VITALS docs</a>
+      <a href="./">Overview</a>
+      <a href="./api">API</a>
+      <a href="./groups">Groups</a>
+      <a href="./vitals" class="on">VITALS</a><div class="sub"><a href="#the-description-line">The description line</a><a href="#what-it-never-says">What it never says</a><a href="#socials">Socials</a><a href="#declared-001">DECLARED #001</a><a href="#launch-day">Launch day</a><a href="#templates">Templates</a></div>
+    </nav>
+    <main>
+      <h1 id="vitals">VITALS</h1>
+      <h2 id="the-description-line">The description line</h2>
+      <p>&gt; VITALS reads pons v2 launches on Robinhood Chain and prints what the chain &gt; shows. Facts and their reference points. No score, no grade, no verdict.</p>
+      <p>One line, used on the site, in the bot bio and anywhere a sentence is needed. It says what the bot does and what it refuses to do, because the refusal is the product: anybody can print a number, and most things that print a number about a token are selling something.</p>
+      <p>The shorter form, where only a few words fit:</p>
+      <p>&gt; pons v2 launch scanner. facts, and what they are measured against.</p>
+      <h2 id="what-it-never-says">What it never says</h2>
+      <p>These are not style preferences. They are the reason the tool is worth reading, and they hold in every message, every card, every document here.</p>
+      <ul><li>No score, no grade, no traffic light, no verdict.</li><li>Absence of a finding is never "clean". Undetermined when the data cannot support a negative.</li><li>No price targets, no direction, no "safe to buy", no entry, no exit.</li><li>Nothing that did not finish reads as a fact about the chain.</li><li>A missing marker is not an all clear.</li></ul>
+      <h2 id="socials">Socials</h2>
+      <div class="scroll"><table>
+      <thead><tr><th>where</th><th>what</th></tr></thead>
+      <tbody>
+      <tr><td>site</td><td>https://checkvitals.xyz</td></tr>
+      <tr><td>x</td><td>https://x.com/vitalsxyz</td></tr>
+      <tr><td>telegram</td><td>https://t.me/vitalsofficial</td></tr>
+      <tr><td>bot</td><td>https://t.me/vitalscheck_bot</td></tr>
+      </tbody></table></div>
+      <p>All three go into the launch calldata. The pons create path carries a socials struct (twitter, telegram, discord, website, farcaster), so what is on the token page is what was signed at launch and not something edited afterwards.</p>
+      <h2 id="declared-001">DECLARED #001</h2>
+      <p>A declaration is a statement a deployer signs with the wallet that will deploy, before the launch, about what the launch will do. The bot stores the exact bytes that were signed and the signature, so the claim stays checkable against the launch that follows.</p>
+      <p>It is a claim. Nothing in it was checked against a chain at the time it was made, and the badge on a card says a claim exists and nothing more. What makes it worth anything is that it was made before the launch and cannot be changed afterwards.</p>
+      <p>VITALS declares its own launch under the same rules as anyone else, and it is the first: <strong>DECLARED #001</strong>.</p>
+      <h3 id="the-format">The format</h3>
+      <pre><code>vitals declaration
+      deployer: 0x447c8dc55B88C09830E123f9fB3e7C484714ED93
+      dev buy: 5% of supply, held by the deployer wallet, 2% team and 3% partnerships, vesting contracts in october, nothing distributed at launch
+      tax-free at launch: the deployer only
+      creator tax: 400 bps
+      tax split: 10% the room, 10% ecosystem, 80% the build, treasury rules as declared
+      the room: 50 seats. the room is owed 10% of the fee wallet's cumulative gross income, paid daily in ETH for 30 days by shares (T1 5, T2 2, T3 1), every payout printed before it leaves and recorded with its hash. a seat is given by the deployer, its tier is fixed when taken and reviewed once after the 30 days. a seat given up is reused and both occupants stay in the history. 10% of gross income goes to ecosystem integrations, 80% to the build.
+      holder fee share is off at launch. the token is access, not yield: 250k = watch, 1M = the holder feed, 10M = desk.
+      nothing changes in the first 10 days. the room reviews it with holders on 5 oct. any change is announced 7 days ahead.
+      docs: https://checkvitals.xyz/declared/001
+      nonce: &lt;issued by the bot&gt;</code></pre>
+      <p>Every line is a number or an address that the launch transaction either matches or does not. After the launch, the card carries the declaration and whether the chain agreed with it.</p>
+      <h3 id="the-room">The room</h3>
+      <p>Fifty seats. That is the whole room and the number does not move.</p>
+      <ul><li><strong>The CA goes into the room at T+3s</strong>, after the opening tax window has closed. Not before. The window is the three seconds the protocol charges a snipe tax for, and posting the address inside it would be handing fifty people a tax bill.</li><li><strong>The dev buy is the team allocation and is declared as one.</strong> 5% of supply, held by the deployer wallet, 2% team and 3% partnerships, vesting contracts in october, nothing distributed at launch. There is no separate team tokens line, because ours would have said none and that would have been false.</li><li><strong>The room pays the same tax as everyone else.</strong> There are no exemptions beyond the deployer, which the protocol exempts on its own. Nobody in the room buys tax free, and the launch transaction is where that is checked rather than promised.</li><li><strong>Seat numbers are public. Names are not.</strong> The roster the room sees carries seat numbers and tiers. It carries no handle, no wallet and no user id, and the public payout post carries transaction hashes without handles.</li><li>A seat that is given up is reused, and both occupants stay in the history.</li></ul>
+      <h3 id="the-fee-sharing">The fee sharing</h3>
+      <p>Two things are signed here, and they answer different questions. The room's share says what a seat is owed. The holder fee share says what holding the token is owed, and the answer is nothing.</p>
+      <pre><code>the room: 50 seats. the room is owed 10% of the fee wallet's cumulative gross income, paid daily in ETH for 30 days by shares (T1 5, T2 2, T3 1), every payout printed before it leaves and recorded with its hash. a seat is given by the deployer, its tier is fixed when taken and reviewed once after the 30 days. a seat given up is reused and both occupants stay in the history. 10% of gross income goes to ecosystem integrations, 80% to the build.
+      holder fee share is off at launch. the token is access, not yield: 250k = watch, 1M = the holder feed, 10M = desk.
+      nothing changes in the first 10 days. the room reviews it with holders on 5 oct. any change is announced 7 days ahead.</code></pre>
+      <p>The token is access, not yield. That is stated before the launch rather than explained after it, because a token that pays holders a share of fees and a token that opens a tool are different things and the difference is worth knowing on the day rather than a month later. The three tiers are what <code>/tiers</code> reads and what the holder checks gate on today. The 5 oct review is a date, and any change to it is announced seven days ahead, which is the part that can be held against us.</p>
+      <p>The mechanics behind the room's share are already built. The creator fee goes to one wallet, a fixed share of cumulative gross income is what the room is owed, what has already been paid and anything swept out are subtracted from that, and every payout is printed before it leaves and recorded with its hash after. A run that dies part way through resumes without re-sending what already went out.</p>
+      <p>Every number in it is checkable after the fact: the 10% is what <code>/ledger preview</code> computes and prints every term of, the shares are what the roster holds, the hashes are in the public post at the end of each run, and a seat changing hands is in the seat history.</p>
+      <h3 id="the-treasury">The treasury</h3>
+      <pre><code>treasury: 0x138826536Ca720C4D614550D5DB2b22216d136ad.
+      funded by sweeps from the fee wallet after each room payout, every sweep recorded with its hash.
+      it may hold up to 10% of its ETH in other robinhood chain tokens. positions are discussed in BLOCK ZERO, executed and signed by one wallet, and every trade is posted with its hash on X within the hour.
+      realized gains return to the treasury and count as income, so the room receives its 10% through the same ledger. no separate profit share, no promises.
+      the treasury does not trade $VITALS.
+      one signer. no other wallets. no OTC.</code></pre>
+      <p>The treasury does not trade $VITALS. That was a choice between not touching the token at all and buying it under stated limits, and the first is what is signed; the second is deleted rather than left beside it, because signing both would have said neither.</p>
+      <p>What it may do is hold up to a tenth of its ETH in other tokens on this chain, under conditions that each name the thing that would show the rule was broken: one signer, no other wallets, no OTC, every trade posted with its hash within the hour, and every sweep into the treasury recorded with its hash by <code>/ledger sweep</code>. Realized gains go back in as income, so the room's 10% is computed over them by the same ledger as everything else. There is no second mechanism and no separate profit share to audit.</p>
+      <h2 id="launch-day">Launch day</h2>
+      <p><a href="#"><code>launch-day-runbook.md</code></a> is the day itself: the Thursday rehearsal, the Friday test in a private group, the launch minute by minute with the exact commands, and what to do when the transaction reverts, when the index is lagging at T+0, or when a payout run dies part way through.</p>
+      <p><a href="#"><code>partners-groups.md</code></a> is the install for a group admin.</p>
+      <h2 id="templates">Templates</h2>
+      <p>Three posts are written before launch day rather than during it:</p>
+      <ul><li><a href="#"><code>template-self-scan-t15.md</code></a>, fifteen minutes in</li><li><a href="#"><code>template-first-ledger-t4h.md</code></a>, four hours in</li><li><a href="#"><code>template-declaration.md</code></a>, the declaration itself</li></ul>
+      <footer>
+        <p><a href="https://checkvitals.xyz">checkvitals.xyz</a>
+        . <a href="https://t.me/vitalscheck_bot">@vitalscheck_bot</a>
+        . <a href="https://x.com/vitalsxyz">x.com/vitalsxyz</a>
+        . <a href="https://t.me/vitalsofficial">t.me/vitalsofficial</a></p>
+        <p>No score, no grade, no verdict. A check that found nothing is not a
+        check that found the launch to be fine.</p>
+      </footer>
+    </main>
+  </div>
+</body>
+</html>

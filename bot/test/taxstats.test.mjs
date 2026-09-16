@@ -178,6 +178,9 @@ test('the text: distribution, rankings with their filters named, and the pool di
     'creator tax, graduated launches (n=8, 1 undecoded)',
     '  0% 2 (25%) · 1-2% 2 (25%) · 3-5% 1 (12.5%) · 6-10% 3 (37.5%)',
     '  median and p90 not published under 30 observations (n=8)',
+    '',
+    "tax-free at launch: no launch has been read from the curve's own events yet, 14 waiting",
+    '',
     'top by curve volume, last 7d, ETH pairs, 0% tax (1 read in full):',
     '  $TEN · 0.25 ETH · 1 trade',
     '  1 graduated launch not read in full, not ranked',
@@ -279,4 +282,70 @@ test('the curve-life pass counts as read in full through its own column', () => 
   } finally {
     db.prepare('UPDATE launches SET trades_indexed_to = graduated_at, curve_indexed_to = NULL WHERE token IN (?, ?)').run(A(4), A(5));
   }
+});
+
+// ------------------------------------------------- the corrected distribution
+
+test('the exemption distribution counts only what the events settled', () => {
+  db.prepare('DELETE FROM launches').run();
+  const add = (token, count, source) => db.prepare(
+    `INSERT INTO launches (token, curve, deployer, pair_token, launch_config_id, graduation_threshold,
+       block_number, tx_hash, launched_at, snipe_exemption_count, exemption_source)
+     VALUES (?,?,?,?,0,'0',1,?,1,?,?)`,
+  ).run(token, token, token, ETH, token, count, source);
+
+  add('0xa1', 1, 'logs');
+  add('0xa2', 1, 'logs');
+  add('0xa3', 4, 'logs');
+  // The rows the old path produced: a zero that cannot be true, and a count
+  // from the array. Neither is counted in the percentages.
+  add('0xb1', 0, 'logs');
+  add('0xb2', 0, null);
+  add('0xb3', 2, 'calldata');
+  add('0xb4', null, null);
+
+  const d = T.exemptionDistribution();
+  assert.equal(d.read, 3, 'only the three settled rows');
+  assert.equal(d.deployerOnly, 2);
+  assert.equal(d.beyondDeployer, 1);
+  assert.equal(d.notRead, 4, 'the impossible zero is unread, not a launch that exempted nobody');
+});
+
+test('the lines name both sides, the unread remainder and the floor', () => {
+  const lines = T.exemptionLines({
+    read: 1000, deployerOnly: 620, beyondDeployer: 380,
+    notRead: 250, medianBeyond: 5, beyondSample: 380,
+  });
+  assert.match(lines[0], /over 1,000 launches read from the curve's own events/);
+  assert.match(lines[1], /exactly the deployer\s+620 \(62\.0%\)/);
+  assert.match(lines[2], /beyond the deployer\s+380 \(38\.0%\)/);
+  assert.match(lines[3], /median where beyond\s+5 wallets \(n=380\)/);
+  assert.match(lines[4], /250 launches not read from the events yet, not counted above/);
+  assert.match(lines[5], /a launch cannot exempt nobody/);
+  // The two sides are a partition of what was read, not of everything.
+  assert.equal(620 + 380, 1000);
+});
+
+test('an unread population is said once, not drawn as a table of zeros', () => {
+  const lines = T.exemptionLines({
+    read: 0, deployerOnly: 0, beyondDeployer: 0, notRead: 900, medianBeyond: null, beyondSample: 0,
+  });
+  assert.equal(lines.length, 1);
+  assert.match(lines[0], /no launch has been read from the curve's own events yet, 900 waiting/);
+  assert.doesNotMatch(lines[0], /0 \(0\.0%\)/);
+});
+
+test('the median beyond is withheld under thirty observations', () => {
+  const few = T.exemptionLines({ read: 40, deployerOnly: 30, beyondDeployer: 10, notRead: 0, medianBeyond: null, beyondSample: 10 });
+  assert.match(few[3], /not published under 30 observations \(n=10\)/);
+});
+
+test('no line in it says clean, safe or nobody', () => {
+  const lines = T.exemptionLines({ read: 10, deployerOnly: 10, beyondDeployer: 0, notRead: 0, medianBeyond: null, beyondSample: 0 });
+  for (const l of lines) {
+    assert.doesNotMatch(l, /\bclean\b|\bsafe\b|!/i, l);
+    assert.ok(!l.includes(String.fromCharCode(0x2014)), l);
+  }
+  // "cannot exempt nobody" is the floor being stated, not a finding of none.
+  assert.match(lines.join('\n'), /cannot exempt nobody/);
 });

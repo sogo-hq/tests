@@ -63,12 +63,25 @@ function readBody(req: IncomingMessage): Promise<unknown> {
   });
 }
 
+/** Where the root redirects. The documentation site, not the repository. */
+export const DOCS_URL = 'https://docs.checkvitals.xyz/api';
+
 export async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
   const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
   const path = url.pathname.replace(/\/+$/, '') || '/';
 
   if (req.method === 'OPTIONS') {
     send(res, 204, null);
+    return;
+  }
+
+  // The root is a signpost, not a 404. Somebody who pastes the api host into a
+  // browser is looking for the documentation, and answering "unknown_route" to
+  // the most obvious request anyone makes is a bad first impression of a
+  // service whose whole product is answering clearly.
+  if (path === '/' && (req.method === 'GET' || req.method === 'HEAD')) {
+    res.writeHead(302, { location: DOCS_URL, 'cache-control': 'public, max-age=300' });
+    res.end();
     return;
   }
 
