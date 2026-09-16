@@ -4,10 +4,10 @@ The text VITALS signs with the deployer wallet before its own launch. It goes
 through `/declare` in DM like anybody else's, and the bot stores the exact
 bytes that were signed together with the signature.
 
-Two blocks are marked placeholders and are **not** to be signed until they are
-written: `[TREASURY RULES]` and `[HOLDER FEE SHARING]`. Signing a placeholder
-would put a promise on chain that nobody has decided the content of yet, which
-is the exact thing a declaration exists to prevent.
+Both blocks that were placeholders are written. Nothing in the signed text is
+marked any more, which is the condition for signing it at all: a placeholder
+signed is a promise on chain that nobody decided the content of, and that is
+the exact thing a declaration exists to prevent.
 
 ## The canonical text
 
@@ -20,9 +20,10 @@ deployer: 0x447c8dc55B88C09830E123f9fB3e7C484714ED93
 dev buy: 5% of supply, held by the deployer wallet, 2% team and 3% partnerships, vesting contracts in october, nothing distributed at launch
 tax-free at launch: the deployer only
 creator tax: 400 bps
-tax split: [TREASURY RULES]
+tax split: 10% the room, 10% ecosystem, 80% the build, treasury rules as declared
 the room: 50 seats. the room is owed 10% of the fee wallet's cumulative gross income, paid daily in ETH for 30 days by shares (T1 5, T2 2, T3 1), every payout printed before it leaves and recorded with its hash. a seat is given by the deployer, its tier is fixed when taken and reviewed once after the 30 days. a seat given up is reused and both occupants stay in the history. 10% of gross income goes to ecosystem integrations, 80% to the build.
-[HOLDER FEE SHARING]
+holder fee share is off at launch. the token is access, not yield: 250k = watch, 1M = the holder feed, 10M = desk.
+nothing changes in the first 10 days. the room reviews it with holders on 5 oct. any change is announced 7 days ahead.
 docs: https://checkvitals.xyz/declared/001
 nonce: <issued by the bot, one per draft>
 ```
@@ -35,8 +36,9 @@ Field by field, and what the launch transaction has to show for each to hold:
 | dev buy | the opening buy as a share of supply, 5% is 0.0930 ETH at a 4% tax, and where those tokens sit afterwards |
 | tax-free at launch | the wallets the launch transaction pre-exempts |
 | creator tax | `creatorTaxBps` in the launch parameters |
-| tax split | [TREASURY RULES], of which the $VITALS line is written below |
+| tax split | the payout hashes and the sweep hashes, against the three shares stated |
 | the room | the payout hashes, against the shares and the 30 days stated |
+| holder fee share | off, so nothing is paid to a holder who did not take a seat |
 | docs | a page that exists before the launch, not after |
 
 There is no `team tokens` line. There used to be, and ours said `none`, which
@@ -46,48 +48,51 @@ answered quickly and still mislead everyone reading it. What the dev buy holds
 now belongs to the line that declares the dev buy, and `/declare` refuses
 `none` there from anybody who declared a buy.
 
-## The placeholders
+## The two blocks that were placeholders
 
-### [TREASURY RULES]
+### Treasury rules
 
-The $VITALS line, as supplied, with the choice between a and b still open:
-
-```
-<a: the treasury does not trade $VITALS.> or <b: it buys $VITALS on dips, never sells in the first 30 days, and after that at most 5% of its $VITALS per day, never within 24h of a room post or partner news.>
-```
-
-The rest is not written. When it is, it states where the creator fee goes, in
-what proportions, and what else the treasury may and may not do with its part.
-It has to be specific enough that a transaction either matches it or does not,
-because a declaration that cannot be checked is a slogan.
-
-**a and b are alternatives and one of them has to go.** They are opposite
-promises: a says the treasury never touches the token, b says it buys it under
-stated limits. Signing the pair says neither. Until one is struck out and the
-rest of the block is written, `/declare` is answered with the split as a number
-or the declaration is not signed at all.
-
-### [HOLDER FEE SHARING]
-
-The room's share is written and is in the signed text above:
+Written, and signed as part of the declaration:
 
 ```
-the room: 50 seats. the room is owed 10% of the fee wallet's cumulative gross income, paid daily in ETH for 30 days by shares (T1 5, T2 2, T3 1), every payout printed before it leaves and recorded with its hash. a seat is given by the deployer, its tier is fixed when taken and reviewed once after the 30 days. a seat given up is reused and both occupants stay in the history. 10% of gross income goes to ecosystem integrations, 80% to the build.
+treasury: 0x138826536Ca720C4D614550D5DB2b22216d136ad.
+funded by sweeps from the fee wallet after each room payout, every sweep recorded with its hash.
+it may hold up to 10% of its ETH in other robinhood chain tokens. positions are discussed in BLOCK ZERO, executed and signed by one wallet, and every trade is posted with its hash on X within the hour.
+realized gains return to the treasury and count as income, so the room receives its 10% through the same ledger. no separate profit share, no promises.
+the treasury does not trade $VITALS.
+one signer. no other wallets. no OTC.
 ```
 
-Every number in it is checkable after the fact. 10% of cumulative gross income
-is what `/ledger preview` computes and prints every term of; the shares are
-what the roster holds; the hashes are in the public post at the end of each
-run; and a seat changing hands is in the seat history.
+The choice that was open is closed: the treasury does not trade $VITALS. The
+alternative, buying it under stated limits, is deleted rather than left beside
+it, because signing both would have said neither.
 
-What is still not written: how a seat is earned beyond being given, and what
-the review after the 30 days is allowed to change.
+Every clause names the thing that would show it was broken. The sweeps carry
+hashes and `/ledger sweep` records them, so what left the fee wallet is
+countable. Realized gains returning as income means the room's 10% is computed
+over them by the same `/ledger preview` as everything else, with no second
+mechanism to audit. One signer and no OTC are claims about the address above,
+readable off its transaction list by anyone.
 
-What already exists and is not a placeholder: one wallet receives the creator
-fee, a fixed share of cumulative gross income is what the room is owed, what
-has already been paid out and anything swept out are subtracted before a run
-pays anything, every amount is printed before it leaves and recorded with its
-hash after, and a run that dies part way through resumes without re-sending.
+### Holder fee sharing
+
+Written, and signed as part of the declaration:
+
+```
+holder fee share is off at launch. the token is access, not yield: 250k = watch, 1M = the holder feed, 10M = desk.
+nothing changes in the first 10 days. the room reviews it with holders on 5 oct. any change is announced 7 days ahead.
+```
+
+Off at launch, and stated as off rather than left unsaid. A token that pays
+holders a share of fees is a different thing from a token that opens a tool,
+and saying which one this is before the launch is worth more than saying it
+after. The three tiers are what `/tiers` reads and what the holder checks gate
+on today.
+
+The 5 oct review is a date, not an intention. Any change to it is announced
+seven days ahead, which is the part that can be held against us: a change that
+appears without the notice is a broken declaration, and the declaration is
+stored with its signature so that is checkable.
 
 ## The room, stated in the declaration
 
@@ -106,5 +111,5 @@ Fifty seats, and the number does not move.
 - No partner, no backer, no exchange, no name that has not agreed in writing
   to be named. There are none, so there are none in the text.
 - No price, no supply burn, no promise about what a token will do.
-- Placeholders stay visibly marked until they are replaced. A signed
-  declaration with `[TREASURY RULES]` still in it is a bug, not a draft.
+- Nothing in the signed text is a placeholder. A signed declaration with a
+  marker still in it is a bug, not a draft, and there are none left.

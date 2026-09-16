@@ -62,9 +62,10 @@ deployer: 0x447c8dc55B88C09830E123f9fB3e7C484714ED93
 dev buy: 5% of supply, held by the deployer wallet, 2% team and 3% partnerships, vesting contracts in october, nothing distributed at launch
 tax-free at launch: the deployer only
 creator tax: 400 bps
-tax split: [TREASURY RULES]
+tax split: 10% the room, 10% ecosystem, 80% the build, treasury rules as declared
 the room: 50 seats. the room is owed 10% of the fee wallet's cumulative gross income, paid daily in ETH for 30 days by shares (T1 5, T2 2, T3 1), every payout printed before it leaves and recorded with its hash. a seat is given by the deployer, its tier is fixed when taken and reviewed once after the 30 days. a seat given up is reused and both occupants stay in the history. 10% of gross income goes to ecosystem integrations, 80% to the build.
-[HOLDER FEE SHARING]
+holder fee share is off at launch. the token is access, not yield: 250k = watch, 1M = the holder feed, 10M = desk.
+nothing changes in the first 10 days. the room reviews it with holders on 5 oct. any change is announced 7 days ahead.
 docs: https://checkvitals.xyz/declared/001
 nonce: <issued by the bot>
 ```
@@ -96,43 +97,59 @@ Fifty seats. That is the whole room and the number does not move.
 
 ### The fee sharing
 
-The room's share is in the signed text above:
+Two things are signed here, and they answer different questions. The room's
+share says what a seat is owed. The holder fee share says what holding the
+token is owed, and the answer is nothing.
 
 ```
 the room: 50 seats. the room is owed 10% of the fee wallet's cumulative gross income, paid daily in ETH for 30 days by shares (T1 5, T2 2, T3 1), every payout printed before it leaves and recorded with its hash. a seat is given by the deployer, its tier is fixed when taken and reviewed once after the 30 days. a seat given up is reused and both occupants stay in the history. 10% of gross income goes to ecosystem integrations, 80% to the build.
+holder fee share is off at launch. the token is access, not yield: 250k = watch, 1M = the holder feed, 10M = desk.
+nothing changes in the first 10 days. the room reviews it with holders on 5 oct. any change is announced 7 days ahead.
 ```
 
-[HOLDER FEE SHARING] covers what is still not written: how a seat is earned
-beyond being given, and what the review after the 30 days is allowed to
-change.
+The token is access, not yield. That is stated before the launch rather than
+explained after it, because a token that pays holders a share of fees and a
+token that opens a tool are different things and the difference is worth
+knowing on the day rather than a month later. The three tiers are what
+`/tiers` reads and what the holder checks gate on today. The 5 oct review is a
+date, and any change to it is announced seven days ahead, which is the part
+that can be held against us.
 
-The mechanics behind it are already built. The creator fee goes to one wallet,
-a fixed share of cumulative gross income is what the room is owed, what has
-already been paid and anything swept out are subtracted from that, and every
-payout is printed before it leaves and recorded with its hash after. A run
-that dies part way through resumes without re-sending what already went out.
+The mechanics behind the room's share are already built. The creator fee goes
+to one wallet, a fixed share of cumulative gross income is what the room is
+owed, what has already been paid and anything swept out are subtracted from
+that, and every payout is printed before it leaves and recorded with its hash
+after. A run that dies part way through resumes without re-sending what
+already went out.
 
-Every number in the line above is checkable after the fact: the 10% is what
+Every number in it is checkable after the fact: the 10% is what
 `/ledger preview` computes and prints every term of, the shares are what the
 roster holds, the hashes are in the public post at the end of each run, and a
 seat changing hands is in the seat history.
 
-### What the treasury does with $VITALS
-
-One line of [TREASURY RULES] is written, and it carries a choice that is still
-open:
+### The treasury
 
 ```
-<a: the treasury does not trade $VITALS.> or <b: it buys $VITALS on dips, never sells in the first 30 days, and after that at most 5% of its $VITALS per day, never within 24h of a room post or partner news.>
+treasury: 0x138826536Ca720C4D614550D5DB2b22216d136ad.
+funded by sweeps from the fee wallet after each room payout, every sweep recorded with its hash.
+it may hold up to 10% of its ETH in other robinhood chain tokens. positions are discussed in BLOCK ZERO, executed and signed by one wallet, and every trade is posted with its hash on X within the hour.
+realized gains return to the treasury and count as income, so the room receives its 10% through the same ledger. no separate profit share, no promises.
+the treasury does not trade $VITALS.
+one signer. no other wallets. no OTC.
 ```
 
-a and b are opposite promises. a says the treasury never touches the token; b
-says it buys it under stated limits. One of them has to go before anything is
-signed, because signing the pair says neither.
+The treasury does not trade $VITALS. That was a choice between not touching
+the token at all and buying it under stated limits, and the first is what is
+signed; the second is deleted rather than left beside it, because signing both
+would have said neither.
 
-The rest of [TREASURY RULES], which decides the share itself, is not written
-here yet. When it is, it goes in as text that was signed, like everything else
-on this page.
+What it may do is hold up to a tenth of its ETH in other tokens on this chain,
+under conditions that each name the thing that would show the rule was broken:
+one signer, no other wallets, no OTC, every trade posted with its hash within
+the hour, and every sweep into the treasury recorded with its hash by
+`/ledger sweep`. Realized gains go back in as income, so the room's 10% is
+computed over them by the same ledger as everything else. There is no second
+mechanism and no separate profit share to audit.
 
 ## Launch day
 
