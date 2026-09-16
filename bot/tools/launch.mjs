@@ -53,8 +53,21 @@ const MODES = ['--dry', '--rehearse', '--go'];
 const mode = MODES.filter(has);
 const die = (msg, code = 1) => { console.error(`\n  ${msg}\n`); process.exit(code); };
 
+// --check is its own thing and stops here: it reads the config, fetches the
+// logo and asks the chain for the address the salt makes. It never reaches the
+// key, the window or the send, so it works on a Sunday.
+if (has('--check')) {
+  const { runCheck } = await import(join(HERE, 'check.mjs'));
+  const ok = await runCheck({
+    configPath: arg('--config', join(HERE, 'launch.config.json')),
+    as: arg('--as', null),
+  });
+  process.exit(ok ? 0 : 1);
+}
+
 if (mode.length !== 1) {
   die(`pick exactly one mode: ${MODES.join(' ')}\n\n` +
+      '  --check     validate the config only. sends nothing, needs no key, ignores the window\n' +
       '  --dry       simulate, send nothing\n' +
       '  --rehearse  a throwaway token on a burner key, then scan it\n' +
       '  --go        the launch');
