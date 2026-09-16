@@ -23,7 +23,8 @@ import {
 import { entitlement, entitlementLine } from './premium.js';
 import { statusReport, statusText, resetWatchdog } from './watchdog.js';
 import { shouldOnboard, markOnboarded, onboardingText } from './onboard.js';
-import { clamp, TELEGRAM_MAX_MESSAGE, ADDRESS_PATTERN, containsAddress } from './text.js';
+import { commandList, COMMANDS, registeredNames } from './commands.js';
+import { clamp, clampMessage, TELEGRAM_MAX_MESSAGE, ADDRESS_PATTERN, containsAddress } from './text.js';
 import {
   tierOf, atLeast, thresholds, setThreshold, setVitalsToken, vitalsToken,
   grant, revokeGrant, linkedWallet, effectiveTier, type Tier,
@@ -189,54 +190,22 @@ const HELP = [
   'Send /scan <token address> for a card of what the chain shows.',
   '',
   'Works three ways, same card on each:',
-  '  • DM: /scan <address>, or just paste an address',
-  '  • Groups: /scan <address>',
-  '  • Inline: type @BOTNAME <address> in any chat',
-  '',
-  '/full <address> adds the technical detail behind every line.',
-  '/position <wallet> <ca> says where one wallet stood in one launch: what number',
-  '  buyer it was, how many exempt wallets were ahead of it, and how many of those',
-  '  early buyers sold inside thirty minutes.',
-  '/image <address> renders the card as a picture, for sharing outside Telegram.',
-  '/stats shows what has been indexed.',
-  '/premium status shows how your access stands, and how long it lasts.',
-  '',
-  'Launch readiness:',
-  '  • /ready in the group: the totals, and only the totals',
-  '  • /tge: the same, with the countdown once a time is set',
-  '  • register in DM only. a wallet posted in the group is deleted unread,',
-  '    and no wallet, label or user id is ever shown in a group message.',
-  '',
-  'Alerts, delivered here and only here, never into a group:',
-  '  • /watch deployer <address>: when that address launches again',
-  '  • /watch wallet <address>: when that address is pre-exempted on a launch',
-  '  • /watch filter <name>: when a new launch has a shape you picked',
-  '  • /filters lists the filters and how often each fires',
-  '  • /watching lists your subscriptions, /unwatch <address|filter> removes one',
-  '',
-  'In a group:',
-  '  \u2022 /autoscan on, by an admin, and an address posted here gets a card',
-  '  \u2022 off by default in every group. the bot never scans what it was not asked to',
-  '  \u2022 /leaderboard: who called what here, by how far it ran afterwards',
-  '  \u2022 /card, as a reply to a call: that call as a picture',
+  '  \u2022 DM: /scan <address>, or just paste an address',
+  '  \u2022 Groups: /scan <address>',
+  '  \u2022 Inline: type @BOTNAME <address> in any chat',
   '  \u2022 add it to yours: t.me/BOTNAME?startgroup=true',
   '',
-  'Declared launches:',
-  '  • /declare in DM: state what your launch will do, and sign it with the',
-  '    wallet that will deploy. the badge says a claim exists and nothing more.',
-  '  • /declared lists them, newest first, with what the launch did afterwards',
-  '  • a declaration never softens a check. where the launch differs from what',
-  '    was signed, the card says so and the original finding still stands.',
+  // Generated from the table every handler is registered against, so a
+  // command cannot exist without a line here and a line cannot outlive its
+  // command. Both directions are checked by a test.
+  commandList(),
   '',
   'holding $VITALS unlocks access, not yield. tiers: 250k, 1M, 10M.',
+  'one paid line at the bottom funds this. it never touches what a card says.',
   '',
-  'one paid line at the bottom funds this. it never touches what a card says,',
-  'and it always points at a scan. /sponsor for the numbers.',
-  '',
-  'The card leads with concerns (the things fixed at creation, which are',
-  'readable the second a token exists) and puts the counts underneath. There',
-  'is no grade and no score. The absence of a raised flag is not an all-clear:',
-  'the card says how many checks ran and how many could not be determined.',
+  'There is no grade and no score, and the absence of a raised flag is not an',
+  'all-clear: the card says how many checks ran and how many could not be',
+  'determined. /legend for what the markers mean.',
   '',
   DISCLAIMER,
   '',
@@ -1386,7 +1355,10 @@ export function createBot(token = TELEGRAM_BOT_TOKEN): Bot {
         + '. an admin changes it with /autoscan on or /autoscan off.';
     }
 
-    await ctx.reply(withLaunchNotice(text, userId), {
+    // Clamped rather than trusted to fit: the list is generated from the
+    // command table, so it grows whenever a command is added, and a message
+    // one character over the limit is not a truncated /help but no /help.
+    await ctx.reply(clampMessage(withLaunchNotice(text, userId)), {
       // No preview: the footer carries a domain, and a link card would push the
       // text off the first screen.
       link_preview_options: { is_disabled: true },

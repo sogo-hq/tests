@@ -311,5 +311,10 @@ test('/image renders a picture, and the button is on every card', async () => {
     'the Image button is attached whenever there is a card, /full included');
   assert.ok(!/!full && \(outcome\.kind === 'ok'\)/.test(src),
     'the button used to be on the default card only');
-  assert.match(src, /'\/image <address> renders the card as a picture/, 'and it is in /help');
+  // /help is generated from the command table now, so the question is whether
+  // /image is in the table rather than whether a line of prose mentions it.
+  const { COMMANDS } = await import('../dist/commands.js');
+  const image = COMMANDS.find((c) => c.name === 'image');
+  assert.ok(image, '/image is in the command table, so it is in /help');
+  assert.match(image.usage, /<token address>/);
 });

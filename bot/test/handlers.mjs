@@ -323,12 +323,14 @@ const htmlTag = /<\/?(b|i|u|s|a|em|strong|code|pre|span|tg-spoiler)\b[^>]*>/i;
 assert.ok(!htmlTag.test(help), `/help still carries markup: ${help.match(htmlTag)?.[0]}`);
 assert.ok(!/&(amp|lt|gt|quot);/.test(help), '/help carries an HTML entity');
 assert.ok(help.includes('/scan <token address>'), 'angle brackets survive as themselves');
+assert.ok(/^\s*\/status .*\u00b7 admin/m.test(help), '/help marks the admin commands');
+assert.ok(help.includes('/position <wallet> <token address>'), '/help is generated from the table');
 // the contact block, last and unlinked — Telegram autolinks bare handles
 const tail = help.trimEnd().split('\n').slice(-3);
 assert.deepEqual(tail, [
   'checkvitals.xyz',
-  '@vitalsofficial — every change lands here first',
-  "@siriusthemaster — dev, tell me what's broken",
+  '@vitalsofficial: every change lands here first',
+  "@siriusthemaster: dev, tell me what's broken",
 ]);
 assert.equal(c[0].payload.link_preview_options?.is_disabled, true, 'the domain must not spawn a preview card');
 ok('/help is plain text and ends with the contact block');
