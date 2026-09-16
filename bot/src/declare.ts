@@ -77,7 +77,13 @@ export type StepKey = 'deployer' | 'devBuy' | 'exemptions' | 'tax' | 'vesting' |
 export interface Step {
   key: StepKey;
   prompt: string;
-  parse(input: string): { ok: true; value: unknown } | { ok: false; error: string };
+  /**
+   * `sofar` is what the form has already been told, so a step can refuse an
+   * answer that contradicts an earlier one. Only the vesting step uses it, and
+   * it is the whole reason "team tokens: none" cannot be signed beside a dev
+   * buy any more.
+   */
+  parse(input: string, sofar?: Record<string, unknown>): { ok: true; value: unknown } | { ok: false; error: string };
 }
 
 function parseAddressList(input: string): { ok: true; value: string[] } | { ok: false; error: string } {
@@ -94,6 +100,16 @@ function parseAddressList(input: string): { ok: true; value: string[] } | { ok: 
   if (out.length > 31) return { ok: false, error: 'more wallets than the curve can exempt' };
   return { ok: true, value: out };
 }
+
+/**
+ * Answers that claim there is nothing to declare.
+ *
+ * Deliberately broad. The point is not to catch every phrasing, it is that the
+ * obvious ones stop being available to somebody filling the form in thirty
+ * seconds, which is when this line used to get answered wrongly.
+ */
+const NOTHING_ALLOCATED =
+  /^(none|no team( allocation| tokens)?|nothing|n\/?a|zero|0|no allocation|nil)\.?$/i;
 
 function parseFreeText(input: string): { ok: true; value: string } | { ok: false; error: string } {
   const t = input.trim().replace(/\s+/g, ' ');
@@ -145,8 +161,27 @@ export const STEPS: Step[] = [
   },
   {
     key: 'vesting',
-    prompt: 'what happens to any team tokens. if there are none, say: no team allocation',
-    parse: parseFreeText,
+    prompt: 'what the dev buy holds and what happens to it: who it is for, when it '
+      + 'vests, what moves at launch. a dev buy is a team allocation, so if you bought '
+      + 'any, "none" is not an answer to this.',
+    parse: (input, sofar) => {
+      const parsed = parseFreeText(input);
+      if (!parsed.ok) return parsed;
+      // A declaration saying "team tokens: none" beside a dev buy of 5% is
+      // false on its face: the dev buy IS the allocation, sitting in the
+      // deployer wallet under no lock at all. It was the one line on the form
+      // a creator could answer honestly and still mislead, so it is refused
+      // rather than quoted back onto a card.
+      const bought = Number(sofar?.devBuy ?? 0);
+      if (bought > 0 && NOTHING_ALLOCATED.test(parsed.value)) {
+        return {
+          ok: false,
+          error: `you declared a dev buy of ${bought}% of supply, and that is the team `
+            + 'allocation. say where those tokens sit, who they are for and when they move',
+        };
+      }
+      return parsed;
+    },
   },
   {
     key: 'docs',
@@ -233,7 +268,7 @@ export function answerDraft(userId: number, input: string): AnswerResult {
   const step = STEPS[d.step];
   if (!step) return { state: 'no-draft' };
 
-  const parsed = step.parse(input);
+  const parsed = step.parse(input, d.answers);
   if (!parsed.ok) {
     return { state: 'rejected', error: parsed.error, prompt: step.prompt, step: d.step };
   }
@@ -288,14 +323,17 @@ export function canonicalText(a: DeclarationAnswers, nonce: string): string {
   return [
     'vitals declaration',
     `deployer: ${a.deployer}`,
-    `dev buy: ${a.devBuyPct}% of supply`,
+    // One line, not two. It used to say "dev buy: 5% of supply" here and
+    // "team tokens: none" four lines down, and both were signed: the first is
+    // true, the second is false, and the second is false BECAUSE of the first.
+    // What the dev buy holds belongs on the line that declares the dev buy.
+    `dev buy: ${a.devBuyPct}% of supply, ${a.vesting}`,
     others === 0
       ? 'tax-free at launch: the deployer only'
       : `tax-free at launch: the deployer and ${others} other${others === 1 ? '' : 's'}`,
     ...a.exemptList.map((w) => `  ${w}`),
     `creator tax: ${a.creatorTaxBps} bps`,
     `tax split: ${a.taxSplit}`,
-    `team tokens: ${a.vesting}`,
     `docs: ${a.docsUrl}`,
     `nonce: ${nonce}`,
   ].join('\n');

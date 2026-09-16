@@ -112,11 +112,15 @@ test('neither block is reported as finished while it carries a choice', () => {
   assert.match(t, /still in it is a bug/);
 });
 
-test('the holder fee sharing block is still a placeholder and says so', () => {
+test('the holder fee sharing block is still marked, with the room part written', () => {
   for (const f of ['template-declaration.md', 'vitals.md']) {
     assert.ok(read(f).includes('[HOLDER FEE SHARING]'), f);
   }
-  assert.match(read('template-declaration.md'), /### \[HOLDER FEE SHARING\]\s+Not written/);
+  const t = read('template-declaration.md');
+  // The room's share is written now. What is left is named rather than left
+  // as a blank anybody could fill in later without it being noticed.
+  assert.match(t, /The room's share is written and is in the signed text above/);
+  assert.match(t, /What is still not written/);
 });
 
 test('the declaration template carries no signature and no nonce', () => {
@@ -139,4 +143,85 @@ test('the self scan template refuses to edit the card', () => {
 
 test('the docs use the dev buy this repo computed, not a remembered one', () => {
   assert.match(read('template-declaration.md'), /5% is 0\.0930 ETH at a 4% tax/);
+});
+
+// ------------------------------------------ the two lines that are signed
+
+/** As supplied. A paraphrase of a signed promise is a different promise. */
+const DEV_BUY_LINE =
+  'dev buy: 5% of supply, held by the deployer wallet, 2% team and 3% partnerships, '
+  + 'vesting contracts in october, nothing distributed at launch';
+
+const ROOM_LINE =
+  "the room: 50 seats. the room is owed 10% of the fee wallet's cumulative gross income, "
+  + 'paid daily in ETH for 30 days by shares (T1 5, T2 2, T3 1), every payout printed before '
+  + 'it leaves and recorded with its hash. a seat is given by the deployer, its tier is fixed '
+  + 'when taken and reviewed once after the 30 days. a seat given up is reused and both '
+  + 'occupants stay in the history. 10% of gross income goes to ecosystem integrations, '
+  + '80% to the build.';
+
+test('the dev buy line is in both docs, verbatim, in the signed text', () => {
+  for (const f of ['template-declaration.md', 'vitals.md']) {
+    const t = read(f);
+    assert.ok(t.includes(DEV_BUY_LINE), `${f} does not carry the dev buy line as supplied`);
+    // Inside the fenced block that says what gets signed, not only in prose.
+    const signed = t.split('```')[1] ?? '';
+    assert.ok(signed.includes(DEV_BUY_LINE), `${f} has it outside the signed text`);
+  }
+});
+
+test('"team tokens: none" is gone and cannot come back', () => {
+  for (const f of DOCS) {
+    const t = read(f);
+    assert.doesNotMatch(t, /^team tokens: none$/m, `${f} still signs a false line`);
+    assert.doesNotMatch(t, /^team tokens:/m, `${f} still has a team tokens line`);
+  }
+  // And the template says why, so nobody adds it back as a tidy-up.
+  const t = read('template-declaration.md');
+  assert.match(t, /There is no `team tokens` line/);
+  assert.match(t, /the dev buy \*\*is\*\* the team allocation/);
+});
+
+test('the room line is in both docs, verbatim, in the signed text', () => {
+  for (const f of ['template-declaration.md', 'vitals.md']) {
+    const t = read(f);
+    assert.ok(t.includes(ROOM_LINE), `${f} does not carry the room line as supplied`);
+    const signed = t.split('```')[1] ?? '';
+    assert.ok(signed.includes(ROOM_LINE), `${f} has it outside the signed text`);
+  }
+});
+
+test('the room line agrees with the code that pays it', async () => {
+  const { LEDGER_SHARE_PCT } = await import('../dist/ledger.js');
+  const { TIER_SHARES } = await import('../dist/roster.js');
+  assert.match(ROOM_LINE, new RegExp(`owed ${LEDGER_SHARE_PCT}% of the fee wallet`));
+  assert.match(ROOM_LINE,
+    new RegExp(`T1 ${TIER_SHARES.T1}, T2 ${TIER_SHARES.T2}, T3 ${TIER_SHARES.T3}`),
+    'the declared shares are not the shares the ledger pays by');
+  // Fifty seats is stated in the room mechanics on both pages already.
+  assert.match(ROOM_LINE, /50 seats/);
+});
+
+test('the shares in the signed text add to what the room mechanics say', () => {
+  for (const f of ['template-declaration.md', 'vitals.md']) {
+    const t = read(f);
+    assert.match(t, /[Ff]ifty seats/, f);
+    assert.ok(t.includes('50 seats'), `${f}: the signed text and the prose count seats differently`);
+  }
+});
+
+test('[HOLDER FEE SHARING] is still marked, and names what is left', () => {
+  for (const f of ['template-declaration.md', 'vitals.md']) {
+    assert.ok(read(f).includes('[HOLDER FEE SHARING]'), f);
+  }
+  const t = read('template-declaration.md');
+  assert.match(t, /still not written/);
+  assert.match(t, /the review after the 30 days/);
+});
+
+test('neither new line carries an em dash or an exclamation', () => {
+  for (const line of [DEV_BUY_LINE, ROOM_LINE]) {
+    assert.ok(!line.includes(String.fromCharCode(0x2014)));
+    assert.doesNotMatch(line, /!/);
+  }
 });

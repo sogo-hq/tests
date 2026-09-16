@@ -84,7 +84,7 @@ test('the form walks six questions and keeps its place on a bad answer', async (
     ['2.5', /3 of 6\./],
     ['dev wallet only', /4 of 6\./],
     ['400, half to the artist', /5 of 6\./],
-    ['no team allocation', /6 of 6\./],
+    ['held by the deployer, vesting contracts in october, nothing distributed at launch', /6 of 6\./],
   ]) {
     c = await send('private', answer);
     assert.match(c[0].payload.text, expect);
@@ -95,10 +95,13 @@ test('the form walks six questions and keeps its place on a bad answer', async (
   assert.match(text, /sign this exact text with the deployer wallet/);
   assert.match(text, /^vitals declaration$/m);
   assert.match(text, new RegExp(`^deployer: ${DEPLOYER}$`, 'm'));
-  assert.match(text, /^dev buy: 2\.5% of supply$/m);
+  // One dev buy line, carrying what that buy holds. There is no separate
+  // team tokens line to answer falsely any more.
+  assert.match(text, /^dev buy: 2\.5% of supply, held by the deployer, vesting contracts in october, nothing distributed at launch$/m);
+  assert.doesNotMatch(text, /^team tokens:/m);
   assert.match(text, /^tax-free at launch: the deployer only$/m);
   assert.match(text, /^creator tax: 400 bps$/m);
-  assert.match(text, /^team tokens: no team allocation$/m);
+  assert.match(text, /^tax split: half to the artist$/m);
   assert.match(text, /\/declare sign <signature>/);
 });
 

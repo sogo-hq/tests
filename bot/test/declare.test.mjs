@@ -31,7 +31,7 @@ const NOW = 1_789_000_000_000;
 
 const answers = (over = {}) => ({
   deployer: DEPLOYER, devBuyPct: 2.5, exemptList: [], creatorTaxBps: 400,
-  taxSplit: 'half to the artist', vesting: 'no team allocation',
+  taxSplit: 'half to the artist', vesting: 'held by the deployer, vesting contracts in october, nothing distributed at launch',
   docsUrl: 'https://docs.checkvitals.xyz', ...over,
 });
 
@@ -47,7 +47,7 @@ const GOOD = [
   '2.5',
   'dev wallet only',
   '400, half to the artist',
-  'no team allocation',
+  'held by the deployer, vesting contracts in october, nothing distributed at launch',
   'https://docs.checkvitals.xyz',
 ];
 
@@ -65,7 +65,7 @@ test('the form asks six questions and refuses a bad answer without losing the pl
   assert.equal(ok.step, 1);
 
   const done = ['2.5', 'dev wallet only', '400, half to the artist',
-    'no team allocation', 'https://docs.checkvitals.xyz'].map((t) => D.answerDraft(u, t)).pop();
+    'held by the deployer, vesting contracts in october, nothing distributed at launch', 'https://docs.checkvitals.xyz'].map((t) => D.answerDraft(u, t)).pop();
   assert.equal(done.state, 'complete');
   assert.equal(D.STEPS.length, 6);
   D.clearDraft(u);
@@ -88,7 +88,7 @@ test('free text is bounded and carries no em dash', () => {
   const long = D.answerDraft(u, `400, ${'x'.repeat(200)}`);
   assert.equal(long.state, 'rejected');
   D.answerDraft(u, '400, half to the artist');
-  const dash = D.answerDraft(u, `team tokens ${String.fromCharCode(0x2014)} none at all`);
+  const dash = D.answerDraft(u, `held by the deployer ${String.fromCharCode(0x2014)} vesting in october`);
   assert.equal(dash.state, 'asked');
   const complete = D.answerDraft(u, 'https://docs.checkvitals.xyz');
   assert.ok(!complete.canonical.includes(String.fromCharCode(0x2014)));
@@ -230,7 +230,7 @@ const declare = db.prepare(
  */
 function flagsWith(launch = {}, declared = {}, at = LAUNCH_BLOCK - 1) {
   const L = { exemptCount: 1, taxBps: 100, openPct: 0.5, ...launch };
-  const C = { devBuyPct: 0.5, exemptCount: 1, taxBps: 100, vesting: 'no team allocation', ...declared };
+  const C = { devBuyPct: 0.5, exemptCount: 1, taxBps: 100, vesting: 'held by the deployer, vesting contracts in october, nothing distributed at launch', ...declared };
   db.prepare('DELETE FROM launch_declarations').run();
   insertLaunch.run(TOKEN, '0x' + 'c'.repeat(40), DEPLOYER, PAIR, LAUNCH_BLOCK,
     '0x' + 'f'.repeat(64), 1_780_000_000, 'NEW', 'UNIQ', 'new', 'uniq',
@@ -375,4 +375,69 @@ test('the permalink is a deep link until the site route exists', () => {
   process.env.SITE_DECLARATION_BASE = 'https://checkvitals.xyz/d';
   assert.equal(D.declarationLink(12, 'vitalscheck_bot'), 'https://checkvitals.xyz/d/12');
   delete process.env.SITE_DECLARATION_BASE;
+});
+
+// ------------------------------------------- the dev buy IS the allocation
+
+/** Walk to the vesting question and answer it. */
+const vestingAnswer = (u, devBuy, answer) => {
+  D.clearDraft(u);
+  D.startDraft(u, NOW, 'n');
+  D.answerDraft(u, DEPLOYER);
+  D.answerDraft(u, devBuy);
+  D.answerDraft(u, 'dev wallet only');
+  D.answerDraft(u, '400, half to the artist');
+  const r = D.answerDraft(u, answer);
+  D.clearDraft(u);
+  return r;
+};
+
+test('"none" is refused beside a dev buy, and the refusal says why', () => {
+  const r = vestingAnswer(401, '5', 'no team allocation');
+  assert.equal(r.state, 'rejected');
+  assert.match(r.error, /you declared a dev buy of 5% of supply, and that is the team allocation/);
+  assert.match(r.error, /say where those tokens sit/);
+});
+
+test('every obvious way of saying none is refused', () => {
+  for (const answer of ['none', 'None.', 'nothing', 'no team tokens', 'n/a', 'zero', '0', 'nil', 'no allocation']) {
+    assert.equal(vestingAnswer(402, '2.5', answer).state, 'rejected', answer);
+  }
+});
+
+test('a declarer who bought nothing may still say there is nothing', () => {
+  // The line is only false when there IS a dev buy. A creator who took none
+  // is telling the truth and the form must not argue with them.
+  const r = vestingAnswer(403, '0', 'no team allocation');
+  assert.equal(r.state, 'asked');
+});
+
+test('an honest answer passes and lands on the dev buy line', () => {
+  const u = 404;
+  const done = fillForm(u, GOOD);
+  assert.equal(done.state, 'complete');
+  assert.match(done.canonical,
+    /^dev buy: 2\.5% of supply, held by the deployer, vesting contracts in october, nothing distributed at launch$/m);
+  D.clearDraft(u);
+});
+
+test('there is no team tokens line left to sign', () => {
+  const text = D.canonicalText(answers(), 'n');
+  assert.doesNotMatch(text, /^team tokens:/m);
+  // And exactly one dev buy line, not two.
+  assert.equal((text.match(/^dev buy: /gm) ?? []).length, 1);
+});
+
+test('the prompt says a dev buy is a team allocation', () => {
+  const step = D.STEPS.find((s) => s.key === 'vesting');
+  assert.match(step.prompt, /a dev buy is a team allocation/);
+  assert.doesNotMatch(step.prompt, /if there are none, say/);
+});
+
+test('the canonical text still carries every other field once', () => {
+  const text = D.canonicalText(answers(), 'nonce123');
+  for (const re of [/^deployer: /m, /^tax-free at launch: /m, /^creator tax: /m, /^tax split: /m, /^docs: /m, /^nonce: /m]) {
+    assert.equal((text.match(new RegExp(re.source, 'gm')) ?? []).length, 1, String(re));
+  }
+  assert.ok(!text.includes(String.fromCharCode(0x2014)));
 });

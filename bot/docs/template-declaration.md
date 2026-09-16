@@ -17,11 +17,12 @@ by hand; the fields come from the answers given to `/declare`.
 ```
 vitals declaration
 deployer: 0x447c8dc55B88C09830E123f9fB3e7C484714ED93
-dev buy: 5% of supply
+dev buy: 5% of supply, held by the deployer wallet, 2% team and 3% partnerships, vesting contracts in october, nothing distributed at launch
 tax-free at launch: the deployer only
 creator tax: 400 bps
 tax split: [TREASURY RULES]
-team tokens: none
+the room: 50 seats. the room is owed 10% of the fee wallet's cumulative gross income, paid daily in ETH for 30 days by shares (T1 5, T2 2, T3 1), every payout printed before it leaves and recorded with its hash. a seat is given by the deployer, its tier is fixed when taken and reviewed once after the 30 days. a seat given up is reused and both occupants stay in the history. 10% of gross income goes to ecosystem integrations, 80% to the build.
+[HOLDER FEE SHARING]
 docs: https://checkvitals.xyz/declared/001
 nonce: <issued by the bot, one per draft>
 ```
@@ -31,12 +32,19 @@ Field by field, and what the launch transaction has to show for each to hold:
 | line | what the chain shows |
 | --- | --- |
 | deployer | the sender of the launch transaction |
-| dev buy | the opening buy as a share of supply, 5% is 0.0930 ETH at a 4% tax |
+| dev buy | the opening buy as a share of supply, 5% is 0.0930 ETH at a 4% tax, and where those tokens sit afterwards |
 | tax-free at launch | the wallets the launch transaction pre-exempts |
 | creator tax | `creatorTaxBps` in the launch parameters |
 | tax split | [TREASURY RULES], of which the $VITALS line is written below |
-| team tokens | none, so nothing vests and nothing unlocks later |
+| the room | the payout hashes, against the shares and the 30 days stated |
 | docs | a page that exists before the launch, not after |
+
+There is no `team tokens` line. There used to be, and ours said `none`, which
+was false: the dev buy **is** the team allocation, sitting in the deployer
+wallet under no lock at all. It was the one line on the form that could be
+answered quickly and still mislead everyone reading it. What the dev buy holds
+now belongs to the line that declares the dev buy, and `/declare` refuses
+`none` there from anybody who declared a buy.
 
 ## The placeholders
 
@@ -61,9 +69,19 @@ or the declaration is not signed at all.
 
 ### [HOLDER FEE SHARING]
 
-Not written. When it is, it states the share of gross income the room is owed,
-how a seat is earned and lost, and what happens to a seat when its holder
-leaves.
+The room's share is written and is in the signed text above:
+
+```
+the room: 50 seats. the room is owed 10% of the fee wallet's cumulative gross income, paid daily in ETH for 30 days by shares (T1 5, T2 2, T3 1), every payout printed before it leaves and recorded with its hash. a seat is given by the deployer, its tier is fixed when taken and reviewed once after the 30 days. a seat given up is reused and both occupants stay in the history. 10% of gross income goes to ecosystem integrations, 80% to the build.
+```
+
+Every number in it is checkable after the fact. 10% of cumulative gross income
+is what `/ledger preview` computes and prints every term of; the shares are
+what the roster holds; the hashes are in the public post at the end of each
+run; and a seat changing hands is in the seat history.
+
+What is still not written: how a seat is earned beyond being given, and what
+the review after the 30 days is allowed to change.
 
 What already exists and is not a placeholder: one wallet receives the creator
 fee, a fixed share of cumulative gross income is what the room is owed, what

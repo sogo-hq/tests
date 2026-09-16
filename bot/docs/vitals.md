@@ -59,11 +59,12 @@ the first: **DECLARED #001**.
 ```
 vitals declaration
 deployer: 0x447c8dc55B88C09830E123f9fB3e7C484714ED93
-dev buy: 5% of supply
+dev buy: 5% of supply, held by the deployer wallet, 2% team and 3% partnerships, vesting contracts in october, nothing distributed at launch
 tax-free at launch: the deployer only
 creator tax: 400 bps
 tax split: [TREASURY RULES]
-team tokens: none
+the room: 50 seats. the room is owed 10% of the fee wallet's cumulative gross income, paid daily in ETH for 30 days by shares (T1 5, T2 2, T3 1), every payout printed before it leaves and recorded with its hash. a seat is given by the deployer, its tier is fixed when taken and reviewed once after the 30 days. a seat given up is reused and both occupants stay in the history. 10% of gross income goes to ecosystem integrations, 80% to the build.
+[HOLDER FEE SHARING]
 docs: https://checkvitals.xyz/declared/001
 nonce: <issued by the bot>
 ```
@@ -80,6 +81,10 @@ Fifty seats. That is the whole room and the number does not move.
   closed. Not before. The window is the three seconds the protocol charges a
   snipe tax for, and posting the address inside it would be handing fifty
   people a tax bill.
+- **The dev buy is the team allocation and is declared as one.** 5% of supply,
+  held by the deployer wallet, 2% team and 3% partnerships, vesting contracts
+  in october, nothing distributed at launch. There is no separate team tokens
+  line, because ours would have said none and that would have been false.
 - **The room pays the same tax as everyone else.** There are no exemptions
   beyond the deployer, which the protocol exempts on its own. Nobody in the
   room buys tax free, and the launch transaction is where that is checked
@@ -91,14 +96,26 @@ Fifty seats. That is the whole room and the number does not move.
 
 ### The fee sharing
 
-[HOLDER FEE SHARING]
+The room's share is in the signed text above:
 
-The mechanics that are already built and not placeholders: the creator fee
-goes to one wallet, a fixed share of cumulative gross income is what the room
-is owed, what has already been paid and anything swept out are subtracted
-from that, and every payout is printed before it leaves and recorded with its
-hash after. A run that dies part way through resumes without re-sending what
-already went out.
+```
+the room: 50 seats. the room is owed 10% of the fee wallet's cumulative gross income, paid daily in ETH for 30 days by shares (T1 5, T2 2, T3 1), every payout printed before it leaves and recorded with its hash. a seat is given by the deployer, its tier is fixed when taken and reviewed once after the 30 days. a seat given up is reused and both occupants stay in the history. 10% of gross income goes to ecosystem integrations, 80% to the build.
+```
+
+[HOLDER FEE SHARING] covers what is still not written: how a seat is earned
+beyond being given, and what the review after the 30 days is allowed to
+change.
+
+The mechanics behind it are already built. The creator fee goes to one wallet,
+a fixed share of cumulative gross income is what the room is owed, what has
+already been paid and anything swept out are subtracted from that, and every
+payout is printed before it leaves and recorded with its hash after. A run
+that dies part way through resumes without re-sending what already went out.
+
+Every number in the line above is checkable after the fact: the 10% is what
+`/ledger preview` computes and prints every term of, the shares are what the
+roster holds, the hashes are in the public post at the end of each run, and a
+seat changing hands is in the seat history.
 
 ### What the treasury does with $VITALS
 

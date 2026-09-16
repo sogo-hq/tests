@@ -627,11 +627,14 @@ export function declarationCardSvg(d: Declaration, renderedAt = new Date()): str
   const others = d.exemptCount - 1;
   const claims: [string, string][] = [
     ['dev buy', `${d.devBuyPct}% of supply`],
+    // What that buy holds, on its own row because the line is long. It used to
+    // be labelled "team tokens", which is the label that let "none" sit under
+    // a 5% dev buy.
+    ['the dev buy holds', d.vesting],
     ['tax-free at launch', others === 0
       ? 'the deployer only'
       : `the deployer and ${others} other${others === 1 ? '' : 's'}`],
     ['creator tax', `${d.creatorTaxBps} bps, ${d.taxSplit}`],
-    ['team tokens', d.vesting],
   ];
 
   y += 40;
