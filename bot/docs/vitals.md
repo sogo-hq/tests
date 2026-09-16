@@ -104,6 +104,15 @@ The rules that decide the share itself are in [TREASURY RULES] and are not
 written here yet. When they are, they go in as text that was signed, like
 everything else on this page.
 
+## Launch day
+
+[`launch-day-runbook.md`](launch-day-runbook.md) is the day itself: the
+Thursday rehearsal, the Friday test in a private group, the launch minute by
+minute with the exact commands, and what to do when the transaction reverts,
+when the index is lagging at T+0, or when a payout run dies part way through.
+
+[`partners-groups.md`](partners-groups.md) is the install for a group admin.
+
 ## Templates
 
 Three posts are written before launch day rather than during it:
