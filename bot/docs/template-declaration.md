@@ -34,7 +34,7 @@ Field by field, and what the launch transaction has to show for each to hold:
 | dev buy | the opening buy as a share of supply, 5% is 0.0930 ETH at a 4% tax |
 | tax-free at launch | the wallets the launch transaction pre-exempts |
 | creator tax | `creatorTaxBps` in the launch parameters |
-| tax split | [TREASURY RULES] |
+| tax split | [TREASURY RULES], of which the $VITALS line is written below |
 | team tokens | none, so nothing vests and nothing unlocks later |
 | docs | a page that exists before the launch, not after |
 
@@ -42,13 +42,22 @@ Field by field, and what the launch transaction has to show for each to hold:
 
 ### [TREASURY RULES]
 
-Not written. When it is, it states where the creator fee goes, in what
-proportions, and what the treasury may and may not do with its part. It has to
-be specific enough that a transaction either matches it or does not, because a
-declaration that cannot be checked is a slogan.
+The $VITALS line, as supplied, with the choice between a and b still open:
 
-Until it exists, `/declare` is answered with the split as a number or the
-declaration is not signed at all.
+```
+<a: the treasury does not trade $VITALS.> or <b: it buys $VITALS on dips, never sells in the first 30 days, and after that at most 5% of its $VITALS per day, never within 24h of a room post or partner news.>
+```
+
+The rest is not written. When it is, it states where the creator fee goes, in
+what proportions, and what else the treasury may and may not do with its part.
+It has to be specific enough that a transaction either matches it or does not,
+because a declaration that cannot be checked is a slogan.
+
+**a and b are alternatives and one of them has to go.** They are opposite
+promises: a says the treasury never touches the token, b says it buys it under
+stated limits. Signing the pair says neither. Until one is struck out and the
+rest of the block is written, `/declare` is answered with the split as a number
+or the declaration is not signed at all.
 
 ### [HOLDER FEE SHARING]
 

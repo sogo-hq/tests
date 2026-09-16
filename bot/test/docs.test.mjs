@@ -67,6 +67,58 @@ test('the two placeholders are marked and never quietly filled', () => {
   assert.match(t, /still in it is a bug/);
 });
 
+// ------------------------------------------------------- the $VITALS line
+
+/** As supplied, to the character. A paraphrase of a signed promise is a different promise. */
+const VITALS_LINE =
+  '<a: the treasury does not trade $VITALS.> or <b: it buys $VITALS on dips, '
+  + 'never sells in the first 30 days, and after that at most 5% of its $VITALS '
+  + 'per day, never within 24h of a room post or partner news.>';
+
+test('the $VITALS line is in both docs, verbatim', () => {
+  for (const f of ['template-declaration.md', 'vitals.md']) {
+    assert.ok(read(f).includes(VITALS_LINE), `${f} does not carry the line as supplied`);
+  }
+});
+
+test('it is lowercase, as supplied', () => {
+  // $VITALS is the ticker and stays as it is; nothing else in the line is
+  // capitalised, and a sentence case rewrite would not be verbatim.
+  const withoutTicker = VITALS_LINE.split('$VITALS').join('');
+  assert.equal(withoutTicker, withoutTicker.toLowerCase());
+  for (const f of ['template-declaration.md', 'vitals.md']) {
+    const line = read(f).split('\n').find((l) => l.startsWith('<a: '));
+    assert.equal(line, VITALS_LINE, f);
+  }
+});
+
+test('a and b are still both there, and both marked as a choice', () => {
+  for (const f of ['template-declaration.md', 'vitals.md']) {
+    const t = read(f);
+    assert.match(t, /<a: /, f);
+    assert.match(t, /<b: /, f);
+    // Signing both says neither, so the docs have to say that rather than
+    // leaving a reader to pick one by accident.
+    assert.match(t, /opposite\s+promises/, `${f} does not say a and b are exclusive`);
+    assert.match(t, /signing the pair says\s+neither/i, `${f} does not say what signing both means`);
+  }
+});
+
+test('neither block is reported as finished while it carries a choice', () => {
+  const t = read('template-declaration.md');
+  assert.match(t, /The rest is not written/);
+  assert.match(t, /one of them has to go/i);
+  // The rule from the top of the file still stands over the filled part.
+  assert.match(t, /still in it is a bug/);
+});
+
+test('the holder fee sharing block is still a placeholder and says so', () => {
+  for (const f of ['template-declaration.md', 'vitals.md']) {
+    assert.ok(read(f).includes('[HOLDER FEE SHARING]'), f);
+  }
+  assert.match(read('template-declaration.md'), /### \[HOLDER FEE SHARING\]\s+Not written/);
+});
+
 test('the declaration template carries no signature and no nonce', () => {
   const t = read('template-declaration.md');
   assert.doesNotMatch(t, /^nonce: 0x/m);

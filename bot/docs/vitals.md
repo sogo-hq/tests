@@ -100,9 +100,22 @@ from that, and every payout is printed before it leaves and recorded with its
 hash after. A run that dies part way through resumes without re-sending what
 already went out.
 
-The rules that decide the share itself are in [TREASURY RULES] and are not
-written here yet. When they are, they go in as text that was signed, like
-everything else on this page.
+### What the treasury does with $VITALS
+
+One line of [TREASURY RULES] is written, and it carries a choice that is still
+open:
+
+```
+<a: the treasury does not trade $VITALS.> or <b: it buys $VITALS on dips, never sells in the first 30 days, and after that at most 5% of its $VITALS per day, never within 24h of a room post or partner news.>
+```
+
+a and b are opposite promises. a says the treasury never touches the token; b
+says it buys it under stated limits. One of them has to go before anything is
+signed, because signing the pair says neither.
+
+The rest of [TREASURY RULES], which decides the share itself, is not written
+here yet. When it is, it goes in as text that was signed, like everything else
+on this page.
 
 ## Launch day
 
