@@ -9,6 +9,7 @@ import { startWindowLoop, windowBacklog, indexWindows } from './indexer/windows.
 import { deliverAlerts, deliverLaunch } from './bot.js';
 import { initBot, startBot } from './bot.js';
 import { startWatchdog } from './watchdog.js';
+import { resumeDecodeRun } from './decoderun.js';
 import { startApi } from './api/server.js';
 import { db } from './db.js';
 import { BACKFILL_DAYS, BLOCKS_PER_DAY } from './config.js';
@@ -302,6 +303,9 @@ async function main(): Promise<void> {
       // current, and an index that falls behind answers in the same words
       // about a chain it read an hour ago.
       startWatchdog(bot.api);
+      // A re-decode an operator started and never stopped keeps going across a
+      // restart, from the rows still to read rather than from the beginning.
+      resumeDecodeRun();
       await startBot(bot);
       return;
     }

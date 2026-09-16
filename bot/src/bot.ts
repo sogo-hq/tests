@@ -22,6 +22,7 @@ import {
 } from './grants.js';
 import { entitlement, entitlementLine } from './premium.js';
 import { statusReport, statusText, resetWatchdog } from './watchdog.js';
+import { startDecodeRun, stopDecodeRun, decodeStatusText } from './decoderun.js';
 import { pinDocsHash, checkDocsPage, docsHashLine } from './declare.js';
 import { shouldOnboard, markOnboarded, onboardingText } from './onboard.js';
 import { commandList, COMMANDS, registeredNames } from './commands.js';
@@ -188,13 +189,9 @@ const EXAMPLE = '0x147Bbaa458Ab7Cd11E1E478B87f08FE5A42A9E67';
 const HELP = [
   'VITALS: pons v2 launch scanner, Robinhood Chain',
   '',
-  'Send /scan <token address> for a card of what the chain shows.',
-  '',
-  'Works three ways, same card on each:',
-  '  \u2022 DM: /scan <address>, or just paste an address',
-  '  \u2022 Groups: /scan <address>',
-  '  \u2022 Inline: type @BOTNAME <address> in any chat',
-  '  \u2022 add it to yours: t.me/BOTNAME?startgroup=true',
+  'Send /scan <token address> for a card of what the chain shows. In a DM you',
+  'can paste an address on its own, and @BOTNAME <address> works inline in any',
+  'chat. Add it to a group: t.me/BOTNAME?startgroup=true',
   '',
   // Generated from the table every handler is registered against, so a
   // command cannot exist without a line here and a line cannot outlive its
@@ -204,9 +201,9 @@ const HELP = [
   'holding $VITALS unlocks access, not yield. tiers: 250k, 1M, 10M.',
   'one paid line at the bottom funds this. it never touches what a card says.',
   '',
-  'There is no grade and no score, and the absence of a raised flag is not an',
-  'all-clear: the card says how many checks ran and how many could not be',
-  'determined. /legend for what the markers mean.',
+  'No grade and no score. A check that found nothing is not a check that found',
+  'the launch to be fine: the card says how many ran and how many could not be',
+  'determined. /legend for the markers.',
   '',
   DISCLAIMER,
   '',
@@ -2416,6 +2413,53 @@ export function createBot(token = TELEGRAM_BOT_TOKEN): Bot {
       return;
     }
     await ctx.reply(clamp(statusText(statusReport()), TELEGRAM_MAX_MESSAGE));
+  });
+
+  /**
+   * The re-decode, driven from a DM.
+   *
+   * The same work as the decode command on the box, turned inside the bot so
+   * it can be started and watched without a shell on the server. Resumable by
+   * construction: it selects the rows that still need reading, so stopping and
+   * starting again continues from the rows rather than from a cursor.
+   */
+  bot.command('decode', async (ctx) => {
+    if (!isAdmin(ctx.from?.id) || ctx.chat?.type !== 'private') return;
+    const sub = (ctx.match ?? '').toString().trim().toLowerCase();
+
+    if (sub === 'start') {
+      const r = startDecodeRun();
+      if (r.ok) {
+        await ctx.reply([
+          r.resumed
+            ? 'resumed the run that was already going. the count and the clock carry over.'
+            : 'started.',
+          `${r.pending.toLocaleString()} rows to read from the curve's own events.`,
+          '',
+          'reads go below anything interactive in the limiter, so scans stay first.',
+          '/decode status for where it is, /decode stop to halt it.',
+        ].join('\n'));
+        return;
+      }
+      await ctx.reply(r.reason === 'already-running'
+        ? 'already running. /decode status'
+        : 'nothing pending. every launch this build can decode has been read.');
+      return;
+    }
+
+    if (sub === 'stop') {
+      await ctx.reply(stopDecodeRun()
+        ? 'stopping after the batch it is in. the rows already read stay read, and /decode start continues from there.'
+        : 'not running.');
+      return;
+    }
+
+    if (sub === 'status' || sub === '') {
+      await ctx.reply(clamp(decodeStatusText(), TELEGRAM_MAX_MESSAGE));
+      return;
+    }
+
+    await ctx.reply('/decode start | status | stop');
   });
 
   bot.command('position', async (ctx) => {

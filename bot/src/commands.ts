@@ -100,6 +100,8 @@ export const COMMANDS: CommandSpec[] = [
     what: 'indexer head against chain head, the lag, the armed launch, uptime' },
   { name: 'scout', usage: '[serial]', group: 'Admin', scope: 'admin', where: 'dm',
     what: 'graduated launches worth a look, as a csv' },
+  { name: 'decode', usage: 'start|status|stop', group: 'Admin', scope: 'admin', where: 'dm',
+    what: 'read the exemption lists back from the curve events, and watch it go' },
   { name: 'numbers', usage: '', group: 'Admin', scope: 'admin', where: 'any',
     what: 'the daily figures as a picture' },
   { name: 'launch', usage: 'watch|name|set|cancel', group: 'Admin', scope: 'admin', where: 'any',
