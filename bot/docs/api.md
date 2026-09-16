@@ -27,7 +27,7 @@ There is no grade, no rating, no risk level, no confidence and no `safe`
 boolean anywhere in any response. A consumer who wants to rank launches decides
 for themselves what matters; publishing the checks instead of a number is the
 whole design. If you need a single number for your own UI, build it from the
-checks you care about — but it will be yours, and you will know what is in it.
+checks you care about, but it will be yours, and you will know what is in it.
 
 **2. `none` is not an all-clear, and `undetermined` never carries a value.**
 
@@ -36,7 +36,7 @@ described as clean, in any field or message, because the absence of one finding
 says nothing about the launch as a whole.
 
 `state: "undetermined"` means the check could not be answered. Such a check has
-`value: null` and `reference: null`, always — a zero there would be read as a
+`value: null` and `reference: null`, always. A zero there would be read as a
 measurement, and it is not one.
 
 A launch with `summary.findings === 0` and `summary.undetermined === 4` has not
@@ -53,7 +53,7 @@ compatible change. Renaming or removing one is not**, and will not happen.
 a declaration. Nine of those ids are the committed v1 set; the rest were added
 after v1 and a client written against the nine can ignore them.
 
-Every `value` and every `reference` is **an object or null** — never a number,
+Every `value` and every `reference` is **an object or null**, never a number,
 a string or a boolean. A bare scalar cannot gain a second field later without
 breaking every client that read it. The keys below are part of the contract.
 
@@ -80,7 +80,7 @@ The `reference` object is the thing the value is measured against, and is
 | id | `reference` keys |
 |---|---|
 | `creator_tax` | `median_bps`, `n` |
-| `creator_opening_buy` | `median_share`, `n` — null until the index has 30 measured launches |
+| `creator_opening_buy` | `median_share`, `n`, null until the index has 30 measured launches |
 | `ticker_collision` | `indexed`, `flag_at_or_above` |
 | `deployer_history` | `flag_above` |
 | `deployer_prior_peaks` | `index_median_peak_mcap` |
@@ -88,7 +88,7 @@ The `reference` object is the thing the value is measured against, and is
 | `launch_vs_declaration` | `declared_at_block` |
 | `ticker_vs_pair` | `pair_symbol` |
 | `pair_asset` | `native` |
-| `holder_concentration` | `flag_at_share`, `percentile`, `n` — null until a distribution exists |
+| `holder_concentration` | `flag_at_share`, `percentile`, `n`, null until a distribution exists |
 | `snipe_tax_exemptions` | always null: the count is the finding, there is no baseline for it |
 
 ### A measurement with no reference is not undetermined
@@ -214,7 +214,7 @@ Regenerate at any time with `node scripts/gen-examples.mjs`.
 Field notes:
 
 - **`value`** is the measured quantity, apart from the sentence, and is always
-  **an object or null** — never a bare number, string or boolean. Use this, not
+  **an object or null**, never a bare number, string or boolean. Use this, not
   `headline`. Keys are per check id and listed above. Shares are fractions:
   `0.174` is 17.4% of supply. A key whose quantity was not read is `null`, never
   `0`, because a zero there is indistinguishable from a measurement.
@@ -312,7 +312,7 @@ curl -s https://api.checkvitals.xyz/v1/health
 
 `ok` goes false once `lag_blocks` exceeds 500, which is the same condition that
 makes the launch endpoints return 503. `lag_blocks: null` means one end could
-not be read — which is not the same as zero.
+not be read, which is not the same as zero.
 
 `/v1/health` and `/v1/stats` keep answering while the index lags. They are how
 you find out that the rest will not.
@@ -323,7 +323,7 @@ you find out that the rest will not.
 curl -s https://api.checkvitals.xyz/v1/openapi.json
 ```
 
-OpenAPI 3.1, generated from the same constants the handlers branch on — the
+OpenAPI 3.1, generated from the same constants the handlers branch on. The
 check ids, the states, the batch ceiling and the rates in that document are the
 identifiers in the code, not a copy of them. Served without a key.
 
@@ -340,7 +340,7 @@ Pass a key as `Authorization: Bearer KEY`, `X-API-Key: KEY`, or `?key=KEY`.
 | partner | 60 rps | a partner key |
 
 - Token bucket per key, with a 2-second burst.
-- An **unrecognised key is not an error** — it is served as keyless. A 401 in
+- An **unrecognised key is not an error**, it is served as keyless. A 401 in
   the way of an evaluation is worse than a low rate.
 - `429` carries `Retry-After` in whole seconds, plus `X-RateLimit-Limit` and
   `X-RateLimit-Tier`.
@@ -351,7 +351,7 @@ Pass a key as `Authorization: Bearer KEY`, `X-API-Key: KEY`, or `?key=KEY`.
 **Priority.** The API runs in the same process as the Telegram bot and shares
 its rate limiter, deliberately: an API answer and a `/scan` answer then come
 from one cache and one index and cannot disagree. API requests sit *below* the
-bot in that limiter — they are served only when no interactive request is
+bot in that limiter: they are served only when no interactive request is
 waiting, and they stop short of a reserve so a fanned-out batch cannot empty the
 bucket in the instant before somebody's card renders. In practice you will not
 notice; under load, the person who typed a command wins.
@@ -368,4 +368,4 @@ notice; under load, the person who typed a command wins.
   denominated in the asset the token actually trades against.
 
 If any response ever violates the two guarantees at the top of this document,
-that is a bug — report it and it will be fixed as one.
+that is a bug. Report it and it will be fixed as one.
