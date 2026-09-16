@@ -8,6 +8,7 @@ import { runDueRechecks, startRecheckLoop } from './recheck.js';
 import { startWindowLoop, windowBacklog, indexWindows } from './indexer/windows.js';
 import { deliverAlerts, deliverLaunch } from './bot.js';
 import { initBot, startBot } from './bot.js';
+import { startWatchdog } from './watchdog.js';
 import { startApi } from './api/server.js';
 import { db } from './db.js';
 import { BACKFILL_DAYS, BLOCKS_PER_DAY } from './config.js';
@@ -297,6 +298,10 @@ async function main(): Promise<void> {
         );
       }
       startWindowLoop();
+      // The bot watching itself. Everything it says rests on the index being
+      // current, and an index that falls behind answers in the same words
+      // about a chain it read an hour ago.
+      startWatchdog(bot.api);
       await startBot(bot);
       return;
     }

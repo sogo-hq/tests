@@ -21,6 +21,7 @@ import {
   groupLicensed, MAX_GRANT_DAYS,
 } from './grants.js';
 import { entitlement, entitlementLine } from './premium.js';
+import { statusReport, statusText, resetWatchdog } from './watchdog.js';
 import { clamp, TELEGRAM_MAX_MESSAGE, ADDRESS_PATTERN, containsAddress } from './text.js';
 import {
   tierOf, atLeast, thresholds, setThreshold, setVitalsToken, vitalsToken,
@@ -2407,6 +2408,21 @@ export function createBot(token = TELEGRAM_BOT_TOKEN): Bot {
    * address on screen in a room is a full address on screen in a room, however
    * it got there.
    */
+  /**
+   * The bot on itself. Admin only, and DM only: it names the armed launch and
+   * the size of the watch list, neither of which belongs in a room.
+   */
+  bot.command('status', async (ctx) => {
+    if (!isAdmin(ctx.from?.id) || ctx.chat?.type !== 'private') return;
+    const sub = (ctx.match ?? '').toString().trim().toLowerCase();
+    if (sub === 'reset') {
+      resetWatchdog();
+      await ctx.reply('watchdog cooldowns cleared. the next alert of each kind goes out immediately.');
+      return;
+    }
+    await ctx.reply(clamp(statusText(statusReport()), TELEGRAM_MAX_MESSAGE));
+  });
+
   bot.command('position', async (ctx) => {
     const parts = (ctx.match ?? '').toString().trim().split(/\s+/).filter(Boolean);
     const [wallet, token] = parts;
