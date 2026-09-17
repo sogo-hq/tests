@@ -472,3 +472,61 @@ test('a reused seat does not inherit the last occupant note', () => {
   assert.equal(seat.note, null, 'a note about somebody else came back with the seat');
   assert.doesNotMatch(R.seatTableForAdmin(), /the first occupant/);
 });
+
+// ------------------------------------ a hypothetical is not a run to be paid
+
+test('the latest real run is the latest run computed from the wallet', () => {
+  reset();
+  seed(1, 1, 1);
+  assert.equal(L.latestRealRun(), null, 'nothing is real before anything is computed');
+
+  const real = L.saveRun(L.computeRun({ balanceWei: ETH(10), paidToDateWei: 0n, sweptToDateWei: 0n }));
+  assert.equal(L.latestRun().id, real);
+  assert.equal(L.latestRealRun().id, real);
+
+  // Exploring a figure moves the latest run and must not move this one.
+  const guess = L.saveRun(L.computeRun({
+    balanceWei: ETH(99), paidToDateWei: 0n, sweptToDateWei: 0n, hypothetical: true,
+  }));
+  assert.equal(L.latestRun().id, guess);
+  assert.equal(L.latestRun().hypothetical, true);
+  assert.equal(L.latestRealRun().id, real, 'a typed balance became the run the payer would reach for');
+  assert.equal(L.latestRealRun().hypothetical, false);
+});
+
+test('a csv from a hypothetical says so at the top, and a real one says nothing', () => {
+  reset();
+  seed(1, 0, 0);
+  const real = L.computeRun({ balanceWei: ETH(10), paidToDateWei: 0n, sweptToDateWei: 0n });
+  real.id = L.saveRun(real);
+  assert.equal(L.csvText(real).split('\n')[0], 'wallet,amount');
+  assert.ok(!L.csvText(real).includes(L.CSV_HYPOTHETICAL_MARK));
+
+  const guess = L.computeRun({
+    balanceWei: ETH(10), paidToDateWei: 0n, sweptToDateWei: 0n, hypothetical: true,
+  });
+  guess.id = L.saveRun(guess);
+  const lines = L.csvText(guess).split('\n');
+  assert.match(lines[0], new RegExp(`^${L.CSV_HYPOTHETICAL_MARK}: run ${guess.id} was computed against a balance typed`));
+  assert.match(lines[1], /never owed/);
+  assert.equal(lines[2], 'wallet,amount');
+});
+
+test('the note at the top of a hypothetical csv is read back as a note, not a row', () => {
+  reset();
+  seed(2, 0, 0);
+  const guess = L.computeRun({
+    balanceWei: ETH(10), paidToDateWei: 0n, sweptToDateWei: 0n, hypothetical: true,
+  });
+  guess.id = L.saveRun(guess);
+  // Labelling the file must not make it unreadable: it is exported to be
+  // looked at, and the parser is the one thing that reads it.
+  const parsed = PP.parsePayCsv(L.csvText(guess));
+  assert.equal(parsed.ok, true, parsed.ok ? '' : parsed.errors.join('; '));
+  assert.equal(parsed.rows.length, 2);
+  assert.equal(PP.totalWei(parsed.rows), guess.distributedWei);
+  // And a note is the only thing skipped: a malformed row still stops the run.
+  const broken = PP.parsePayCsv(`# a note\nwallet,amount\n${W(1)},0.1\nnope,0.2\n`);
+  assert.equal(broken.ok, false);
+  assert.match(broken.errors[0], /nope is not a wallet address/);
+});

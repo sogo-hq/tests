@@ -102,19 +102,43 @@ test('the run adds up, in wei, not just on screen', () => {
 });
 
 test('the csv is the table, and the send command holds no key', async () => {
-  const doc = (await send('/ledger csv')).find((c) => c.method === 'sendDocument');
+  // The run above was computed from a typed balance, so it is exported by id.
+  // Bare /ledger csv will not reach a hypothetical, which the next test is.
+  const id = L.latestRun().id;
+  const doc = (await send(`/ledger csv ${id}`)).find((c) => c.method === 'sendDocument');
   const csv = Buffer.from(doc.payload.document.fileData ?? doc.payload.document.file ?? '').toString('utf8');
   const lines = csv.trim().split('\n');
-  assert.equal(lines[0], 'wallet,amount');
-  assert.equal(lines.length, 21);
-  assert.ok(lines.slice(1).every((l) => /^0x[0-9a-fA-F]{40},\d+\.\d{4}$/.test(l)), lines[1]);
-  const total = lines.slice(1).reduce((a, l) => a + Math.round(Number(l.split(',')[1]) * 1e4), 0);
+  const rows = lines.filter((l) => !l.startsWith('#') && l !== 'wallet,amount');
+  assert.match(lines[0], /^# HYPOTHETICAL: run \d+ was computed against a balance typed into \/ledger preview$/);
+  assert.equal(lines.find((l) => !l.startsWith('#')), 'wallet,amount');
+  assert.equal(rows.length, 20);
+  assert.ok(rows.every((l) => /^0x[0-9a-fA-F]{40},\d+\.\d{4}$/.test(l)), rows[0]);
+  const total = rows.reduce((a, l) => a + Math.round(Number(l.split(',')[1]) * 1e4), 0);
   assert.equal(total, 9996, '0.9996 ETH in units of 0.0001');
 
-  const cmd = await said('/ledger send');
+  const cmd = await said(`/ledger send ${id}`);
   assert.match(cmd, /the bot holds no key and sends nothing/);
   assert.match(cmd, /node tools\/pay\.mjs --csv vitals-ledger-run-\d+\.csv --run \d+/);
   assert.doesNotMatch(cmd, /0x[0-9a-fA-F]{40}/, 'the send command named a wallet');
+});
+
+test('neither csv nor send reaches a hypothetical run without being told to', async () => {
+  const id = L.latestRun().id;
+  assert.equal(L.latestRun().hypothetical, true, 'the run above was computed from a typed balance');
+  assert.equal(L.latestRealRun(), null, 'nothing here was computed from the wallet');
+
+  for (const [cmd, verb] of [['/ledger csv', 'export'], ['/ledger send', 'send']]) {
+    const out = await said(cmd);
+    assert.match(out, new RegExp(`no run computed from the fee wallet to ${verb}`), out);
+    // It says which run it refused and how to have it anyway, because the
+    // alternative is somebody deciding the bot has lost the table.
+    assert.match(out, new RegExp(`the latest run, ${id}, was a hypothetical`), out);
+    assert.match(out, new RegExp(`${id} takes the hypothetical anyway`), out);
+    assert.doesNotMatch(out, /0x[0-9a-fA-F]{40}/, 'the refusal named a wallet');
+  }
+  // And nothing was written out.
+  const docs = (await send('/ledger csv')).filter((c) => c.method === 'sendDocument');
+  assert.equal(docs.length, 0);
 });
 
 // --------------------------------------------------------------- privacy

@@ -51,7 +51,10 @@ const WALLET = /^0x[0-9a-fA-F]{40}$/;
 export function parsePayCsv(text: string): { ok: true; rows: PayRow[] } | { ok: false; errors: string[] } {
   const errors: string[] = [];
   const rows: PayRow[] = [];
-  const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  // A # line is a note the ledger wrote about the file, not a row. The only
+  // one it writes says the run was a hypothetical, and it has to survive being
+  // read back or the label would make the file unreadable instead of labelled.
+  const lines = text.split(/\r?\n/).map((l) => l.trim()).filter((l) => l && !l.startsWith('#'));
   if (!lines.length) return { ok: false, errors: ['the file is empty'] };
   const start = /^wallet\s*,\s*amount$/i.test(lines[0]!) ? 1 : 0;
   const seen = new Map<string, number>();

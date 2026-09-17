@@ -91,12 +91,24 @@ test('2. the preview, on a typed balance of 10 ETH', async () => {
   assert.ok(runId, 'the preview stored a run');
 });
 
-test('3. the csv the ledger writes', async () => {
-  const doc = (await send('/ledger csv')).find((c) => c.method === 'sendDocument');
+test('3. the csv the ledger writes, named by id because the balance was typed', async () => {
+  // Bare /ledger csv does not reach a hypothetical at all: the whole journey
+  // below runs on a figure rather than a wallet, so the run is asked for.
+  const refused = await (async () => {
+    const out = (await send('/ledger csv')).map((c) => c.payload.text ?? '').join('\n');
+    return out;
+  })();
+  assert.match(refused, /was a hypothetical/, refused);
+
+  const doc = (await send(`/ledger csv ${runId}`)).find((c) => c.method === 'sendDocument');
   csv = Buffer.from(doc.payload.document.fileData ?? doc.payload.document.file ?? '').toString('utf8');
   const lines = csv.trim().split('\n');
-  assert.equal(lines[0], 'wallet,amount');
-  assert.equal(lines.length, 21, 'a header and twenty seats');
+  // The file says on its face what it was built from, so the machine that
+  // holds the key is not asked to remember.
+  assert.match(lines[0], /^# HYPOTHETICAL: run \d+ was computed against a balance typed into \/ledger preview$/);
+  assert.match(lines[1], /^# not read from the fee wallet\. these amounts were never owed\.$/);
+  assert.equal(lines[2], 'wallet,amount');
+  assert.equal(lines.length, 23, 'two notes, a header and twenty seats');
 });
 
 test('4. the columns the ledger writes are the columns the payer parses', () => {

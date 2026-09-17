@@ -346,6 +346,20 @@ export function latestRun(): LedgerRun | null {
   return r ? loadRun(r.id) : null;
 }
 
+/**
+ * The latest run that was computed against the wallet rather than a figure.
+ *
+ * What feeds the payer resolves through this one. A hypothetical names real
+ * wallets and real-looking amounts that were never owed, and exploring a
+ * number with /ledger preview <eth> leaves one as the latest run, so anything
+ * that reaches for "the run" without saying which would reach for that.
+ */
+export function latestRealRun(): LedgerRun | null {
+  const r = db.prepare('SELECT id FROM ledger_runs WHERE hypothetical = 0 ORDER BY id DESC LIMIT 1')
+    .get() as { id: number } | undefined;
+  return r ? loadRun(r.id) : null;
+}
+
 export interface TxRecord { seat: number; txHash: string }
 
 /**
@@ -471,8 +485,22 @@ export function previewText(run: LedgerRun, opts: { warnings?: string[] } = {}):
 }
 
 /** wallet,amount for a batch sender. Amounts in ETH, exactly as printed. */
+/** The first line of a csv exported from a hypothetical run. */
+export const CSV_HYPOTHETICAL_MARK = '# HYPOTHETICAL';
+
 export function csvText(run: LedgerRun): string {
-  return ['wallet,amount', ...run.rows.map((r) => `${r.wallet},${eth(r.amountWei)}`)].join('\n');
+  const L: string[] = [];
+  // Said at the top of the file, because the file outlives the message it
+  // arrived in and is opened again on the machine that holds the key. Whoever
+  // is about to send twenty transfers should not have to remember which
+  // balance the table was built from.
+  if (run.hypothetical) {
+    L.push(`${CSV_HYPOTHETICAL_MARK}: run ${run.id ?? '?'} was computed against a balance typed into /ledger preview`);
+    L.push('# not read from the fee wallet. these amounts were never owed.');
+  }
+  L.push('wallet,amount');
+  for (const r of run.rows) L.push(`${r.wallet},${eth(r.amountWei)}`);
+  return L.join('\n');
 }
 
 /** The command to run on the machine that holds the key. */
