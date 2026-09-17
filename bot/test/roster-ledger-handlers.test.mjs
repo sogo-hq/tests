@@ -117,6 +117,12 @@ test('the csv is the table, and the send command holds no key', async () => {
   assert.equal(total, 9996, '0.9996 ETH in units of 0.0001');
 
   const cmd = await said(`/ledger send ${id}`);
+  // Named explicitly, so the command it prints says what it is before the
+  // line that gets copied rather than after it.
+  const cmdLines = cmd.split('\n');
+  assert.match(cmdLines[0], new RegExp(`^HYPOTHETICAL: run ${id} was computed against a typed balance\\.`), cmd);
+  assert.match(cmdLines[0], /would send real ETH against amounts nobody is owed/);
+  assert.ok(cmdLines.findIndex((l) => l.includes('pay.mjs')) > 0, 'the label came after the command');
   assert.match(cmd, /the bot holds no key and sends nothing/);
   assert.match(cmd, /node tools\/pay\.mjs --csv vitals-ledger-run-\d+\.csv --run \d+/);
   assert.doesNotMatch(cmd, /0x[0-9a-fA-F]{40}/, 'the send command named a wallet');
@@ -150,7 +156,12 @@ test('no view that can reach a group ever carries a wallet', async () => {
   assert.doesNotMatch(roster, /0x[0-9a-fA-F]{40}/, 'the public roster carried a wallet');
   assert.doesNotMatch(roster, /\bsh\b|shares/, 'the public roster carried a share count');
 
-  const post = await said('/ledger post', { chat: GROUP });
+  // The run here was computed from a typed balance, so the room is told about
+  // it only because the id was typed. Bare /ledger post refuses it.
+  const bare = await said('/ledger post', { chat: GROUP });
+  assert.match(bare, /was a hypothetical/, bare);
+
+  const post = await said(`/ledger post ${L.latestRun().id}`, { chat: GROUP });
   assert.doesNotMatch(post, /0x[0-9a-fA-F]{40}/, 'the public ledger post carried a wallet');
   assert.match(post, /T1 {2}4 seats · 0\.1190 ETH each · 0\.4760 ETH/);
   assert.match(post, /T2 {2}6 seats · 0\.0476 ETH each · 0\.2856 ETH/);

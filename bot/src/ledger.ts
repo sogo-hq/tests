@@ -506,6 +506,11 @@ export function csvText(run: LedgerRun): string {
 /** The command to run on the machine that holds the key. */
 export function sendCommand(run: LedgerRun, csvName: string): string {
   return [
+    // Said before the command rather than after it, because the command is
+    // what gets copied and the rest of the message may not be read twice.
+    ...(run.hypothetical
+      ? [`HYPOTHETICAL: run ${run.id ?? '?'} was computed against a typed balance. what follows would send real ETH against amounts nobody is owed.`, '']
+      : []),
     'the bot holds no key and sends nothing. from the machine that does:',
     '',
     `  FEE_WALLET_PRIVATE_KEY=0x... node tools/pay.mjs --csv ${csvName} --run ${run.id ?? '?'}`,

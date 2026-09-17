@@ -196,7 +196,9 @@ test('10. a second paste does not record a second hash against a seat', async ()
 });
 
 test('11. the public post: the hashes, and nothing that names anyone', async () => {
-  const post = await said('/ledger post', { chat: GROUP });
+  // Named, because this whole journey ran on a typed balance and /ledger post
+  // will not reach a hypothetical on its own.
+  const post = await said(`/ledger post ${runId}`, { chat: GROUP });
 
   // The arithmetic the room checks.
   assert.match(post, /gross income\s+10\.0000 ETH/);
@@ -219,8 +221,14 @@ test('11. the public post: the hashes, and nothing that names anyone', async () 
   assert.doesNotMatch(post, /t[123]_member/);
 });
 
+test('11b. bare /ledger post does not reach the typed-balance run', async () => {
+  const out = await said('/ledger post', { chat: GROUP });
+  assert.match(out, /was a hypothetical/, out);
+  assert.doesNotMatch(out, /gross income/, 'a hypothetical reached the room');
+});
+
 test('12. the room sees tiers, never people', async () => {
-  const post = await said('/ledger post', { chat: GROUP });
+  const post = await said(`/ledger post ${runId}`, { chat: GROUP });
   assert.match(post, /T1\s+4 seats · 0\.1190 ETH each · 0\.4760 ETH/);
   assert.match(post, /T2\s+6 seats · 0\.0476 ETH each · 0\.2856 ETH/);
   assert.match(post, /T3\s+10 seats · 0\.0238 ETH each · 0\.2380 ETH/);

@@ -2693,18 +2693,18 @@ export function createBot(token = TELEGRAM_BOT_TOKEN): Bot {
       return id !== null && Number.isFinite(id) ? Ledger.loadRun(id) : Ledger.latestRealRun();
     };
     /** Why there is no run to hand over, when there are runs. */
-    const noRun = (verb: string) => {
+    const noRun = (verb: string, cmd: string) => {
       const latest = Ledger.latestRun();
       return latest?.hypothetical
         ? `no run computed from the fee wallet to ${verb}. the latest run, ${latest.id}, was a hypothetical. `
-          + `/ledger preview reads the wallet, or /ledger ${verb === 'export' ? 'csv' : 'send'} ${latest.id} takes the hypothetical anyway`
+          + `/ledger preview reads the wallet, or /ledger ${cmd} ${latest.id} takes the hypothetical anyway`
         : `no run to ${verb}. /ledger preview first`;
     };
 
     if (sub === 'csv') {
       if (!isDm) { await dmOnly(); return; }
       const run = payableRunFrom(1);
-      if (!run) { await ctx.reply(noRun('export')); return; }
+      if (!run) { await ctx.reply(noRun('export', 'csv')); return; }
       const name = `vitals-ledger-run-${run.id}.csv`;
       await ctx.replyWithDocument(new InputFile(Buffer.from(Ledger.csvText(run), 'utf8'), name));
       return;
@@ -2712,7 +2712,7 @@ export function createBot(token = TELEGRAM_BOT_TOKEN): Bot {
     if (sub === 'send') {
       if (!isDm) { await dmOnly(); return; }
       const run = payableRunFrom(1);
-      if (!run) { await ctx.reply(noRun('send')); return; }
+      if (!run) { await ctx.reply(noRun('send', 'send')); return; }
       await ctx.reply(clamp(Ledger.sendCommand(run, `vitals-ledger-run-${run.id}.csv`), TELEGRAM_MAX_MESSAGE));
       return;
     }
@@ -2737,8 +2737,11 @@ export function createBot(token = TELEGRAM_BOT_TOKEN): Bot {
       return;
     }
     if (sub === 'post') {
-      const run = runFrom(1);
-      if (!run) { await ctx.reply('no run to post. /ledger preview first'); return; }
+      // The room reads a post as what it was paid. A run computed against a
+      // figure somebody typed is not that, so it is not reached for by default
+      // here either, and naming its id is the whole of the decision to post it.
+      const run = payableRunFrom(1);
+      if (!run) { await ctx.reply(noRun('post', 'post')); return; }
       const text = Ledger.postText(run);
       // The public message is the one place a wallet must never reach, so it
       // is checked for one rather than assumed not to have any.
