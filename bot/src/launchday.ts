@@ -579,9 +579,15 @@ export async function deliverCa(
       console.warn(`[launch] could not post in ${w.chatId}: ${String((err as Error)?.message ?? err).slice(0, 120)}`);
     }
   }
-  // Nothing landed anywhere and something threw: the caller has to know, so
-  // the launch stays due rather than being filed as announced.
-  if (sent === 0 && firstError) throw firstError;
+  // Nothing landed anywhere, nothing had landed before, and something threw:
+  // the caller has to know, so the launch stays due rather than being filed as
+  // announced with nothing posted and the fake-CA guard switched off.
+  //
+  // Once the CA is committed the rule flips. The launch IS announced, and a
+  // straggler room refusing is a room that is behind, not a launch that failed.
+  // Throwing there would put an error through the reconcile loop every twenty
+  // seconds for as long as one room stayed unhappy.
+  if (sent === 0 && firstError && !getSetting('launch_detected_at')) throw firstError;
   void opts;
   return sent;
 }

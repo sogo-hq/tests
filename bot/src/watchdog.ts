@@ -3,7 +3,7 @@ import { db, getCursor } from './db.js';
 import { getSetting, setSetting } from './ready.js';
 import { indexHealth, lastSeenHead, agoWords } from './indexer/health.js';
 import { adminIds } from './tge.js';
-import { getLaunchPlan } from './launch.js';
+import { getLaunchPlan, zonedStamp } from './launch.js';
 import { BLOCK_TIME_SECONDS } from './config.js';
 
 /**
@@ -129,8 +129,10 @@ export function statusText(s: StatusReport): string {
     if (s.lastError) L.push(`              ${s.lastError.slice(0, 120)}`);
   }
   L.push('');
+  // The zone it was set in, not UTC. Reading 14:00 where 16:00 was set is the
+  // kind of thing that gets noticed at T-5 and not before.
   L.push(s.launch
-    ? `launch armed  ${s.launch.name ?? 'unnamed'} at ${new Date(s.launch.at).toISOString().replace('T', ' ').slice(0, 16)}`
+    ? `launch armed  ${s.launch.name ?? 'unnamed'} at ${zonedStamp(s.launch.at)}`
       + `${s.launch.ca ? `, CA ${s.launch.ca}` : ', no CA yet'}`
     : 'launch armed  none');
   L.push(`watch list    ${s.watches} subscription${s.watches === 1 ? '' : 's'}`);

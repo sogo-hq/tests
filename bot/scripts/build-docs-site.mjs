@@ -25,6 +25,8 @@ const OUT = join(ROOT, 'site', 'docs');
 export const PAGES = [
   { slug: 'index', title: 'Overview', source: null,
     blurb: 'what this is and what it refuses to do' },
+  { slug: 'whitepaper', title: 'Whitepaper', source: 'whitepaper.md',
+    blurb: 'what it reads, what it refuses to do, and where the numbers come from' },
   { slug: 'api', title: 'API', source: 'api.md',
     blurb: 'the read-only HTTP API, its guarantees and its shapes' },
   { slug: 'groups', title: 'Groups', source: 'partners-groups.md',
@@ -50,6 +52,7 @@ const esc = (s) => s
  */
 export const SITE_LINKS = {
   'api.md': '/api',
+  'whitepaper.md': '/whitepaper',
   'partners-groups.md': '/groups',
   'vitals.md': '/vitals',
   '../examples/sample-response.json': '/examples/sample-response.json',

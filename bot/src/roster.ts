@@ -33,6 +33,8 @@ export interface Seat {
   wallet: string;
   joinedAt: number;
   removedAt: number | null;
+  /** What this seat is for, admin only. Never leaves a DM. */
+  note: string | null;
 }
 
 /** Leading @ dropped, trimmed. The stored form is what was typed, less the @. */
@@ -47,6 +49,7 @@ function rowToSeat(r: any): Seat {
   return {
     seat: r.seat, handle: r.handle, tier: r.tier, shares: r.shares,
     wallet: r.wallet, joinedAt: r.joined_at, removedAt: r.removed_at ?? null,
+    note: r.note ?? null,
   };
 }
 
@@ -114,10 +117,10 @@ export function addSeat(
      ON CONFLICT(seat) DO UPDATE SET
        handle = excluded.handle, handle_key = excluded.handle_key, tier = excluded.tier,
        shares = excluded.shares, wallet = excluded.wallet, joined_at = excluded.joined_at,
-       removed_at = NULL`,
+       removed_at = NULL, note = NULL`,
   ).run(seat, handle, handle.toLowerCase(), tier, shares, wallet, at);
   logEvent.run(seat, handle, 'add', null, tier, wallet, at, opts.by ?? null);
-  return { ok: true, value: { seat, handle, tier: tier as Tier, shares, wallet, joinedAt: at, removedAt: null } };
+  return { ok: true, value: { seat, handle, tier: tier as Tier, shares, wallet, joinedAt: at, removedAt: null, note: null } };
 }
 
 export function setTier(
@@ -145,6 +148,29 @@ export function removeSeat(rawHandle: string, opts: { at?: number; by?: number }
   db.prepare('UPDATE seats SET removed_at = ? WHERE seat = ?').run(at, seat.seat);
   logEvent.run(seat.seat, handle, 'remove', seat.tier, null, null, at, opts.by ?? null);
   return { ok: true, value: { ...seat, removedAt: at } };
+}
+
+/** Bounded so the admin table stays a table rather than becoming a document. */
+export const MAX_SEAT_NOTE = 120;
+
+export type NoteResult =
+  | { ok: true; seat: number; note: string; cleared: boolean }
+  | { ok: false; reason: 'no-seat' | 'too-long' };
+
+/**
+ * Record what a seat is for.
+ *
+ * Kept out of every view that can reach a group. A note is written about
+ * somebody rather than to them, and the roster the room sees already carries
+ * no wallet for the same reason.
+ */
+export function setSeatNote(seatNumber: number, raw: string): NoteResult {
+  const note = raw.trim().replace(/\s+/g, ' ');
+  if (note.length > MAX_SEAT_NOTE) return { ok: false, reason: 'too-long' };
+  const live = db.prepare('SELECT seat FROM seats WHERE seat = ? AND removed_at IS NULL').get(seatNumber);
+  if (!live) return { ok: false, reason: 'no-seat' };
+  db.prepare('UPDATE seats SET note = ? WHERE seat = ?').run(note || null, seatNumber);
+  return { ok: true, seat: seatNumber, note, cleared: note === '' };
 }
 
 export interface SeatEvent {
@@ -182,8 +208,12 @@ const day = (t: number) => new Date(t * 1000).toISOString().slice(0, 10);
  */
 export function seatTableForAdmin(seats = liveSeats()): string {
   if (!seats.length) return 'no seats yet. /seat add <handle> <tier> <wallet>';
-  const lines = seats.map((s) =>
-    `${String(s.seat).padStart(3)}  ${s.handle.padEnd(16)} ${s.tier}  ${String(s.shares).padStart(2)}sh  ${shortWallet(s.wallet)}  ${day(s.joinedAt)}`);
+  const lines = seats.flatMap((s) => {
+    const row = `${String(s.seat).padStart(3)}  ${s.handle.padEnd(16)} ${s.tier}  ${String(s.shares).padStart(2)}sh  ${shortWallet(s.wallet)}  ${day(s.joinedAt)}`;
+    // On its own line, indented under the seat: a note is a sentence and does
+    // not fit a column without truncating the thing it was written to say.
+    return s.note ? [row, `     ${s.note}`] : [row];
+  });
   const byTier = TIERS.map((t) => `${t} ${seats.filter((s) => s.tier === t).length}`).join(' · ');
   return [
     `seat  handle           tier shares wallet          joined`,

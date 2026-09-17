@@ -78,7 +78,7 @@ test('every page the sidebar names exists on disk', () => {
     const file = `site/docs/${p.slug === 'index' ? 'index' : p.slug}.html`;
     assert.ok(existsSync(file), file);
   }
-  assert.deepEqual(PAGES.map((p) => p.slug), ['index', 'api', 'groups', 'vitals']);
+  assert.deepEqual(PAGES.map((p) => p.slug), ['index', 'whitepaper', 'api', 'groups', 'vitals']);
 });
 
 test('every page carries the sidebar, with the current page marked', () => {
@@ -276,4 +276,76 @@ test('an http link in a document is dropped rather than published', async () => 
   const r = render('see [x](http://example.com/thing)');
   assert.doesNotMatch(r.html, /http:\/\//, 'an http link would mark the site not secure');
   assert.deepEqual(r.dropped, ['http://example.com/thing']);
+});
+
+test('the whitepaper is published, linked from the index, and in the sidebar', () => {
+  const wp = read('whitepaper');
+  assert.ok(wp.length > 8_000, 'the page is too short to be the whitepaper');
+  // Linked from the index like the others, and reachable from every page.
+  assert.ok(read('index').includes('class="card" href="/whitepaper"'));
+  for (const p of PAGES) assert.ok(read(p.slug).includes('href="/whitepaper"'), p.slug);
+});
+
+test('the whitepaper renders its tables and code, and leaks no markdown', () => {
+  const source = readFileSync('docs/whitepaper.md', 'utf8');
+  const wp = read('whitepaper');
+  const tables = (source.match(/^\|[\s:|-]+\|$/gm) ?? []).length;
+  assert.ok(tables >= 3);
+  assert.equal((wp.match(/<table>/g) ?? []).length, tables);
+  const fences = (source.match(/^```/gm) ?? []).length / 2;
+  assert.ok(fences >= 2);
+  assert.equal((wp.match(/<pre>/g) ?? []).length, fences);
+  assert.ok(!wp.includes('```'));
+});
+
+test('the whitepaper says what it refuses to do, and says it in the words used everywhere', () => {
+  const wp = read('whitepaper');
+  assert.match(wp, /No score, no grade, no traffic light, no verdict/);
+  assert.match(wp, /Absence of a finding is never "clean"/);
+  assert.match(wp, /No median under thirty observations/);
+  assert.match(wp, /No price data of any kind/);
+});
+
+test('the whitepaper carries the figures this repository can show', async () => {
+  const wp = read('whitepaper');
+  // The production distribution, and it adds up on the page.
+  assert.match(wp, /478,610/);
+  assert.match(wp, /331,678 \(69\.3%\)/);
+  assert.match(wp, /146,932 \(30\.7%\)/);
+  assert.match(wp, /422 \(0\.09%\)/);
+  // The four slots, which is the thing that was wrong and is now measured.
+  assert.match(wp, /four slots/i);
+  assert.match(wp, /a count of zero was never possible/);
+  // The two addresses, matching what the code compiles in.
+  const { FACTORY, LAUNCH_FORWARDER } = await import('../dist/config.js');
+  assert.ok(wp.includes(FACTORY), 'the factory address on the page is not the one in the code');
+  assert.ok(wp.includes(LAUNCH_FORWARDER), 'the forwarder address on the page is not the one in the code');
+});
+
+test('the whitepaper tiers are the tiers the bot ships with', async () => {
+  const { DEFAULT_THRESHOLDS } = await import('../dist/tiers.js');
+  const wp = read('whitepaper');
+  for (const n of [DEFAULT_THRESHOLDS.watch, DEFAULT_THRESHOLDS.premium, DEFAULT_THRESHOLDS.desk]) {
+    assert.ok(wp.includes(Number(n).toLocaleString('en-US')), String(n));
+  }
+  assert.match(wp, /access, not yield/);
+});
+
+test('the whitepaper room share is the share the ledger pays', async () => {
+  const { LEDGER_SHARE_PCT } = await import('../dist/ledger.js');
+  const { TIER_SHARES } = await import('../dist/roster.js');
+  const wp = read('whitepaper');
+  assert.equal(LEDGER_SHARE_PCT, 10);
+  assert.match(wp, /cumulative gross income/);
+  // The page writes the shares as words, so the words are checked against the
+  // numbers the ledger actually divides by.
+  const WORD = { 1: 'one', 2: 'two', 5: 'five' };
+  assert.deepEqual(
+    [TIER_SHARES.T1, TIER_SHARES.T2, TIER_SHARES.T3].map((n) => WORD[n]),
+    ['five', 'two', 'one'],
+    'the tier shares changed and the whitepaper still says five, two, one',
+  );
+  assert.match(wp, /five for a first-tier seat, two for a second, one for a third/);
+  // And the pool formula on the page is the one computeRun uses.
+  assert.match(wp, /pool now\s+= 0\.10 \* gross income - everything paid out/);
 });

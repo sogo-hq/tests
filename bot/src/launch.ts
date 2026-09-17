@@ -200,10 +200,21 @@ export function parseLaunchTime(input: string, now = Date.now(), tz = LAUNCH_TZ)
 }
 
 /** `launch: 2026-09-22 16:00 CEST`, with the abbreviation read from the zone. */
-export function launchTimeLine(at: number, tz = LAUNCH_TZ): string {
+/**
+ * A launch time as it was set, with the zone it was set in.
+ *
+ * Never bare UTC. A time set as 16:00 CEST that prints as 14:00 is read as a
+ * mistake by whoever checks it, and the check happens at T-5 rather than
+ * earlier, which is the worst moment to start wondering which one is right.
+ */
+export function zonedStamp(at: number, tz = LAUNCH_TZ): string {
   const p = zonedParts(at, tz);
   const two = (n: number) => String(n).padStart(2, '0');
-  return `launch: ${p.year}-${two(p.month)}-${two(p.day)} ${two(p.hour)}:${two(p.minute)} ${p.abbrev}`;
+  return `${p.year}-${two(p.month)}-${two(p.day)} ${two(p.hour)}:${two(p.minute)} ${p.abbrev}`;
+}
+
+export function launchTimeLine(at: number, tz = LAUNCH_TZ): string {
+  return `launch: ${zonedStamp(at, tz)}`;
 }
 
 /**

@@ -194,6 +194,11 @@ export function unrecordedRuns(): { id: number; createdAt: number; distributedWe
             (SELECT COUNT(*) FROM ledger_payments p WHERE p.run_id = r.id AND p.tx_hash IS NULL) AS unpaid
        FROM ledger_runs r
       WHERE r.status = 'preview'
+        -- A hypothetical was computed against a figure somebody typed, so it
+        -- was never payable and cannot be an unpaid run. Counting them turned
+        -- "/ledger preview 10" into a warning that a real run might pay twice,
+        -- which is the one warning here that must not become noise.
+        AND r.hypothetical = 0
         AND EXISTS (SELECT 1 FROM ledger_payments p WHERE p.run_id = r.id AND p.tx_hash IS NULL)
       ORDER BY r.id`,
   ).all() as any[]).map((r) => ({

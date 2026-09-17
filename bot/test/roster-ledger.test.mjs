@@ -405,3 +405,70 @@ test('killed after two and resumed: the third is sent, the first two are not', a
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// ------------------------------------------------------------- seat notes
+
+test('a note is stored on the seat and shown in the admin table', () => {
+  reset();
+  R.addSeat('one', 'T1', W(1));
+  R.addSeat('two', 'T2', W(2));
+  const res = R.setSeatNote(1, '  the artist who did the   card  ');
+  assert.deepEqual(res, { ok: true, seat: 1, note: 'the artist who did the card', cleared: false });
+  assert.equal(R.liveSeats()[0].note, 'the artist who did the card');
+
+  const table = R.seatTableForAdmin();
+  assert.match(table, /the artist who did the card/);
+  // On its own line under its seat, not squeezed into a column.
+  const lines = table.split('\n');
+  const at = lines.findIndex((l) => l.includes('the artist'));
+  assert.match(lines[at - 1], /\bone\b/);
+});
+
+test('a note never reaches the roster the room sees', () => {
+  reset();
+  R.addSeat('one', 'T1', W(1));
+  R.setSeatNote(1, 'owed a seat for the audit');
+  const roster = R.publicRoster();
+  assert.doesNotMatch(roster, /owed a seat/);
+  assert.doesNotMatch(roster, /audit/);
+  // And the public roster still carries no wallet either.
+  assert.doesNotMatch(roster, /0x[0-9a-fA-F]{40}/);
+});
+
+test('an empty note clears it', () => {
+  reset();
+  R.addSeat('one', 'T1', W(1));
+  R.setSeatNote(1, 'temporary');
+  const res = R.setSeatNote(1, '   ');
+  assert.equal(res.cleared, true);
+  assert.equal(R.liveSeats()[0].note, null);
+  assert.doesNotMatch(R.seatTableForAdmin(), /temporary/);
+});
+
+test('a note on a seat that is not live is refused', () => {
+  reset();
+  R.addSeat('one', 'T1', W(1));
+  assert.deepEqual(R.setSeatNote(99, 'x'), { ok: false, reason: 'no-seat' });
+  R.removeSeat('one');
+  assert.deepEqual(R.setSeatNote(1, 'x'), { ok: false, reason: 'no-seat' });
+});
+
+test('a note longer than the bound is refused, and nothing is stored', () => {
+  reset();
+  R.addSeat('one', 'T1', W(1));
+  R.setSeatNote(1, 'kept');
+  assert.deepEqual(R.setSeatNote(1, 'x'.repeat(R.MAX_SEAT_NOTE + 1)), { ok: false, reason: 'too-long' });
+  assert.equal(R.liveSeats()[0].note, 'kept', 'the refused note overwrote the old one');
+});
+
+test('a reused seat does not inherit the last occupant note', () => {
+  reset();
+  R.addSeat('one', 'T1', W(1));
+  R.setSeatNote(1, 'the first occupant');
+  R.removeSeat('one');
+  R.addSeat('two', 'T2', W(2));
+  const seat = R.liveSeats().find((s) => s.seat === 1);
+  assert.ok(seat, 'the seat number was reused');
+  assert.equal(seat.note, null, 'a note about somebody else came back with the seat');
+  assert.doesNotMatch(R.seatTableForAdmin(), /the first occupant/);
+});

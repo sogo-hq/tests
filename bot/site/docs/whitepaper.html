@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Whitepaper . VITALS docs</title>
+<meta name="description" content="VITALS documentation. Whitepaper.">
+<style>
+  :root { --bg: #080B09; --ink: #E8F0DE; --dim: #6E7A66; --ref: #C6F73A; --rule: #1B241A; }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; scroll-behavior: smooth; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 400 16px/1.7 Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  .wrap { display: flex; align-items: flex-start; max-width: 1180px; margin: 0 auto; gap: 48px; padding: 0 24px; }
+  nav { position: sticky; top: 0; flex: 0 0 210px; padding: 48px 0 64px; max-height: 100vh; overflow-y: auto; }
+  nav .brand {
+    font: 400 13px/1 "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    letter-spacing: 0.14em; text-transform: uppercase; color: var(--ref);
+    display: block; margin-bottom: 26px; text-decoration: none; border: 0;
+  }
+  nav a { display: block; color: var(--dim); text-decoration: none; border: 0; padding: 6px 0; font-size: 15px; }
+  nav a:hover { color: var(--ink); }
+  nav a.on { color: var(--ink); border-left: 2px solid var(--ref); padding-left: 12px; margin-left: -14px; }
+  nav .sub { margin: 4px 0 18px 0; padding-left: 12px; border-left: 1px solid var(--rule); }
+  nav .sub a { font-size: 14px; padding: 4px 0; }
+  main { flex: 1 1 auto; min-width: 0; padding: 48px 0 120px; }
+  h1 { font-size: 34px; line-height: 1.2; margin: 0 0 28px; font-weight: 700; letter-spacing: -0.01em; }
+  h2 {
+    font-size: 13px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--dim);
+    font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-weight: 400; margin: 52px 0 14px; padding-top: 14px; border-top: 1px solid var(--rule);
+  }
+  h3 { font-size: 19px; margin: 34px 0 12px; font-weight: 600; }
+  h4 { font-size: 16px; margin: 26px 0 10px; font-weight: 600; color: var(--dim); }
+  p { margin: 0 0 16px; }
+  ul, ol { margin: 0 0 16px; padding-left: 22px; }
+  li { margin: 0 0 8px; }
+  a { color: var(--ref); text-decoration: none; border-bottom: 1px solid var(--rule); }
+  a:hover { border-bottom-color: var(--ref); }
+  code {
+    font: 400 0.88em/1.5 "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    background: #0C100B; border: 1px solid var(--rule); border-radius: 3px; padding: 1px 5px;
+  }
+  pre {
+    background: #0C100B; border: 1px solid var(--rule); border-left: 2px solid var(--ref);
+    border-radius: 3px; padding: 16px 18px; margin: 0 0 18px; overflow-x: auto;
+  }
+  pre code { background: none; border: 0; padding: 0; font-size: 13.5px; line-height: 1.7; }
+  .scroll { overflow-x: auto; margin: 0 0 20px; }
+  table { border-collapse: collapse; width: 100%; font-size: 14.5px; }
+  th, td { text-align: left; padding: 9px 14px 9px 0; border-bottom: 1px solid var(--rule); vertical-align: top; }
+  th {
+    font: 400 12px/1.4 "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    letter-spacing: 0.08em; text-transform: uppercase; color: var(--dim); white-space: nowrap;
+  }
+  hr { border: 0; border-top: 1px solid var(--rule); margin: 36px 0; }
+  strong { font-weight: 600; }
+  footer { margin-top: 64px; padding-top: 24px; border-top: 1px solid var(--rule); color: var(--dim); font-size: 14px; }
+  .cards { display: grid; gap: 14px; margin: 0 0 28px; }
+  .card { display: block; border: 1px solid var(--rule); border-radius: 4px; padding: 18px 20px; text-decoration: none; color: var(--ink); }
+  .card:hover { border-color: var(--ref); }
+  .card b { display: block; font-weight: 600; margin-bottom: 4px; }
+  .card span { color: var(--dim); font-size: 14.5px; }
+  @media (max-width: 860px) {
+    .wrap { display: block; padding: 0 20px; }
+    nav { position: static; max-height: none; padding: 32px 0 0; border-bottom: 1px solid var(--rule); }
+    nav .sub { display: none; }
+    main { padding: 32px 0 80px; }
+    h1 { font-size: 27px; }
+  }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <nav>
+      <a class="brand" href="/">VITALS docs</a>
+      <a href="/">Overview</a>
+      <a href="/whitepaper" class="on">Whitepaper</a><div class="sub"><a href="#the-problem-this-is-for">The problem this is for</a><a href="#what-it-refuses-to-do">What it refuses to do</a><a href="#what-it-reads">What it reads</a><a href="#the-bonding-curve-calibrated-rather-than-assumed">The bonding curve, calibrated rather than assumed</a><a href="#the-opening-tax-exemption-and-what-it-took-to-get-right">The opening tax exemption, and what it took to get right</a><a href="#the-index-and-when-it-is-allowed-to-say-no">The index, and when it is allowed to say no</a><a href="#the-token">The token</a><a href="#the-room-and-how-it-is-paid">The room, and how it is paid</a><a href="#declarations">Declarations</a><a href="#what-it-does-not-do">What it does not do</a><a href="#where-the-numbers-in-this-document-come-from">Where the numbers in this document come from</a></div>
+      <a href="/api">API</a>
+      <a href="/groups">Groups</a>
+      <a href="/vitals">VITALS</a>
+    </nav>
+    <main>
+      <h1 id="vitals">VITALS</h1>
+      <p>A scanner for pons v2 launches on Robinhood Chain. It reads the chain and prints what the chain shows, with the reference point each number is measured against. It does not score, grade or rank, and it never says a launch is fine.</p>
+      <p>Version 1, 17 september 2026.</p>
+      <h2 id="the-problem-this-is-for">The problem this is for</h2>
+      <p>A launch on this chain is fully described by its creation transaction and the seconds after it. Who was exempted from the opening tax, what the deployer bought for itself, what the creator tax is, who holds the supply: all of it is on chain within a few hundred milliseconds of the token existing, and all of it is unreadable to somebody watching a group chat.</p>
+      <p>What fills the gap is almost always a number with no denominator. A score out of ten with nothing behind it. A green tick. A claim that a token is "clean", which means only that whoever said it did not find anything, in a search they did not describe, over data they did not name.</p>
+      <p>The design here starts from the opposite end. Every line is a measurement with its source, or it is the word undetermined.</p>
+      <h2 id="what-it-refuses-to-do">What it refuses to do</h2>
+      <p>These are enforced by tests that run on every build, not by convention.</p>
+      <p><strong>No score, no grade, no traffic light, no verdict.</strong> Every check reports one of three states: a finding, undetermined, or nothing found. There is no number that combines them, because combining them is where the information goes.</p>
+      <p><strong>Absence of a finding is never "clean".</strong> A check that found nothing found nothing. The card says how many checks ran and how many could not be answered, and the words clean, safe and good appear nowhere in any output.</p>
+      <p><strong>Nothing that did not finish reads as a fact about the chain.</strong> A read that timed out, a window that was not covered, a decode that failed: each reports as undetermined, and undetermined never carries a value. A zero that came from a failed read is a lie in the shape of a measurement.</p>
+      <p><strong>No median under thirty observations.</strong> A reference point drawn from four launches is not a reference point, and the sample size is printed beside every one that is published.</p>
+      <p><strong>No price data of any kind.</strong> No targets, no direction, no entry, no exit. Volume and market capitalisation appear as quantities where they are measured; what anybody should do about them does not.</p>
+      <h2 id="what-it-reads">What it reads</h2>
+      <p>Robinhood Chain, chain id 4663, block time about 0.1 seconds. Two addresses are compiled in and are never resolved from a search result, because lookalike factories and fake explorers exist for this chain:</p>
+      <div class="scroll"><table>
+      <thead><tr><th></th><th></th></tr></thead>
+      <tbody>
+      <tr><td>factory</td><td><code>0x7eD598BcEf8bd9Edd8C97A195C6d13f40801EC7e</code></td></tr>
+      <tr><td>launch forwarder</td><td><code>0xe33E9E479dF8802cb0866d5d05258bEc4cF62948</code></td></tr>
+      </tbody></table></div>
+      <p>Launch configuration 0 is the only one the factory accepts today: one billion tokens of supply, a 1% curve fee, a phantom quote reserve of 1.68 ETH and a graduation threshold of 4.2 ETH.</p>
+      <h2 id="the-bonding-curve-calibrated-rather-than-assumed">The bonding curve, calibrated rather than assumed</h2>
+      <p>The curve is an invariant product against a phantom reserve. For a buy of <code>qIn</code>:</p>
+      <pre><code>qNet      = qIn - floor(qIn * feeBps / 10000) - floor(qIn * creatorTaxBps / 10000)
+      tokensOut = tokenReserve * qNet / (quoteReserve + qNet)</code></pre>
+      <p>Both fees come off the input before it reaches the curve, and the creator tax is one of them. That is not obvious from the outside, and getting it wrong mis-sizes an opening buy by the size of the tax.</p>
+      <p>The model is not trusted because it is plausible. It is checked, on every run of the launch tool, against a launch that already happened: ZZZ, 0.5 ETH in for 227,586,206.896551724137931034 tokens out. It reproduces that to the wei. A model that drifts from the chain by more than one percent stops the tool rather than sizing anything.</p>
+      <h2 id="the-opening-tax-exemption-and-what-it-took-to-get-right">The opening tax exemption, and what it took to get right</h2>
+      <p>The factory charges a steep tax on buys in the first seconds after a launch, and exempts a set of wallets from it. Who is in that set is the highest-value thing a scanner can tell somebody about a launch that is thirty seconds old.</p>
+      <p>The factory exempts <strong>four slots</strong>, each emitting one event:</p>
+      <ol><li>the wallet that sent the launch transaction</li><li>the <code>creatorFeeRecipient</code></li><li>the wallet that receives the opening buy</li><li>every entry of the <code>exemptions</code> array</li></ol>
+      <p>Duplicates are emitted rather than collapsed, so the number of events is the number of slots filled and the number of exempt wallets is the size of the union. A launch where all three named slots are the same wallet emits three events for one wallet.</p>
+      <p>This was established by simulating a launch against the live factory with a distinct address in each slot and reading which slot produced which event. No protocol contract is ever in the set: no curve, no router, no hook, no locker.</p>
+      <p><strong>It was wrong here for months.</strong> The decoder counted the <code>exemptions</code> array, which names none of the first three slots, so a launch that exempted only its deployer was recorded as exempting nobody. Every launch on this chain exempts at least one wallet; a count of zero was never possible. The correction is published at <code>/correction</code>, with what the earlier numbers actually counted.</p>
+      <p>Over 478,610 launches read back from the curve's own events:</p>
+      <div class="scroll"><table>
+      <thead><tr><th></th><th></th></tr></thead>
+      <tbody>
+      <tr><td>exactly the deployer</td><td>331,678 (69.3%)</td></tr>
+      <tr><td>beyond the deployer</td><td>146,932 (30.7%)</td></tr>
+      <tr><td>entry points with no ABI, undetermined</td><td>422 (0.09%)</td></tr>
+      </tbody></table></div>
+      <h2 id="the-index-and-when-it-is-allowed-to-say-no">The index, and when it is allowed to say no</h2>
+      <p>Every check that reports an absence depends on the index being current, and an index that falls behind does not look broken from outside: every command still answers, in the same words, about a chain it read an hour ago.</p>
+      <p>So a negative is withheld whenever the index cannot support it. Three separate conditions do this: a rebuild in progress, a cursor that has stopped moving, and a cursor that is moving but more than five minutes of chain behind the head. The third was added because the first two cannot see it, and during the window it was missing every scan was entitled to say "the deployer's only launch this week" about seven days it had read six of.</p>
+      <p>Counts published from the index carry the sample size and, where the index is behind, a line saying so above them.</p>
+      <h2 id="the-token">The token</h2>
+      <p>$VITALS is access, not yield. Holding it opens parts of the tool; it does not pay a share of anything.</p>
+      <div class="scroll"><table>
+      <thead><tr><th>holding</th><th>opens</th></tr></thead>
+      <tbody>
+      <tr><td>250,000</td><td>watch: alerts on a deployer or a wallet</td></tr>
+      <tr><td>1,000,000</td><td>the holder feed, and the premium commands</td></tr>
+      <tr><td>10,000,000</td><td>desk, and a group licence</td></tr>
+      </tbody></table></div>
+      <p>There is no holder fee share at launch. That is stated in the signed declaration rather than left unsaid, because a token that pays holders a share of fees and a token that opens a tool are different things, and the difference is worth knowing on the day rather than a month later.</p>
+      <h2 id="the-room-and-how-it-is-paid">The room, and how it is paid</h2>
+      <p>Fifty seats. A seat is given by the deployer, its tier is fixed when taken, and a seat given up is reused with both occupants kept in the history.</p>
+      <p>The room is owed a tenth of the fee wallet's <strong>cumulative gross income</strong>, not a tenth of its balance. Fees and payouts share one wallet, so the balance alone cannot separate new income from a remainder already accounted for:</p>
+      <pre><code>gross income = balance now + everything paid out + everything swept out
+      pool now     = 0.10 * gross income - everything paid out</code></pre>
+      <p>Paid daily in ETH for thirty days, by shares: five for a first-tier seat, two for a second, one for a third. Every amount is printed before it leaves and recorded with its transaction hash after. A run that dies part way through resumes without re-sending what already went out.</p>
+      <p>The public ledger post carries the hashes and no handles. A hash next to a name is that name's wallet, and anyone can open the transaction and read the recipient.</p>
+      <h2 id="declarations">Declarations</h2>
+      <p>A deployer can state what a launch will do before it happens and sign it with the wallet that will deploy. The bot stores the exact bytes that were signed together with the signature, so the claim stays checkable against the launch that follows.</p>
+      <p>It is a claim, and the badge says a claim exists and nothing more. Nothing in it was checked against a chain at the time it was made. A declaration never softens a check: where the launch differs from what was signed, the card says so and the original finding still stands.</p>
+      <p>The page a declaration's <code>docs:</code> line points at is pinned by its sha256 inside the signed text, so a page rewritten after signing is reported as changed rather than quietly standing in for what was agreed.</p>
+      <h2 id="what-it-does-not-do">What it does not do</h2>
+      <p>It does not tell anybody what to buy. It has no opinion on any token, and there is no path through the code that produces one.</p>
+      <p>It does not scan what it was not asked to. Automatic scanning in a group is off by default and is turned on by an admin of that group.</p>
+      <p>It does not hold a private key. Nothing in the running service can move funds: the two scripts that send anything run on a laptop and read their key from the shell they are run in.</p>
+      <p>It does not print a wallet in a group, ever.</p>
+      <h2 id="where-the-numbers-in-this-document-come-from">Where the numbers in this document come from</h2>
+      <p>Everything above is either a constant in the source, a figure printed by a command in the tool, or a measurement recorded with the method that produced it. The exemption slots come from <code>tools/exemption-slots.mjs</code>, which simulates against the live factory and signs nothing. The distribution comes from <code>/stats tax</code>. The curve calibration runs on every use of the launch tool and stops it if it fails.</p>
+      <footer>
+        <p><a href="https://checkvitals.xyz">checkvitals.xyz</a>
+        . <a href="https://t.me/vitalscheck_bot">@vitalscheck_bot</a>
+        . <a href="https://x.com/vitalsxyz">x.com/vitalsxyz</a>
+        . <a href="https://t.me/vitalsofficial">t.me/vitalsofficial</a></p>
+        <p>No score, no grade, no verdict. A check that found nothing is not a
+        check that found the launch to be fine.</p>
+      </footer>
+    </main>
+  </div>
+</body>
+</html>

@@ -148,3 +148,57 @@ test('nobody but an admin gets an answer', async () => {
     assert.deepEqual(await send(cmd, { from: 5000 }), [], `${cmd} answered a non-admin`);
   }
 });
+
+// ------------------------------- the preview against a typed balance, any time
+
+test('a typed preview prints the whole table and says it is hypothetical', async () => {
+  const out = await said('/ledger preview 12.5');
+  assert.match(out, /HYPOTHETICAL: the balance below was typed in, not read from the fee wallet/);
+  assert.match(out, /fee wallet balance {3}12\.5000 ETH/);
+  assert.match(out, /gross income\s+= 12\.5000 ETH/);
+  assert.match(out, /the room's 10%\s+1\.2500 ETH/);
+  assert.match(out, /total shares\s+42/);
+  // Every seat is in it, so it is the real roster and not a sketch: a row per
+  // seat with its tier, its shares, its amount and its wallet.
+  assert.match(out, /seat {2}handle {11}tier sh {2}amount ETH {2}wallet/);
+  for (const s of liveSeats()) {
+    assert.ok(out.includes(s.handle), `${s.handle} is missing from the preview`);
+    assert.ok(out.includes(s.wallet), `${s.handle}'s wallet is missing`);
+  }
+  assert.equal(liveSeats().length, 20);
+  // And the arithmetic: 1.2500 over 42 shares is 0.0297 a share, rounded down.
+  assert.match(out, /per share {12}0\.0297 ETH/);
+});
+
+test('running it twice leaves no warning about an unpaid run', async () => {
+  await said('/ledger preview 10');
+  const second = await said('/ledger preview 11');
+  // The warning that matters is about a real run that may have been paid. A
+  // hypothetical was never payable, and turning it into that warning would
+  // bury the real one on the day it appears.
+  assert.doesNotMatch(second, /was previewed and has \d+ payments? with no transaction hash/);
+  assert.doesNotMatch(second, /distributes it again/);
+});
+
+test('the preview says on its face that the balance was typed', async () => {
+  const out = await said('/ledger preview 10');
+  // The one thing standing between a hypothetical and a real run is this line,
+  // because the csv and the send command that follow do not repeat it.
+  assert.match(out, /HYPOTHETICAL/);
+  assert.match(out, /typed in, not read from the fee wallet/);
+});
+
+test('it refuses in a group, like every view with a wallet in it', async () => {
+  const out = await said('/ledger preview 10', { chat: GROUP });
+  assert.doesNotMatch(out, /fee wallet balance/);
+  assert.doesNotMatch(out, /0x[0-9a-fA-F]{40}/);
+});
+
+test('with no seats it says so rather than printing an empty table', async () => {
+  const seats = liveSeats();
+  for (const s of seats) await said(`/seat remove ${s.handle}`);
+  const out = await said('/ledger preview 10');
+  assert.match(out, /no seats yet/);
+  for (const s of seats) await said(`/seat add ${s.handle} ${s.tier} ${s.wallet}`);
+  assert.equal(liveSeats().length, seats.length);
+});

@@ -765,6 +765,10 @@ for (const [table, column, decl] of [
   // creator's wallets and everybody else. The fee recipient is in the launch
   // calldata and was never stored, so this cannot be filled by arithmetic over
   // existing rows: it needs the launch transaction read again.
+  // What a seat is for, in the admin's own words. Shown in /seat list and in
+  // nothing that can reach a group: a note is the kind of thing written about
+  // somebody rather than to them.
+  ['seats', 'note', 'TEXT'],
   ['launches', 'creator_fee_recipient', 'TEXT'],
   // Exempt wallets that are none of the three creator slots. NULL means the
   // row predates the column, which is not the same as zero.

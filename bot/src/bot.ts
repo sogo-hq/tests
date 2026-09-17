@@ -26,6 +26,7 @@ import { startDecodeRun, stopDecodeRun, decodeStatusText } from './decoderun.js'
 import { pinDocsHash, checkDocsPage, docsHashLine } from './declare.js';
 import { shouldOnboard, markOnboarded, onboardingText } from './onboard.js';
 import { addWatcher, removeWatcher, watchers, watchersText, MAX_WATCH_DELAY_SECONDS } from './launchwatch.js';
+import { setSeatNote, MAX_SEAT_NOTE } from './roster.js';
 import { commandList, COMMANDS, registeredNames } from './commands.js';
 import { clamp, clampMessage, TELEGRAM_MAX_MESSAGE, ADDRESS_PATTERN, containsAddress } from './text.js';
 import {
@@ -2544,6 +2545,31 @@ export function createBot(token = TELEGRAM_BOT_TOKEN): Bot {
         : r.reason);
       return;
     }
+    if (sub === 'note') {
+      // DM only, like every seat view that carries a wallet. A note is written
+      // about somebody rather than to them.
+      if (ctx.chat?.type !== 'private') {
+        await ctx.reply('/seat note is a DM. message me directly.');
+        return;
+      }
+      const seatNo = Number(parts[1]);
+      if (!Number.isInteger(seatNo) || seatNo <= 0) {
+        await ctx.reply('/seat note <seat> <what it is for>');
+        return;
+      }
+      const res = setSeatNote(seatNo, parts.slice(2).join(' '));
+      if (!res.ok) {
+        await ctx.reply(res.reason === 'no-seat'
+          ? `no live seat ${seatNo}. /seat list`
+          : `keep it under ${MAX_SEAT_NOTE} characters`);
+        return;
+      }
+      await ctx.reply(res.cleared
+        ? `seat ${res.seat}: note cleared`
+        : `seat ${res.seat}: ${res.note}\n\nshown in /seat list and nowhere a group can see.`);
+      return;
+    }
+
     if (sub === 'tier') {
       const [, handle, tier] = parts;
       if (!handle || !tier) { await ctx.reply('/seat tier <handle> <tier>'); return; }

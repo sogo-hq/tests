@@ -226,3 +226,30 @@ test('no alert text ever says the word clean, safe or fine', async () => {
     assert.ok(!text.includes(String.fromCharCode(0x2014)), kind);
   }
 });
+
+test('the launch time is printed in the zone it was set in, never bare UTC', async () => {
+  reset();
+  const { zonedStamp, LAUNCH_TZ } = await import('../dist/launch.js');
+  const { setSetting } = await import('../dist/ready.js');
+  // 16:00 in Bratislava in September is 14:00 UTC. Printing the UTC one is
+  // what gets read as a mistake at T-5.
+  const at = Date.parse('2026-09-24T14:00:00Z');
+  setSetting('launch_at', String(Math.floor(at / 1000)));
+  setSetting('launch_name', '$VITALS');
+
+  const text = W.statusText(W.statusReport(NOW));
+  assert.match(text, /launch armed\s+\$VITALS at 2026-09-24 16:00 CEST/);
+  assert.doesNotMatch(text, /14:00/, 'the UTC hour reached the screen');
+  assert.doesNotMatch(text, /T\d\d:\d\d/, 'an ISO stamp reached the screen');
+
+  // And the stamp is the same one /launch prints, not a second formatter.
+  assert.equal(zonedStamp(at), '2026-09-24 16:00 CEST');
+  assert.equal(LAUNCH_TZ, 'Europe/Bratislava');
+});
+
+test('the zone abbreviation follows the date, not a hardcoded offset', async () => {
+  const { zonedStamp } = await import('../dist/launch.js');
+  // Summer time and winter time, from the same formatter.
+  assert.match(zonedStamp(Date.parse('2026-09-24T14:00:00Z')), /16:00 CEST$/);
+  assert.match(zonedStamp(Date.parse('2026-01-14T15:00:00Z')), /16:00 CET$/);
+});
