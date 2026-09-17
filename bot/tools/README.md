@@ -15,6 +15,7 @@ Both need the repo built first: `npm run build`.
 | `fomo_intersect.mjs` | nothing on chain, but it spends USDC on paid robinx calls |
 | `dayrun.mjs` | telegram posts, and dust from a burner key when one is in the shell |
 | `exemption-slots.mjs` | nothing. simulation only, no key, no send |
+| `undecodable.mjs` | nothing. reads transactions and reports, no key, no send |
 
 ## launch.mjs
 
@@ -271,3 +272,19 @@ ever in the set: no curve, no router, no hook, no locker, no factory.
 
 VITALSRH1 emitted 4 events for 2 wallets. A config where the deployer is also
 the fee recipient and the buy recipient emits 3 events for 1 wallet.
+
+## undecodable.mjs
+
+```
+node tools/undecodable.mjs            the rows the decoder gave up on
+node tools/undecodable.mjs --all      every undecoded row, for a database mid-run
+```
+
+What is behind "entry points this build has no ABI for" in `/decode status`.
+Groups the launch transactions by the first four bytes of their input, says
+what each group was sent to, and asks the decoder in this build whether it
+decodes. Read-only.
+
+The findings are written up in
+[`docs/undecodable-entry-points.md`](../docs/undecodable-entry-points.md),
+including the one thing to be careful about before adding any of them.

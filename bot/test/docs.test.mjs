@@ -381,3 +381,49 @@ test('the split it cannot compute yet is marked, not estimated', () => {
   assert.match(t, /never stored/);
   assert.match(t, /node dist\/index\.js decode/);
 });
+
+// ------------------------------------------------ the undecodable entry points
+
+test('the entry-point report names each selector and whether it decodes', () => {
+  const t = read('undecodable-entry-points.md');
+  for (const sel of ['0xf85f8e41', '0xf35abbcf', '0xa72101af', '0xeafc4bc5', '0x87306c90', '0x1fad948c']) {
+    assert.ok(t.includes(sel), sel);
+  }
+  assert.match(t, /node tools\/undecodable\.mjs/);
+  assert.match(t, /Read-only report/);
+});
+
+test('it separates undecoded from undecodable rather than letting them read alike', () => {
+  const t = read('undecodable-entry-points.md');
+  assert.match(t, /"undecoded" and "undecodable" are different sets/);
+  assert.match(t, /The counts below are that\s+sample, not production/);
+});
+
+test('it says no Pons entry point is missing, which is the question asked', () => {
+  const t = read('undecodable-entry-points.md');
+  assert.match(t, /Is there a Pons ABI for them/);
+  assert.match(t, /No, and there could not be/);
+  assert.match(t, /none of them is a Pons entry point/);
+});
+
+test('the handleOps identification is stated with what confirmed it', () => {
+  const t = read('undecodable-entry-points.md');
+  assert.match(t, /ERC-4337 EntryPoint/);
+  assert.match(t, /confirmed by computing it/);
+});
+
+test('it warns about the bundler in the sender slot', () => {
+  // The thing that would reintroduce the bug just fixed, in a different field.
+  const t = read('undecodable-entry-points.md');
+  assert.match(t, /`tx\.from` is the\s+bundler/);
+  assert.match(t, /not from the\s+transaction/);
+  assert.match(t, /same class of mistake as counting the exemptions array/);
+});
+
+test('it recommends adding nothing before launch, and says why', () => {
+  const t = read('undecodable-entry-points.md');
+  assert.match(t, /## What to do now/);
+  assert.match(t, /Nothing\./);
+  assert.match(t, /0\.09%/);
+  assert.equal(((422 / 478_610) * 100).toFixed(2), '0.09');
+});
