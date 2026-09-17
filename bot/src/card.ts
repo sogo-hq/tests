@@ -524,7 +524,7 @@ export const NOT_A_PONS_LAUNCH =
 const PLAIN_FOOTER = 'not financial advice';
 
 /** The project's group. Telegram autolinks a bare @handle, so no parse_mode. */
-export const GROUP_HANDLE = 'vitalsofficial';
+export const GROUP_HANDLE = 'vitals_official';
 
 /**
  * The footer, built once for every surface that has one.

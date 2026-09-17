@@ -20,7 +20,7 @@ const GOOD = {
   description: 'scanner for pons launches on robinhood chain. facts and their reference points.',
   socials: {
     twitter: 'https://x.com/vitalsxyz',
-    telegram: 'https://t.me/vitalsofficial',
+    telegram: 'https://t.me/vitals_official',
     discord: '',
     website: 'https://checkvitals.xyz',
     farcaster: '',

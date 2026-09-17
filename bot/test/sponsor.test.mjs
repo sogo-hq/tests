@@ -158,7 +158,7 @@ test('the sponsor sits second from last, and the disclaimer is always last', asy
     process.env.SPONSOR_LINE = 'ad · $MOON is live on pons · scan it';
     resetSponsor();
     const lines = renderDefaultCard(makeScan({}), 'vitalscheck_bot').split('\n');
-    assert.equal(lines[lines.length - 1], '@vitalscheck_bot · @vitalsofficial · not financial advice',
+    assert.equal(lines[lines.length - 1], '@vitalscheck_bot · @vitals_official · not financial advice',
       'whatever was paid for, it does not get the last word');
     assert.equal(lines[lines.length - 2], 'ad · $MOON is live on pons · scan it');
     assert.match(lines[lines.length - 3], /no finding ≠ clean/,

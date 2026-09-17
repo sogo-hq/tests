@@ -152,7 +152,7 @@ test('the commands added this month are in it', () => {
 const renderHelp = async () => {
   const { freshDb } = await import('./tmpdb.mjs');
   process.env.DB_PATH = freshDb('help-render');
-  process.env.LAUNCH_NOTICE = '$VITALS, the first declared launch on pons: 24 Sep · t.me/vitalsofficial';
+  process.env.LAUNCH_NOTICE = '$VITALS, the first declared launch on pons: 24 Sep · t.me/vitals_official';
   const { createBot } = await import('../dist/bot.js');
   const bot = createBot('1:FAKE');
   bot.botInfo = {

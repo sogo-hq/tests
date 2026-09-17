@@ -210,7 +210,7 @@ const HELP = [
   DISCLAIMER,
   '',
   'checkvitals.xyz',
-  '@vitalsofficial: every change lands here first',
+  '@vitals_official: every change lands here first',
   '@siriusthemaster: dev, tell me what\'s broken',
 ].join('\n');
 

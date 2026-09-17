@@ -182,7 +182,7 @@ card says how many checks ran and how many could not be determined.</p>
   after signing and the card says the page changed.</p>
   <p><a href="https://checkvitals.xyz">checkvitals.xyz</a>
   . <a href="https://x.com/vitalsxyz">x.com/vitalsxyz</a>
-  . <a href="https://t.me/vitalsofficial">t.me/vitalsofficial</a></p>
+  . <a href="https://t.me/vitals_official">t.me/vitals_official</a></p>
 </footer>
 
 </main>

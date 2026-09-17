@@ -91,7 +91,7 @@ assert.ok(c[0].payload.text.split('\n').length <= 18, 'default card is <=18 line
 assert.equal(c[0].payload.parse_mode, undefined, 'the default card is sent as plain text');
 assert.ok(c[0].payload.reply_parameters?.message_id, 'sent as a reply to the triggering message');
 assert.equal(c[0].payload.link_preview_options?.is_disabled, true);
-assert.ok(c[0].payload.text.trim().endsWith('@vitalscheck_bot · @vitalsofficial · not financial advice'), 'footer names the bot and is last');
+assert.ok(c[0].payload.text.trim().endsWith('@vitalscheck_bot · @vitals_official · not financial advice'), 'footer names the bot and is last');
 ok('group /scan -> single default card, plain text, sent as a reply, attributed footer');
 
 // supergroup, and the @botname suffix form
@@ -329,7 +329,7 @@ assert.ok(help.includes('/position <wallet> <token address>'), '/help is generat
 const tail = help.trimEnd().split('\n').slice(-3);
 assert.deepEqual(tail, [
   'checkvitals.xyz',
-  '@vitalsofficial: every change lands here first',
+  '@vitals_official: every change lands here first',
   "@siriusthemaster: dev, tell me what's broken",
 ]);
 assert.equal(c[0].payload.link_preview_options?.is_disabled, true, 'the domain must not spawn a preview card');
@@ -883,7 +883,7 @@ await bot.handleUpdate(inline(SOL, 9500));
     resetSponsor();
     await bot.handleUpdate(msg('private', `/scan ${TOKEN}`, -9003));
     const card = drain().pop().payload.text;
-    assert.ok(card.trim().endsWith('@vitalscheck_bot · @vitalsofficial · not financial advice'),
+    assert.ok(card.trim().endsWith('@vitalscheck_bot · @vitals_official · not financial advice'),
       `footer missing the group:\n${card.split('\n').slice(-3).join('\n')}`);
     const cl = card.trim().split('\n');
     assert.equal(cl[cl.length - 2], 'ad · $MOON is live on pons, scan it',

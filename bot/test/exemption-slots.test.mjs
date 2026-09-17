@@ -130,7 +130,7 @@ test('the check, the tool and the declaration agree on the real config', async (
   const { checkConfig, EXPECTED_DEPLOYER } = await import('../dist/launchcheck.js');
   const cfg = {
     name: 'vitals', symbol: 'VITALS', logo: 'ipfs://x', description: 'x',
-    socials: { twitter: 'https://x.com/vitalsxyz', telegram: 'https://t.me/vitalsofficial', discord: '', website: 'https://checkvitals.xyz', farcaster: '' },
+    socials: { twitter: 'https://x.com/vitalsxyz', telegram: 'https://t.me/vitals_official', discord: '', website: 'https://checkvitals.xyz', farcaster: '' },
     creatorFeeRecipient: EXPECTED_DEPLOYER, creatorTaxBps: 400, buybackEnabled: false,
     expectedEconomics: '0x' + 'a'.repeat(64),
     salt: '0x' + '1'.repeat(64), launchConfigId: 0,

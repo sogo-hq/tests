@@ -12,7 +12,7 @@ import { freshDb } from './tmpdb.mjs';
 
 process.env.DB_PATH = process.env.DB_PATH || freshDb('gate');
 process.env.START_GATE = 'on';
-process.env.GATE_CHANNEL = '@vitalsofficial';
+process.env.GATE_CHANNEL = '@vitals_official';
 const { createBot } = await import('../dist/bot.js');
 const G = await import('../dist/membership.js');
 
@@ -26,7 +26,7 @@ let status = 'member';
 let memberCalls = 0;
 const calls = [];
 bot.api.config.use(async (_prev, method, payload) => {
-  if (method === 'getChatMember' && payload.chat_id === '@vitalsofficial') {
+  if (method === 'getChatMember' && payload.chat_id === '@vitals_official') {
     memberCalls++;
     if (status === 'throw') throw new Error('bot is not an admin of the channel');
     return { ok: true, result: { status, user: { id: payload.user_id, is_bot: false, first_name: 'U' } } };
@@ -70,8 +70,8 @@ test('a non-member in a DM is asked to join, with a button', async () => {
   G.resetMembership();
   const c = await send(dm('/start', 7001));
   assert.equal(c.length, 1);
-  assert.match(c[0].payload.text, /open to members of @vitalsofficial/);
-  assert.match(c[0].payload.reply_markup.inline_keyboard[0][0].url, /^https:\/\/t\.me\/vitalsofficial$/);
+  assert.match(c[0].payload.text, /open to members of @vitals_official/);
+  assert.match(c[0].payload.reply_markup.inline_keyboard[0][0].url, /^https:\/\/t\.me\/vitals_official$/);
   // And the help itself is not sent alongside it.
   assert.ok(!/pons v2 launch scanner/.test(c[0].payload.text));
 });

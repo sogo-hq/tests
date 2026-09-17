@@ -162,7 +162,7 @@ test('the deep link opens the declaration it names', async () => {
 // --------------------------------------------------- the launch notice
 
 test('the launch notice ends /start and /legend, once per user', async () => {
-  const LINE = '$VITALS, the first declared launch on pons: 24 Sep · t.me/vitalsofficial';
+  const LINE = '$VITALS, the first declared launch on pons: 24 Sep · t.me/vitals_official';
   process.env.LAUNCH_NOTICE = LINE;
   delete process.env.LAUNCH_NOTICE_UNTIL;
   const N = await import('../dist/launchnotice.js');

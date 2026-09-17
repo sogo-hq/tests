@@ -44,7 +44,7 @@ test('the description line says what it refuses to do', () => {
 
 test('the socials are the three that go into the launch calldata', () => {
   const t = read('vitals.md');
-  for (const s of ['https://checkvitals.xyz', 'https://x.com/vitalsxyz', 'https://t.me/vitalsofficial']) {
+  for (const s of ['https://checkvitals.xyz', 'https://x.com/vitalsxyz', 'https://t.me/vitals_official']) {
     assert.ok(t.includes(s), s);
   }
 });

@@ -18,7 +18,7 @@ const { renderDefaultCard, renderCard, renderCardText } = await import('../dist/
 const { cardSvg, SIZES } = await import('../dist/image.js');
 const { makeScan } = await import('../dist/../test/fixtures.mjs');
 
-const LINE = '$VITALS, the first declared launch on pons: 24 Sep · t.me/vitalsofficial';
+const LINE = '$VITALS, the first declared launch on pons: 24 Sep · t.me/vitals_official';
 const LIVE = '$VITALS is live: 0x147Bbaa458Ab7Cd11E1E478B87f08FE5A42A9E67';
 const AT = new Date(Date.UTC(2026, 8, 11, 14, 32));
 
@@ -46,7 +46,7 @@ test('unset means no line anywhere, and no complaint about it', () => {
   configure(null);
   assert.equal(N.launchNotice(), null);
   assert.ok(!renderDefaultCard(SCAN(), 'vitalscheck_bot').includes('$VITALS'));
-  assert.ok(!cardSvg(SCAN(), AT).includes('t.me/vitalsofficial'));
+  assert.ok(!cardSvg(SCAN(), AT).includes('t.me/vitals_official'));
 });
 
 test('the line is the last line of both text cards', () => {
@@ -92,7 +92,7 @@ test('it is never in the findings block, at either size', () => {
       fill: (/fill="([^"]*)"/.exec(m[1]) ?? [])[1],
       body: m[2],
     }));
-    const line = rows.find((r) => r.body.includes('t.me/vitalsofficial'));
+    const line = rows.find((r) => r.body.includes('t.me/vitals_official'));
     assert.ok(line, `${size}: the notice was not drawn`);
     assert.ok(line.y > footerRule,
       `${size}: the notice at y=${line.y} is above the footer rule at ${footerRule}`);
@@ -113,7 +113,7 @@ test('it never uses the reference-point colour', () => {
   for (const size of ['portrait', 'wide']) {
     const svg = cardSvg(SCAN(), AT, size);
     const line = [...svg.matchAll(/<text ([^>]*)>([^<]*)<\/text>/g)]
-      .find((m) => m[2].includes('t.me/vitalsofficial'));
+      .find((m) => m[2].includes('t.me/vitals_official'));
     assert.ok(line, `${size}: the notice was not drawn`);
     const fill = (/fill="([^"]*)"/.exec(line[1]) ?? [])[1];
     assert.notEqual(fill, REF, `${size}: the notice is in the reference-point green`);
@@ -134,7 +134,7 @@ test('the date ends it, with nothing deployed', () => {
   const stale = renderDefaultCard(SCAN(), 'vitalscheck_bot');
   assert.ok(!stale.includes(LINE), 'an expired notice is still on the card');
   assert.ok(!renderCardText(SCAN()).includes(LINE));
-  assert.ok(!cardSvg(SCAN(), AT).includes('t.me/vitalsofficial'));
+  assert.ok(!cardSvg(SCAN(), AT).includes('t.me/vitals_official'));
 });
 
 test('no expiry set means it stays until it is unset', () => {

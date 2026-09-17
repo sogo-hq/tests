@@ -29,7 +29,7 @@ test('concerns-raised card matches the specified shape exactly', () => {
     'all 2 sold within first 47s · 0 of 4.2 ETH to graduation',
     '',
     'no finding ≠ clean · /full for every metric',
-    '@vitalscheck_bot · @vitalsofficial · not financial advice',
+    '@vitalscheck_bot · @vitals_official · not financial advice',
   ]);
 });
 
@@ -51,7 +51,7 @@ test('nothing-raised card matches the specified shape exactly', () => {
     'buyers 12 at +10 min → 38 at +20 min',
     '',
     'no finding ≠ clean · /full for every metric',
-    '@vitalscheck_bot · @vitalsofficial · not financial advice',
+    '@vitalscheck_bot · @vitals_official · not financial advice',
   ]);
 });
 
@@ -171,10 +171,10 @@ test('every shape stays within the card ceiling', () => {
 test('the footer is always the last line and names the bot', () => {
   for (const over of [{ flags: [] }, { flags: [f('a', 'x', 9)] }, { buyers: 0, roundTrippers: 0 }]) {
     const lines = renderDefaultCard(makeScan(over), 'vitalscheck_bot').split('\n');
-    assert.equal(lines[lines.length - 1], '@vitalscheck_bot · @vitalsofficial · not financial advice');
+    assert.equal(lines[lines.length - 1], '@vitalscheck_bot · @vitals_official · not financial advice');
   }
   const nf = renderDefaultNotFound('0x147Bbaa458Ab7Cd11E1E478B87f08FE5A42A9E67', 'vitalscheck_bot').split('\n');
-  assert.equal(nf[nf.length - 1], '@vitalscheck_bot · @vitalsofficial · not financial advice');
+  assert.equal(nf[nf.length - 1], '@vitalscheck_bot · @vitals_official · not financial advice');
 });
 
 // ------------------------------------------------- buyer line and what follows
@@ -480,7 +480,7 @@ test('the card is bounded at 15 lines with every optional line rendering', () =>
   // than taking two. This card is forwarded into groups, so the ceiling is
   // deliberate rather than incidental.
   assert.equal(lines.length, 15, lines.join('\n'));
-  assert.equal(lines[lines.length - 1], '@vitalscheck_bot \u00b7 @vitalsofficial \u00b7 not financial advice');
+  assert.equal(lines[lines.length - 1], '@vitalscheck_bot \u00b7 @vitals_official \u00b7 not financial advice');
 });
 
 test('concentration is stated once, not twice with two roundings', () => {
@@ -542,7 +542,7 @@ test('card order: concerns, then the buyer count, then concentration, then the r
     'buyers 12 at +10 min \u2192 38 at +20 min',
     '',
     'no finding \u2260 clean \u00b7 /full for every metric',
-    '@vitalscheck_bot \u00b7 @vitalsofficial \u00b7 not financial advice',
+    '@vitalscheck_bot \u00b7 @vitals_official \u00b7 not financial advice',
   ]);
 });
 

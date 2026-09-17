@@ -26,7 +26,7 @@ export const ETH_PAIR = '0x0000000000000000000000000000000000000000';
 export const EXPECTED_SOCIALS = {
   website: 'checkvitals.xyz',
   twitter: 'x.com/vitalsxyz',
-  telegram: 't.me/vitalsofficial',
+  telegram: 't.me/vitals_official',
 } as const;
 
 /** An image over this is too heavy for a card and for most clients. */

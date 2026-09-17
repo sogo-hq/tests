@@ -32,7 +32,7 @@ reading, and they hold in every message, every card, every document here.
 | --- | --- |
 | site | https://checkvitals.xyz |
 | x | https://x.com/vitalsxyz |
-| telegram | https://t.me/vitalsofficial |
+| telegram | https://t.me/vitals_official |
 | bot | https://t.me/vitalscheck_bot |
 
 All three go into the launch calldata. The pons create path carries a socials
