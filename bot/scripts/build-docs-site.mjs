@@ -13,7 +13,7 @@
  * same reason. It handles what these documents use, and the build fails on a
  * page that comes out carrying markup it did not mean to emit.
  */
-import { readFileSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, rmSync, copyFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -41,13 +41,37 @@ const esc = (s) => s
   .split('>').join('&gt;');
 
 /**
+ * Where a link between documents goes on the site.
+ *
+ * The markdown links documents by filename, which is right in the repository
+ * and wrong on a site that publishes three of them under different paths.
+ * Anything not in here is not published, so the link is dropped to plain text
+ * rather than shipped pointing at a 404.
+ */
+export const SITE_LINKS = {
+  'api.md': '/api',
+  'partners-groups.md': '/groups',
+  'vitals.md': '/vitals',
+  '../examples/sample-response.json': '/examples/sample-response.json',
+};
+
+/** The files copied next to the pages, because a page links to them. */
+export const SITE_FILES = [
+  { from: 'examples/sample-response.json', to: 'examples/sample-response.json' },
+];
+
+/**
  * Inline: code, bold, links.
  *
  * Escaped first, so nothing in a document can inject markup. Code spans are
  * parked behind a sentinel before links and bold run, because a backtick span
  * is literal by definition and must not be reinterpreted.
+ *
+ * `dropped` collects links to documents this site does not publish. They come
+ * out as plain text: a dead link on a documentation site is worse than no
+ * link, because it reads as something a reader failed to find.
  */
-export function inline(text) {
+export function inline(text, dropped = []) {
   let s = esc(text);
   const codes = [];
   s = s.replace(/`([^`]+)`/g, (_, c) => {
@@ -55,9 +79,14 @@ export function inline(text) {
     return `@@CODE${codes.length - 1}@@`;
   });
   s = s.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (_, label, href) => {
-    // Relative, absolute-https or anchor. Anything else is not a link we wrote.
-    const safe = /^(https?:\/\/|\.|\/|#)/.test(href) ? href : '#';
-    return `<a href="${safe}">${label}</a>`;
+    if (/^https:\/\//.test(href) || href.startsWith('#') || href.startsWith('/')) {
+      return `<a href="${href}">${label}</a>`;
+    }
+    const mapped = SITE_LINKS[href] ?? SITE_LINKS[href.replace(/^\.\//, '')];
+    if (mapped) return `<a href="${mapped}">${label}</a>`;
+    // http, or a document the site does not publish.
+    dropped.push(href);
+    return label;
   });
   s = s.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
   s = s.replace(/@@CODE(\d+)@@/g, (_, i) => `<code>${codes[Number(i)]}</code>`);
@@ -71,6 +100,7 @@ export function render(md) {
   const lines = md.split('\n');
   const out = [];
   const headings = [];
+  const dropped = [];
   let i = 0;
 
   while (i < lines.length) {
@@ -93,7 +123,7 @@ export function render(md) {
       const text = h[2].trim();
       const id = text.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
       if (level === 2) headings.push({ id, text });
-      out.push(`<h${level} id="${id}">${inline(text)}</h${level}>`);
+      out.push(`<h${level} id="${id}">${inline(text, dropped)}</h${level}>`);
       i++;
       continue;
     }
@@ -105,9 +135,9 @@ export function render(md) {
       const body = [];
       while (i < lines.length && /^\s*\|/.test(lines[i])) body.push(cells(lines[i++]));
       out.push('<div class="scroll"><table>');
-      out.push(`<thead><tr>${head.map((c) => `<th>${inline(c)}</th>`).join('')}</tr></thead>`);
+      out.push(`<thead><tr>${head.map((c) => `<th>${inline(c, dropped)}</th>`).join('')}</tr></thead>`);
       out.push('<tbody>');
-      for (const r of body) out.push(`<tr>${r.map((c) => `<td>${inline(c)}</td>`).join('')}</tr>`);
+      for (const r of body) out.push(`<tr>${r.map((c) => `<td>${inline(c, dropped)}</td>`).join('')}</tr>`);
       out.push('</tbody></table></div>');
       continue;
     }
@@ -124,7 +154,7 @@ export function render(md) {
         break;
       }
       const tag = ordered ? 'ol' : 'ul';
-      out.push(`<${tag}>${items.map((t) => `<li>${inline(t)}</li>`).join('')}</${tag}>`);
+      out.push(`<${tag}>${items.map((t) => `<li>${inline(t, dropped)}</li>`).join('')}</${tag}>`);
       continue;
     }
 
@@ -138,11 +168,11 @@ export function render(md) {
       && !/^\s*---+\s*$/.test(lines[i])) {
       para.push(lines[i++]);
     }
-    if (para.length) out.push(`<p>${inline(para.join(' ').trim())}</p>`);
+    if (para.length) out.push(`<p>${inline(para.join(' ').trim(), dropped)}</p>`);
     else i++;
   }
 
-  return { html: out.join('\n'), headings };
+  return { html: out.join('\n'), headings, dropped };
 }
 
 // --------------------------------------------------------------------- shell
@@ -214,16 +244,25 @@ const CSS = `
   }
 `;
 
+/**
+ * Absolute, not relative.
+ *
+ * The pages are served from folders, so /api is a directory and a relative
+ * ./vitals from inside it resolves to /api/vitals, which does not exist. An
+ * absolute path is the same link wherever the page is served from.
+ */
+export const hrefFor = (slug) => (slug === 'index' ? '/' : `/${slug}`);
+
 function sidebar(slug, headings) {
   const links = PAGES.map((p) => {
-    const href = p.slug === 'index' ? './' : `./${p.slug}`;
+    const href = hrefFor(p.slug);
     const on = p.slug === slug ? ' class="on"' : '';
     const sub = p.slug === slug && headings.length
       ? `<div class="sub">${headings.map((h) => `<a href="#${h.id}">${esc(h.text)}</a>`).join('')}</div>`
       : '';
     return `<a href="${href}"${on}>${esc(p.title)}</a>${sub}`;
   }).join('\n      ');
-  return `<nav>\n      <a class="brand" href="./">VITALS docs</a>\n      ${links}\n    </nav>`;
+  return `<nav>\n      <a class="brand" href="/">VITALS docs</a>\n      ${links}\n    </nav>`;
 }
 
 function page({ slug, title, body, headings }) {
@@ -262,7 +301,7 @@ const INDEX_BODY = `      <h1>VITALS documentation</h1>
       verdict.</p>
       <div class="cards">
 ${PAGES.filter((p) => p.slug !== 'index').map((p) =>
-  `        <a class="card" href="./${p.slug}"><b>${esc(p.title)}</b><span>${esc(p.blurb)}</span></a>`).join('\n')}
+  `        <a class="card" href="${hrefFor(p.slug)}"><b>${esc(p.title)}</b><span>${esc(p.blurb)}</span></a>`).join('\n')}
       </div>
       <h2>What it never says</h2>
       <ul>
@@ -279,7 +318,14 @@ export function build() {
   rmSync(OUT, { recursive: true, force: true });
   mkdirSync(OUT, { recursive: true });
   const written = [];
+  const allDropped = [];
   const EM = String.fromCharCode(0x2014);
+
+  // The files a page links to, next to the pages.
+  for (const f of SITE_FILES) {
+    mkdirSync(join(OUT, dirname(f.to)), { recursive: true });
+    copyFileSync(join(ROOT, f.from), join(OUT, f.to));
+  }
 
   for (const p of PAGES) {
     let body;
@@ -289,12 +335,22 @@ export function build() {
       const r = render(md);
       body = r.html.split('\n').map((l) => `      ${l}`).join('\n');
       headings = r.headings;
+      for (const d of r.dropped) allDropped.push(`${p.source} -> ${d}`);
     } else {
       body = INDEX_BODY;
     }
     const html = page({ slug: p.slug, title: p.title, body, headings });
     if (html.includes(EM)) throw new Error(`${p.slug}: the page carries an em dash`);
     if (/<script|@import|\ssrc=/i.test(html)) throw new Error(`${p.slug}: the page fetches something`);
+    // One http:// resource on an https page is mixed content: Chrome marks the
+    // whole site not secure behind a valid certificate, and the padlock is the
+    // only thing most readers check.
+    const insecure = [...html.matchAll(/(?:href|src)="(http:\/\/[^"]*)"/gi)].map((m) => m[1]);
+    if (insecure.length) throw new Error(`${p.slug}: insecure url ${insecure[0]}`);
+    // A relative link is a link that breaks as soon as a page is served from a
+    // folder, which is how all of these are served.
+    const relative = [...html.matchAll(/href="(\.[^"]*)"/g)].map((m) => m[1]);
+    if (relative.length) throw new Error(`${p.slug}: relative link ${relative[0]}`);
     const file = join(OUT, p.slug === 'index' ? 'index.html' : `${p.slug}.html`);
     writeFileSync(file, html);
     written.push({
@@ -302,6 +358,12 @@ export function build() {
       bytes: Buffer.byteLength(html, 'utf8'),
       sha256: createHash('sha256').update(html).digest('hex'),
     });
+  }
+  // Said, not swallowed: a link that came out as plain text is a document
+  // somebody expected to be able to reach.
+  if (allDropped.length) {
+    console.log(`  ${allDropped.length} link${allDropped.length === 1 ? '' : 's'} to unpublished documents, rendered as plain text:`);
+    for (const d of [...new Set(allDropped)]) console.log(`    ${d}`);
   }
   return written;
 }

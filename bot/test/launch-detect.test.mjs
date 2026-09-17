@@ -407,3 +407,104 @@ test('an unrelated deploy days early does not hijack the whole launch', async ()
     'warn',
   );
 });
+
+// ------------------------------------------------- the CA into several rooms
+
+const W = await import('../dist/launchwatch.js');
+const BLOCK_ZERO = -2001;
+const THE_FLOOR = -2002;
+
+const armedWithRooms = () => {
+  armed();
+  db.prepare('DELETE FROM launch_watchers').run();
+  W.addWatcher(BLOCK_ZERO, 0, 7);
+  W.addWatcher(THE_FLOOR, 7, 7);
+};
+
+test('the room takes the CA at once and the floor takes it on its delay', async () => {
+  armedWithRooms();
+  insertLaunch(TOKEN, DEPLOYER, 60081281, Math.floor(LAUNCH / 1000));
+  const s = stubApi();
+  assert.equal(await D.launchDetected(s.api, [TOKEN], { now: LAUNCH }), TOKEN);
+
+  // At T+0 only the room that runs the launch has it.
+  let sends = s.drain().filter((c) => c.method === 'sendMessage');
+  assert.deepEqual(sends.map((c) => c.chat_id), [BLOCK_ZERO]);
+  assert.match(sends[0].text, /this is the only CA/);
+
+  // The floor is still waiting, and is not skipped.
+  const at0 = Math.floor(LAUNCH / 1000);
+  assert.deepEqual(W.pendingWatchers(TOKEN, at0, at0).map((w) => w.chatId), [THE_FLOOR]);
+
+  // Seven seconds later it is due, and the tick delivers it.
+  assert.equal(await D.deliverCa(s.api, TOKEN, '$VITALS', at0 + 7), 1);
+  sends = s.drain().filter((c) => c.method === 'sendMessage');
+  assert.deepEqual(sends.map((c) => c.chat_id), [THE_FLOOR]);
+  assert.match(sends[0].text, new RegExp(TOKEN));
+});
+
+test('both rooms get the CA pinned, each its own message', async () => {
+  armedWithRooms();
+  insertLaunch(TOKEN, DEPLOYER, 60081281, Math.floor(LAUNCH / 1000));
+  const s = stubApi();
+  await D.launchDetected(s.api, [TOKEN], { now: LAUNCH });
+  const at0 = Math.floor(LAUNCH / 1000);
+  await D.deliverCa(s.api, TOKEN, '$VITALS', at0 + 7);
+
+  const pins = s.calls.filter((c) => c.method === 'pin');
+  assert.deepEqual(pins.map((c) => c.chat_id).sort(), [THE_FLOOR, BLOCK_ZERO].sort());
+  assert.equal(new Set(pins.map((c) => c.message_id)).size, 2, 'one message each, not one shared');
+  assert.equal(W.watcherFor(BLOCK_ZERO).postedMsg !== W.watcherFor(THE_FLOOR).postedMsg, true);
+});
+
+test('a room that already has it is never sent it twice, however often the tick runs', async () => {
+  armedWithRooms();
+  insertLaunch(TOKEN, DEPLOYER, 60081281, Math.floor(LAUNCH / 1000));
+  const s = stubApi();
+  await D.launchDetected(s.api, [TOKEN], { now: LAUNCH });
+  const at0 = Math.floor(LAUNCH / 1000);
+  s.drain();
+  for (const t of [at0, at0 + 1, at0 + 3, at0 + 7, at0 + 7, at0 + 60]) {
+    await D.deliverCa(s.api, TOKEN, '$VITALS', t);
+  }
+  const sends = s.calls.filter((c) => c.method === 'sendMessage');
+  assert.equal(sends.length, 1, 'the floor got it once');
+  assert.deepEqual(sends.map((c) => c.chat_id), [THE_FLOOR]);
+});
+
+test('one room refusing does not stop the other, and it stays due', async () => {
+  armedWithRooms();
+  insertLaunch(TOKEN, DEPLOYER, 60081281, Math.floor(LAUNCH / 1000));
+  // The first room 429s, the second does not.
+  let id = 700;
+  const calls = [];
+  const api = {
+    async sendMessage(chat_id, text) {
+      if (chat_id === BLOCK_ZERO) throw new Error('Too Many Requests');
+      const message_id = ++id;
+      calls.push({ chat_id, message_id });
+      return { message_id, chat: { id: chat_id }, text };
+    },
+    async pinChatMessage() { return true; },
+    async unpinChatMessage() { return true; },
+    async getChatMemberCount() { return 1; },
+  };
+  const at0 = Math.floor(LAUNCH / 1000);
+  // Both are due at +7, so one lands and one throws. The call does not reject,
+  // because something did go out.
+  W.addWatcher(THE_FLOOR, 0, 7);
+  assert.equal(await D.deliverCa(api, TOKEN, '$VITALS', at0), 1);
+  assert.deepEqual(calls.map((c) => c.chat_id), [THE_FLOOR]);
+  // And the room that refused is still owed it.
+  assert.deepEqual(W.dueWatchers(TOKEN, at0, at0 + 30).map((w) => w.chatId), [BLOCK_ZERO]);
+});
+
+test('with nothing registered the ready group still gets it, as it always did', async () => {
+  armed();
+  db.prepare('DELETE FROM launch_watchers').run();
+  insertLaunch(TOKEN, DEPLOYER, 60081281, Math.floor(LAUNCH / 1000));
+  const s = stubApi();
+  assert.equal(await D.launchDetected(s.api, [TOKEN], { now: LAUNCH }), TOKEN);
+  const sends = s.drain().filter((c) => c.method === 'sendMessage');
+  assert.deepEqual(sends.map((c) => c.chat_id), [GROUP]);
+});

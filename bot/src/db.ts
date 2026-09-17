@@ -361,6 +361,24 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_ledger_payments_once ON ledger_payments(ru
 -- per chat; status is the bot's last known membership state there. Rows seeded
 -- from group activity before the handler existed carry status 'seen', which
 -- counts as present until an update says otherwise.
+-- Chats that asked to be told when the armed launch lands.
+--
+-- One row per chat, with its own delay in seconds. The CA goes into the room
+-- that runs the launch at T+3s and into a second room a few seconds later, so
+-- neither is reading the other's screenshot, and each is recorded as posted
+-- separately: a send that fails in one chat must not stop the others and must
+-- not be retried into a chat that already has it.
+CREATE TABLE IF NOT EXISTS launch_watchers (
+  chat_id       INTEGER PRIMARY KEY,
+  delay_seconds INTEGER NOT NULL DEFAULT 0,
+  added_by      INTEGER,
+  added_at      INTEGER NOT NULL,
+  -- The CA this chat was last told about, and the message it went out as.
+  posted_ca     TEXT,
+  posted_msg    INTEGER,
+  posted_at     INTEGER
+);
+
 CREATE TABLE IF NOT EXISTS bot_chats (
   chat_id    INTEGER PRIMARY KEY,
   type       TEXT NOT NULL,

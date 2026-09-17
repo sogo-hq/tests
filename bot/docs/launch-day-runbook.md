@@ -147,13 +147,34 @@ Times are from T+0, the moment the launch transaction is mined.
 
 ```
 /launch name $VITALS
-/launch watch 0x447c8dc55B88C09830E123f9fB3e7C484714ED93
 /tge
 ```
 
-`/launch watch` is what posts and pins the CA the moment the deployer's launch
-lands. It matches on the deployer and on the launch time, so a token that
-wallet shipped last week is not announced as this one.
+Then, **in each chat that should get the CA**, with that chat's own delay in
+seconds:
+
+```
+/launch watch 0x447c8dc55B88C09830E123f9fB3e7C484714ED93        in BLOCK ZERO
+/launch watch 0x447c8dc55B88C09830E123f9fB3e7C484714ED93 7      in THE FLOOR
+```
+
+BLOCK ZERO takes the CA the moment the launch lands, which is the room running
+it. THE FLOOR takes it seven seconds later, so it is not reading the other
+room's screenshot and nobody there is waiting.
+
+```
+/launch status
+```
+
+lists every watching chat, its delay, and whether it has the CA yet. Run it
+before T-5 and count the rooms: a chat that never ran `/launch watch` gets
+nothing, silently, and the first anyone notices is that the room is empty at
+T+3s. `/launch unwatch` in a chat takes it back out.
+
+`/launch watch` matches on the deployer and on the launch time, so a token that
+wallet shipped last week is not announced as this one. Each chat is recorded
+separately: one room refusing a send does not stop the others, and a room that
+already has the CA is never sent it twice.
 
 Check the bot before arming:
 
@@ -191,7 +212,10 @@ The opening tax window closes at three seconds. `/launch watch` posts and pins
 the CA within a few seconds of the launch landing, by itself.
 
 Two detectors run: the index callback every three seconds and a reconcile pass
-every twenty, and either one announces it. If nothing has posted by T+60s,
+every twenty, and either one announces it. A chat on a delay gets a timer as
+well, so its stagger is seconds rather than whenever the next pass lands, and
+the pass still covers it if the process restarts in between. If nothing has
+posted by T+60s,
 post the address as an ordinary message and pin it by hand. There is no
 command that sets the CA: it is read off the chain or it is not claimed at
 all, which is the point.

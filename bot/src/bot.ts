@@ -25,6 +25,7 @@ import { statusReport, statusText, resetWatchdog } from './watchdog.js';
 import { startDecodeRun, stopDecodeRun, decodeStatusText } from './decoderun.js';
 import { pinDocsHash, checkDocsPage, docsHashLine } from './declare.js';
 import { shouldOnboard, markOnboarded, onboardingText } from './onboard.js';
+import { addWatcher, removeWatcher, watchers, watchersText, MAX_WATCH_DELAY_SECONDS } from './launchwatch.js';
 import { commandList, COMMANDS, registeredNames } from './commands.js';
 import { clamp, clampMessage, TELEGRAM_MAX_MESSAGE, ADDRESS_PATTERN, containsAddress } from './text.js';
 import {
@@ -2221,9 +2222,36 @@ export function createBot(token = TELEGRAM_BOT_TOKEN): Bot {
 
     if (sub === 'watch') {
       const addr = normaliseWallet(parts[1] ?? '');
-      if (!addr) { await ctx.reply('/launch watch 0xDEPLOYER'); return; }
+      if (!addr) { await ctx.reply('/launch watch 0xDEPLOYER [delay seconds]'); return; }
+      const chatId = ctx.chat?.id;
+      if (chatId === undefined) { await ctx.reply('run this in the chat that should get the CA'); return; }
+      // The delay is this chat's own. One room takes the CA the moment the
+      // opening tax window closes; another takes it a few seconds later, so
+      // neither is reading the other's screenshot.
+      const delay = parts[2] === undefined ? 0 : Number(String(parts[2]).replace(/s$/i, ''));
+      const added = addWatcher(chatId, delay, ctx.from?.id ?? null);
+      if (!added.ok) {
+        await ctx.reply(`the delay is seconds, 0 to ${MAX_WATCH_DELAY_SECONDS}`);
+        return;
+      }
       setSetting('launch_deployer', addr);
-      await ctx.reply(`watching ${addr.slice(0, 10)}… for its next launch. the CA will be posted and pinned here.`);
+      const all = watchers();
+      await ctx.reply([
+        `watching ${addr.slice(0, 10)}… for its next launch.`,
+        added.watcher.delaySeconds === 0
+          ? 'this chat gets the CA as soon as it lands, posted and pinned.'
+          : `this chat gets the CA ${added.watcher.delaySeconds}s after it lands, posted and pinned.`,
+        `${all.length} chat${all.length === 1 ? '' : 's'} watching. /launch status lists them.`,
+      ].join('\n'));
+      return;
+    }
+
+    if (sub === 'unwatch') {
+      const chatId = ctx.chat?.id;
+      if (chatId === undefined) return;
+      await ctx.reply(removeWatcher(chatId)
+        ? 'this chat will not get the CA. the others are unchanged.'
+        : 'this chat was not watching.');
       return;
     }
 
@@ -2272,7 +2300,9 @@ export function createBot(token = TELEGRAM_BOT_TOKEN): Bot {
       if (!getSetting('launch_deployer')) {
         lines.push('no deployer watched yet: /launch watch 0xDEPLOYER so the CA can be posted automatically.');
       }
-      await ctx.reply(lines.join('\n'));
+      lines.push('');
+      lines.push(...watchersText());
+      await ctx.reply(clamp(lines.join('\n'), TELEGRAM_MAX_MESSAGE));
       return;
     }
 
@@ -2284,7 +2314,9 @@ export function createBot(token = TELEGRAM_BOT_TOKEN): Bot {
       '',
       '/launch set 2026-09-22 16:00',
       '/launch name $VITALS',
-      '/launch watch 0xDEPLOYER',
+      '/launch watch 0xDEPLOYER [delay seconds], in each chat that should get the CA',
+      '/launch unwatch, in a chat that should not',
+      '/launch status',
       '/launch cancel',
     ].filter(Boolean).join('\n'));
   });

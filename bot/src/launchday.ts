@@ -5,6 +5,9 @@ import {
   envNumber,
 } from './launch.js';
 import { getSetting, setSetting, refreshBalances, totals, normaliseWallet } from './ready.js';
+import {
+  dueWatchers, pendingWatchers, markWatcherPosted,
+} from './launchwatch.js';
 import { db } from './db.js';
 import { totalsBlock } from './tge.js';
 
@@ -464,21 +467,22 @@ export async function reconcileLaunch(api: Api, opts: TickOpts = {}): Promise<st
  * guard switched off, and no path that ever retried. A transient Telegram
  * error at the busiest second of the launch is exactly when that happens.
  */
-async function announceLaunch(
-  api: Api, chatId: number, token: string, name: string | null, opts: TickOpts,
-): Promise<string> {
-  const now = opts.now ?? Date.now();
-  const ca = normaliseWallet(token) ?? token.toLowerCase();
-
-  // Claimed synchronously, before the await.
-  //
-  // Two independent detectors race here: the 3 s index callback and the 20 s
-  // reconcile pass. Both read plan.ca, both saw null while the first send was
-  // still in flight, and the group got two "this is the only CA" posts for one
-  // launch, which is precisely the message that must be unambiguous.
-  // better-sqlite3 is synchronous, so this read-and-write cannot interleave.
-  if (getSetting('launch_ca_claim') === ca) return ca;
-  setSetting('launch_ca_claim', ca);
+/**
+ * Post and pin the CA in one chat.
+ *
+ * The claim is per chat and taken synchronously, before the await. Two
+ * detectors race here, the 3 s index callback and the 20 s reconcile pass, and
+ * both once saw a null CA while the first send was still in flight: the group
+ * got two "this is the only CA" posts for one launch, which is precisely the
+ * message that cannot be ambiguous. better-sqlite3 is synchronous, so this
+ * read-and-write cannot interleave.
+ */
+async function postCaTo(
+  api: Api, chatId: number, ca: string, name: string | null,
+): Promise<number | null> {
+  const key = `launch_ca_claim:${chatId}`;
+  if (getSetting(key) === ca) return null;
+  setSetting(key, ca);
 
   const label = name ?? 'the token';
   let sent;
@@ -489,27 +493,97 @@ async function announceLaunch(
       { link_preview_options: { is_disabled: true } },
     );
   } catch (err) {
-    // Release the claim so the next tick retries rather than the launch going
-    // unannounced because one send hit a 429.
-    setSetting('launch_ca_claim', '');
+    // Release this chat's claim so a later tick retries it. The other chats
+    // are untouched: one room's rate limit is not the others' problem.
+    setSetting(key, '');
     throw err;
   }
-  setSetting('launch_ca', ca);
-  setSetting('launch_detected_at', String(Math.floor(now / 1000)));
-  await repin(api, chatId, sent.message_id, 'launch_pinned');
+  markWatcherPosted(chatId, ca, sent.message_id);
+  await repin(api, chatId, sent.message_id, `launch_pinned:${chatId}`);
 
   // The countdown pin is a different slot, so it has to be taken down here.
-  const countdown = Number(getSetting('countdown_pinned') || 0);
+  const countdown = Number(getSetting(`countdown_pinned:${chatId}`) || getSetting('countdown_pinned') || 0);
   if (countdown) {
     try {
       await api.unpinChatMessage(chatId, countdown);
+      setSetting(`countdown_pinned:${chatId}`, '');
       setSetting('countdown_pinned', '');
     } catch (err) {
-      console.warn(`[launch] countdown unpin failed: ${String((err as Error)?.message ?? err).slice(0, 120)}`);
+      console.warn(`[launch] countdown unpin failed in ${chatId}: ${String((err as Error)?.message ?? err).slice(0, 120)}`);
     }
   }
   console.log(`[launch] ${ca} announced and pinned in ${chatId}`);
+  return sent.message_id;
+}
+
+/**
+ * Tell every watching chat, each after its own delay.
+ *
+ * Due chats go out now. The rest are handed to a timer so the stagger is
+ * seconds rather than whenever the next tick happens to land, and the tick
+ * still covers them: a timer does not survive a restart and the delay is the
+ * one part of launch day nobody can redo.
+ */
+async function announceLaunch(
+  api: Api, chatId: number, token: string, name: string | null, opts: TickOpts,
+): Promise<string> {
+  const now = opts.now ?? Date.now();
+  const ca = normaliseWallet(token) ?? token.toLowerCase();
+
+  // Nothing is committed before something goes out. A 429 at the busiest
+  // second of the launch used to leave the CA claimed, nothing posted, nothing
+  // pinned and the fake-CA guard switched off.
+  await deliverCa(api, ca, name, Math.floor(now / 1000), opts);
+
+  // The clock every delay is measured from is the first post that succeeded,
+  // not the moment of detection: if the first room's send was held up, the
+  // stagger follows it rather than firing into the gap.
+  const detectedAt = Number(getSetting('launch_detected_at') || Math.floor(now / 1000));
+
+  // Whatever is still on its delay gets a timer, and the tick keeps the
+  // promise if the process goes away before it fires.
+  for (const w of pendingWatchers(ca, detectedAt, Math.floor(now / 1000), launchChat())) {
+    const wait = Math.max(0, (detectedAt + w.delaySeconds) * 1000 - now);
+    const t = setTimeout(() => {
+      void deliverCa(api, ca, name, Math.floor(Date.now() / 1000), opts)
+        .catch((err) => console.warn('[launch] delayed post failed:', err));
+    }, wait);
+    t.unref?.();
+  }
   return ca;
+}
+
+/** Post to every chat whose delay has elapsed and which does not have it yet. */
+export async function deliverCa(
+  api: Api, ca: string, name: string | null, nowSec: number, opts: TickOpts = {},
+): Promise<number> {
+  const detectedAt = Number(getSetting('launch_detected_at') || nowSec);
+  const due = dueWatchers(ca, detectedAt, nowSec, launchChat());
+  let sent = 0;
+  let firstError: unknown = null;
+  for (const w of due) {
+    try {
+      if (await postCaTo(api, w.chatId, ca, name) === null) continue;
+      // Committed on the first post that actually landed, which is what makes
+      // the CA a fact and starts everybody else's delay.
+      if (!getSetting('launch_detected_at')) {
+        setSetting('launch_ca', ca);
+        setSetting('launch_detected_at', String(nowSec));
+      }
+      sent++;
+    } catch (err) {
+      // One room refusing is not the other rooms' problem, and it is not a
+      // reason to stop: that chat's claim is released and a later tick or
+      // timer retries it.
+      firstError ??= err;
+      console.warn(`[launch] could not post in ${w.chatId}: ${String((err as Error)?.message ?? err).slice(0, 120)}`);
+    }
+  }
+  // Nothing landed anywhere and something threw: the caller has to know, so
+  // the launch stays due rather than being filed as announced.
+  if (sent === 0 && firstError) throw firstError;
+  void opts;
+  return sent;
 }
 
 // -------------------------------------------------- the launch, scanned

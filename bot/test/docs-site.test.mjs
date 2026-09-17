@@ -49,11 +49,18 @@ test('a link inside a code span stays literal', () => {
 
 test('only links we could have written are rendered as links', () => {
   assert.match(inline('[x](https://checkvitals.xyz)'), /href="https:\/\/checkvitals\.xyz"/);
-  assert.match(inline('[x](./api)'), /href="\.\/api"/);
+  assert.match(inline('[x](/api)'), /href="\/api"/);
   assert.match(inline('[x](#top)'), /href="#top"/);
-  // Anything else loses its target rather than becoming one.
-  assert.match(inline('[x](javascript:alert(1))'), /href="#"/);
-  assert.match(inline('[x](data:text/html,y)'), /href="#"/);
+  // Anything else loses its anchor entirely rather than pointing somewhere.
+  // A href="#" is still a link, and a link that goes nowhere reads as a page
+  // the reader failed to reach.
+  for (const bad of ['javascript:alert(1)', 'data:text/html,y', 'http://example.com', 'nope.md']) {
+    const out = inline(`[x](${bad})`);
+    assert.doesNotMatch(out, /<a /, bad);
+    assert.ok(out.startsWith('x'), `${bad}: ${out}`);
+    // The target does not survive anywhere in the output, as text or markup.
+    assert.doesNotMatch(out, /javascript:|data:|http:/i, bad);
+  }
 });
 
 test('lists render, and a wrapped line stays in its item', () => {
@@ -90,9 +97,9 @@ test('nothing is fetched to render a page', () => {
     assert.doesNotMatch(html, /@import/i, p.slug);
     assert.doesNotMatch(html, /\ssrc=/i, p.slug);
     assert.doesNotMatch(html, /<link\b/i, p.slug);
-    // Only links a reader clicks, all absolute-https or relative.
+    // Only links a reader clicks, all absolute-https or site-absolute.
     for (const h of [...html.matchAll(/href="([^"]+)"/g)].map((m) => m[1])) {
-      assert.match(h, /^(https:\/\/|\.\/|#|\.\.\/)/, `${p.slug}: ${h}`);
+      assert.match(h, /^(https:\/\/|\/|#)/, `${p.slug}: ${h}`);
     }
   }
 });
@@ -147,9 +154,50 @@ test('no em dash and nothing a card may not say', () => {
 test('the index links every other page once', () => {
   const html = read('index');
   for (const p of PAGES.filter((x) => x.slug !== 'index')) {
-    assert.ok(html.includes(`class="card" href="./${p.slug}"`), p.slug);
+    assert.ok(html.includes(`class="card" href="/${p.slug}"`), p.slug);
   }
   assert.match(html, /No score, no grade, no traffic light, no verdict/);
+});
+
+test('every internal link is absolute, so a page served from a folder works', () => {
+  // /api is a directory. A relative ./vitals from inside it resolves to
+  // /api/vitals, which is not a page, and the whole sidebar breaks on exactly
+  // the pages a reader is most likely to be on.
+  for (const p of PAGES) {
+    const html = read(p.slug);
+    for (const h of [...html.matchAll(/href="([^"]+)"/g)].map((m) => m[1])) {
+      assert.doesNotMatch(h, /^\.\.?\//, `${p.slug} has a relative link: ${h}`);
+    }
+    assert.ok(html.includes('href="/"'), `${p.slug} cannot get back to the index`);
+    for (const other of PAGES.filter((x) => x.slug !== 'index')) {
+      assert.ok(html.includes(`href="/${other.slug}"`), `${p.slug} cannot reach ${other.slug}`);
+    }
+  }
+});
+
+test('no page loads anything over http, which would mark the site not secure', () => {
+  // One http:// resource on an https page is mixed content. Chrome drops the
+  // padlock for the whole site behind a perfectly valid certificate, and the
+  // padlock is the only thing most readers check.
+  for (const p of PAGES) {
+    const html = read(p.slug);
+    const insecure = [...html.matchAll(/(?:href|src|srcset|poster|action|data)="(http:\/\/[^"]*)"/gi)]
+      .map((m) => m[1]);
+    assert.deepEqual(insecure, [], `${p.slug} loads over http: ${insecure.join(', ')}`);
+    // And nothing that fetches a resource at all, at any scheme.
+    assert.doesNotMatch(html, /\ssrc=/i, p.slug);
+    assert.doesNotMatch(html, /<link\b/i, p.slug);
+    assert.doesNotMatch(html, /@import/i, p.slug);
+    assert.doesNotMatch(html, /url\(\s*['"]?http/i, p.slug);
+  }
+});
+
+test('the builder refuses a page that would carry an http resource', async () => {
+  // The guard is in the build, not only in this file: a document that gains an
+  // http link fails the build rather than reaching the site.
+  const src = readFileSync('scripts/build-docs-site.mjs', 'utf8');
+  assert.match(src, /insecure url/);
+  assert.match(src, /mixed content/);
 });
 
 test('the build is reproducible from the markdown', () => {
@@ -199,4 +247,33 @@ test('the api root redirects, and only the root does', async () => {
   // "GET //" is a legal request line that this URL parser rejects. It is a
   // path this service does not have, so it is a 404 and not a 500.
   assert.equal((await call('//')).statusCode, 404);
+});
+
+test('a link to a document the site does not publish becomes plain text', async () => {
+  const { render, SITE_LINKS } = await import('../scripts/build-docs-site.mjs');
+  const r = render('see [the runbook](launch-day-runbook.md) and [groups](partners-groups.md)');
+  // Published: a link. Not published: the words, and no anchor pointing at a
+  // page that would 404.
+  assert.match(r.html, /<a href="\/groups">groups<\/a>/);
+  assert.match(r.html, /see the runbook and/);
+  assert.doesNotMatch(r.html, /launch-day-runbook/);
+  assert.deepEqual(r.dropped, ['launch-day-runbook.md']);
+  assert.equal(SITE_LINKS['partners-groups.md'], '/groups');
+});
+
+test('a file a page links to is published next to the pages', async () => {
+  const { SITE_FILES } = await import('../scripts/build-docs-site.mjs');
+  for (const f of SITE_FILES) {
+    assert.ok(existsSync(`site/docs/${f.to}`), `${f.to} is linked but not published`);
+  }
+  // And the link in the api page points at where it was put.
+  assert.match(read('api'), /href="\/examples\/sample-response\.json"/);
+  assert.ok(JSON.parse(readFileSync('site/docs/examples/sample-response.json', 'utf8')));
+});
+
+test('an http link in a document is dropped rather than published', async () => {
+  const { render } = await import('../scripts/build-docs-site.mjs');
+  const r = render('see [x](http://example.com/thing)');
+  assert.doesNotMatch(r.html, /http:\/\//, 'an http link would mark the site not secure');
+  assert.deepEqual(r.dropped, ['http://example.com/thing']);
 });

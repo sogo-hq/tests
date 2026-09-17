@@ -1,0 +1,145 @@
+{
+  "token": "0xd384722f6adfe7d79e8e6623896df199afd31b76",
+  "chain": 4663,
+  "launchpad": "pons_v2",
+  "symbol": "CHIPPER",
+  "launch_block": 45790066,
+  "launch_tx": "0xf2185b971c3b2a996c62dbedeeed19f3fc562b9be50625f113a3ce2761461f43",
+  "age_seconds": 1560163,
+  "pair": {
+    "asset": "ETH",
+    "address": "0x0000000000000000000000000000000000000000"
+  },
+  "checks": [
+    {
+      "id": "snipe_tax_exemptions",
+      "state": "finding",
+      "headline": "9 wallets tax-free at launch, 1 of them the deployer, together 17.4% of supply",
+      "value": {
+        "wallets": 9,
+        "beyond_deployer": 8,
+        "supply_share": 0.173623,
+        "slots": 32
+      },
+      "reference": null,
+      "severity": 917,
+      "source": "the curve's own SnipeTaxExempted events, from the launch transaction receipt"
+    },
+    {
+      "id": "creator_tax",
+      "state": "undetermined",
+      "headline": "no baseline yet for the creator's cut",
+      "value": null,
+      "reference": null,
+      "severity": 140,
+      "source": "the launch calldata, against the median of the indexed launches"
+    },
+    {
+      "id": "deployer_prior_survival",
+      "state": "undetermined",
+      "headline": "no first-day history on this deployer's past tokens",
+      "value": null,
+      "reference": null,
+      "severity": 124,
+      "source": "this bot's own +24h rechecks of prior launches"
+    },
+    {
+      "id": "deployer_prior_peaks",
+      "state": "undetermined",
+      "headline": "no history yet on this deployer's past tokens",
+      "value": null,
+      "reference": null,
+      "severity": 122,
+      "source": "recorded peak market caps of this deployer's prior launches"
+    },
+    {
+      "id": "deployer_history",
+      "state": "undetermined",
+      "headline": "can't check the deployer's other launches yet",
+      "value": null,
+      "reference": null,
+      "severity": 120,
+      "source": "the index of launches by this deployer"
+    },
+    {
+      "id": "ticker_collision",
+      "state": "undetermined",
+      "headline": "can't check this ticker against other launches yet",
+      "value": null,
+      "reference": null,
+      "severity": 110,
+      "source": "indexed launch symbols and names, homoglyph-normalised"
+    },
+    {
+      "id": "creator_opening_buy",
+      "state": "none",
+      "headline": "creator opened with 1.0% of supply · no index median yet, n=1, needs 30",
+      "value": {
+        "supply_share": 0.010322
+      },
+      "reference": null,
+      "severity": 0,
+      "source": "CurveBuy events over the first 40 blocks, against the index median"
+    },
+    {
+      "id": "ticker_vs_pair",
+      "state": "none",
+      "headline": "ticker differs from what it trades against",
+      "value": {
+        "differs": true
+      },
+      "reference": {
+        "pair_symbol": "ETH"
+      },
+      "severity": 0,
+      "source": "the token symbol and the pair asset symbol, both read from the chain"
+    },
+    {
+      "id": "pair_asset",
+      "state": "none",
+      "headline": "priced in ETH",
+      "value": {
+        "asset": "ETH",
+        "address": "0x0000000000000000000000000000000000000000"
+      },
+      "reference": {
+        "native": true
+      },
+      "severity": 0,
+      "source": "pairToken from the TokenLaunched event"
+    },
+    {
+      "id": "holder_concentration",
+      "state": "none",
+      "headline": "top 5 hold 92.9% (no reference yet)",
+      "value": {
+        "top5_share": 0.929,
+        "largest_share": null,
+        "holders": 9
+      },
+      "reference": null,
+      "severity": 0,
+      "source": "the token's Transfer log, excluding the curve and the protocol"
+    },
+    {
+      "id": "buyback_vesting",
+      "state": "none",
+      "headline": "no buyback vest on this launch",
+      "value": {
+        "enabled": false
+      },
+      "reference": null,
+      "severity": 0,
+      "source": "buybackEnabled from the launch configuration"
+    }
+  ],
+  "summary": {
+    "checks_run": 11,
+    "findings": 1,
+    "undetermined": 5
+  },
+  "as_of": "2026-09-12T15:34:31.915Z",
+  "index": {
+    "launches": 18100
+  }
+}
