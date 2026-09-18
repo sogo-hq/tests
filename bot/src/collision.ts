@@ -1,5 +1,6 @@
 import { db, normaliseKey } from './db.js';
 import { indexCoverage, coverageReason, type IndexCoverage } from './coverage.js';
+import { clamp, MAX_TICKER } from './text.js';
 
 /**
  * The name and ticker collision query, in one place.
@@ -33,13 +34,21 @@ export function collisionKeys(name: string | null | undefined, symbol: string | 
 }
 
 /**
+ * The match itself, written once.
+ *
  * An empty key matches nothing rather than matching every row with an empty
- * one, which is why each side carries its own non-empty test.
+ * one, which is why each side carries its own non-empty test. Everything that
+ * asks about a collision, including the launch-day watch, pastes this exact
+ * fragment: a second copy of it is a second answer to the same question.
  */
-const WHERE = `token != ? AND ((symbol_key = ? AND ? != '') OR (name_key = ? AND ? != ''))`;
+const KEY_MATCH = `((symbol_key = ? AND ? != '') OR (name_key = ? AND ? != ''))`;
 
-const argsFor = (token: string, k: CollisionKeys) =>
-  [token, k.symbolKey, k.symbolKey, k.nameKey, k.nameKey] as const;
+const keyArgs = (k: CollisionKeys) =>
+  [k.symbolKey, k.symbolKey, k.nameKey, k.nameKey] as const;
+
+const WHERE = `token != ? AND ${KEY_MATCH}`;
+
+const argsFor = (token: string, k: CollisionKeys) => [token, ...keyArgs(k)] as const;
 
 export function countCollisions(token: string, k: CollisionKeys): number {
   return (db
@@ -151,5 +160,163 @@ export function collisionText(
     '',
     r.value,
     ...r.note.split('\n'),
+  ].join('\n');
+}
+
+// --------------------------------------------------------- the launch-day watch
+
+export interface CollisionHit {
+  token: string;
+  name: string | null;
+  symbol: string | null;
+  deployer: string;
+  blockNumber: number;
+  /** As stored, so the side that matched is read rather than recomputed. */
+  nameKey: string | null;
+  symbolKey: string | null;
+}
+
+/**
+ * Which of these launches match, using the same predicate as the count.
+ *
+ * The one question the count cannot answer: not "how many others share it"
+ * but "is this new row one of them". Same fragment, different scope, so a
+ * homoglyph the count would catch is a homoglyph the watch catches.
+ */
+export function collisionsAmong(tokens: readonly string[], k: CollisionKeys): CollisionHit[] {
+  if (!tokens.length) return [];
+  const lower = tokens.map((t) => t.toLowerCase());
+  const places = lower.map(() => '?').join(',');
+  const rows = db
+    .prepare(
+      `SELECT token, name, symbol, name_key, symbol_key, deployer, block_number FROM launches
+       WHERE token IN (${places}) AND ${KEY_MATCH}`,
+    )
+    .all(...lower, ...keyArgs(k)) as any[];
+  return rows.map((r) => ({
+    token: r.token, name: r.name, symbol: r.symbol,
+    nameKey: r.name_key ?? null, symbolKey: r.symbol_key ?? null,
+    deployer: r.deployer, blockNumber: r.block_number,
+  }));
+}
+
+export interface CollisionWatch {
+  id: number;
+  name: string;
+  symbol: string;
+  keys: CollisionKeys;
+  createdAt: number;
+  byUser: number | null;
+}
+
+const watchRow = (r: any): CollisionWatch => ({
+  id: r.id, name: r.name, symbol: r.symbol,
+  keys: { nameKey: r.name_key, symbolKey: r.symbol_key },
+  createdAt: r.created_at, byUser: r.by_user ?? null,
+});
+
+export type WatchResult =
+  | { ok: true; watch: CollisionWatch; already: boolean }
+  | { ok: false; reason: 'no-keys' };
+
+/**
+ * Watch for a name or ticker landing on chain, from now on.
+ *
+ * A pair that normalises to nothing on both sides is refused rather than
+ * stored: it would match no row and read as a watch that is running.
+ *
+ * Asking twice returns the watch that is already running rather than making a
+ * second one. Two watches on the same keys are two DMs about one launch, on
+ * the day when a duplicate alert is most expensive to read.
+ */
+export function startCollisionWatch(
+  name: string, symbol: string, opts: { at?: number; by?: number } = {},
+): WatchResult {
+  const keys = collisionKeys(name, symbol);
+  if (!keys.nameKey && !keys.symbolKey) return { ok: false, reason: 'no-keys' };
+  const at = opts.at ?? Math.floor(Date.now() / 1000);
+  const live = db
+    .prepare('SELECT * FROM collision_watches WHERE name_key = ? AND symbol_key = ? AND stopped_at IS NULL')
+    .get(keys.nameKey, keys.symbolKey);
+  if (live) return { ok: true, watch: watchRow(live), already: true };
+  const info = db
+    .prepare(`INSERT INTO collision_watches (name, symbol, name_key, symbol_key, created_at, by_user, stopped_at)
+              VALUES (?,?,?,?,?,?,NULL)`)
+    .run(name, symbol, keys.nameKey, keys.symbolKey, at, opts.by ?? null);
+  return {
+    ok: true,
+    watch: { id: Number(info.lastInsertRowid), name, symbol, keys, createdAt: at, byUser: opts.by ?? null },
+    already: false,
+  };
+}
+
+export function liveCollisionWatches(): CollisionWatch[] {
+  return (db
+    .prepare('SELECT * FROM collision_watches WHERE stopped_at IS NULL ORDER BY id')
+    .all() as any[]).map(watchRow);
+}
+
+export function stopCollisionWatch(id: number, at = Math.floor(Date.now() / 1000)): boolean {
+  const r = db
+    .prepare('UPDATE collision_watches SET stopped_at = ? WHERE id = ? AND stopped_at IS NULL')
+    .run(at, id);
+  return r.changes > 0;
+}
+
+export interface WatchNotice {
+  watch: CollisionWatch;
+  hit: CollisionHit;
+}
+
+/**
+ * The notices owed for a batch of new launches, claimed as they are returned.
+ *
+ * Claimed rather than merely computed: the indexer can hand the same token to
+ * this twice, on a restart or a re-read, and a second DM about a launch that
+ * was already reported is noise at the moment noise costs most. A row is
+ * inserted before the notice is handed over, so a crash between here and the
+ * send loses the notice rather than repeating it forever.
+ */
+export function claimWatchNotices(tokens: readonly string[], at = Math.floor(Date.now() / 1000)): WatchNotice[] {
+  const out: WatchNotice[] = [];
+  const claim = db.prepare(
+    'INSERT OR IGNORE INTO collision_watch_hits (watch_id, token, seen_at) VALUES (?,?,?)',
+  );
+  for (const watch of liveCollisionWatches()) {
+    for (const hit of collisionsAmong(tokens, watch.keys)) {
+      if (claim.run(watch.id, hit.token, at).changes === 0) continue;
+      out.push({ watch, hit });
+    }
+  }
+  return out;
+}
+
+/**
+ * The DM a watch sends.
+ *
+ * Plain text, no markup, and both strings clamped: a ticker is whatever the
+ * other deployer typed, and this message goes to the people who decide what to
+ * do about it. It states what landed and where, and stops there. Whether a
+ * lookalike is an impersonation or a coincidence is not a thing the chain
+ * says, so the message does not say it either.
+ */
+export function watchNoticeText(n: WatchNotice): string {
+  const { watch, hit } = n;
+  const sides: string[] = [];
+  if (hit.symbolKey && hit.symbolKey === watch.keys.symbolKey) sides.push('the ticker');
+  if (hit.nameKey && hit.nameKey === watch.keys.nameKey) sides.push('the name');
+  const spelled = `${clamp(hit.name ?? '(no name)', MAX_TICKER)} / ${clamp(hit.symbol ?? '(no symbol)', MAX_TICKER)}`;
+  return [
+    'a launch landed matching a name or ticker you are watching',
+    '',
+    `watching   ${clamp(watch.name, MAX_TICKER)} / ${clamp(watch.symbol, MAX_TICKER)}`,
+    `landed as  ${spelled}`,
+    `matched on ${sides.join(' and ') || 'the normalised key'}, after homoglyph normalisation`,
+    '',
+    `CA         ${hit.token}`,
+    `deployer   ${hit.deployer}`,
+    `block      ${hit.blockNumber.toLocaleString('en-US')}`,
+    '',
+    `/scan ${hit.token} for the card. /collision unwatch ${watch.id} stops this.`,
   ].join('\n');
 }

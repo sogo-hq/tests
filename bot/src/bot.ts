@@ -49,7 +49,7 @@ import {
   READY_MIN_ETH, REGISTER_COOLDOWN_MS,
 } from './ready.js';
 import {
-  totalsBlock, isAdmin, gateHit, countdownLine, dueAutoPost, markAutoPost, dailyDue,
+  totalsBlock, isAdmin, adminIds, gateHit, countdownLine, dueAutoPost, markAutoPost, dailyDue,
 } from './tge.js';
 import {
   parseLaunchTime, launchTimeLine, getLaunchPlan, clearLaunchPlan, resetCountdownMarks,
@@ -64,7 +64,10 @@ import {
 import { ALERTS_PER_HOUR } from './alerts.js';
 import { buildAlerts } from './alerts.js';
 import { exemptedHoldTime, holdTimeLine, MIN_HOLD_SAMPLES, type HoldTime } from './holdtime.js';
-import { collisionText } from './collision.js';
+import {
+  collisionText, startCollisionWatch, stopCollisionWatch, liveCollisionWatches,
+  claimWatchNotices, watchNoticeText,
+} from './collision.js';
 export { exemptedHoldTime, holdTimeLine, MIN_HOLD_SAMPLES, type HoldTime };
 import { concentrationCoverageLine } from './metrics/concentration.js';
 import { inlineDescription, footerLine, GROUP_HANDLE } from './card.js';
@@ -2483,13 +2486,68 @@ export function createBot(token = TELEGRAM_BOT_TOKEN): Bot {
       return;
     }
     const parts = (ctx.match ?? '').toString().trim().split(/\s+/).filter(Boolean);
-    if (parts.length < 2) {
-      await ctx.reply('/collision <name> <symbol>\nboth are compared after homoglyph normalisation, as the card compares them');
+    const sub = (parts[0] ?? '').toLowerCase();
+
+    // The symbol is the last word, so a name with spaces in it needs no quotes.
+    const pair = (from: string[]) => ({
+      name: from.slice(0, -1).join(' '),
+      symbol: from[from.length - 1]!,
+    });
+
+    if (sub === 'watch') {
+      const rest = parts.slice(1);
+      if (!rest.length) {
+        const live = liveCollisionWatches();
+        await ctx.reply(live.length
+          ? ['watching, until stopped:',
+             ...live.map((w) => `${String(w.id).padStart(3)}  ${w.name} / ${w.symbol}`
+               + `  compared as ${w.keys.nameKey || '(empty)'} / ${w.keys.symbolKey || '(empty)'}`),
+             '',
+             'every admin is DMed when a launch lands matching one. /collision unwatch <id> stops one.'].join('\n')
+          : 'nothing is being watched. /collision watch <name> <symbol>');
+        return;
+      }
+      if (rest.length < 2) {
+        await ctx.reply('/collision watch <name> <symbol>');
+        return;
+      }
+      const { name, symbol } = pair(rest);
+      const r = startCollisionWatch(name, symbol, { by: ctx.from?.id });
+      if (!r.ok) {
+        await ctx.reply('neither the name nor the symbol has anything left after normalisation, so nothing would ever match it');
+        return;
+      }
+      const w = r.watch;
+      await ctx.reply([
+        r.already
+          ? `already watching that, as ${w.id}. nothing was started twice.`
+          : `watching ${w.name} / ${w.symbol} as ${w.id}, from now until stopped.`,
+        `compared as ${w.keys.nameKey || '(empty)'} / ${w.keys.symbolKey || '(empty)'}`,
+        '',
+        'every admin gets a DM when a launch lands matching either key, with the CA,',
+        'the deployer and the block. it says what landed and nothing about what it means.',
+        `/collision unwatch ${w.id} stops it.`,
+      ].join('\n'));
       return;
     }
-    // The symbol is the last word, so a name with spaces in it needs no quotes.
-    const symbol = parts[parts.length - 1]!;
-    const name = parts.slice(0, -1).join(' ');
+
+    if (sub === 'unwatch') {
+      const id = Number(parts[1]);
+      if (!Number.isFinite(id)) {
+        await ctx.reply('/collision unwatch <id>. /collision watch lists them');
+        return;
+      }
+      await ctx.reply(stopCollisionWatch(id)
+        ? `stopped ${id}. nothing is sent for it from now on.`
+        : `${id} is not a watch that is running. /collision watch lists them`);
+      return;
+    }
+
+    if (parts.length < 2) {
+      await ctx.reply('/collision <name> <symbol>\n/collision watch <name> <symbol>   DMs every admin when one lands\nboth are compared after homoglyph normalisation, as the card compares them');
+      return;
+    }
+    const { name, symbol } = pair(parts);
     await ctx.reply(clamp(collisionText(name, symbol), TELEGRAM_MAX_MESSAGE));
   });
 
@@ -3191,6 +3249,39 @@ export async function deliverLaunch(tokens: string[]): Promise<void> {
   } catch (err) {
     console.warn('[launch] detection failed:', String((err as Error)?.message ?? err).slice(0, 160));
   }
+}
+
+/**
+ * The lookalike watch, on the same callback.
+ *
+ * Between the launch post and the alert pass: it is not the launch, so it does
+ * not go first, but it must not wait behind a loop that yields to interactive
+ * work. Somebody launching a homoglyph of our ticker during our launch is the
+ * one thing here that is worth less every minute it is late.
+ *
+ * Every admin, not the person who set the watch. A watch is set once and the
+ * launch is handled by whoever is at a keyboard.
+ */
+export async function deliverCollisionWatch(tokens: string[]): Promise<number> {
+  if (!liveBot || !tokens.length) return 0;
+  const notices = claimWatchNotices(tokens);
+  if (!notices.length) return 0;
+  const admins = adminIds();
+  let sent = 0;
+  for (const n of notices) {
+    const text = clamp(watchNoticeText(n), TELEGRAM_MAX_MESSAGE);
+    for (const id of admins) {
+      try {
+        await liveBot.api.sendMessage(id, text);
+        sent++;
+      } catch (err) {
+        // One admin with the bot blocked must not cost the others the notice.
+        console.warn(`[collision] could not DM ${id}:`, String((err as Error)?.message ?? err).slice(0, 120));
+      }
+    }
+    console.log(`[collision] watch ${n.watch.id} matched ${n.hit.token} at block ${n.hit.blockNumber}`);
+  }
+  return sent;
 }
 
 export async function deliverAlerts(tokens: string[]): Promise<number> {

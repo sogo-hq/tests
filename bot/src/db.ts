@@ -628,6 +628,36 @@ CREATE TABLE IF NOT EXISTS cursors (
   block_number INTEGER NOT NULL,
   updated_at   INTEGER NOT NULL
 );
+
+-- ---------------------------------------------------------------------------
+-- Standing watches for a name or ticker landing on chain.
+--
+-- A lookalike of our own launch is an impersonation the room guard cannot see:
+-- that one checks addresses posted in our chats, and this one is a token
+-- nobody has posted yet. The keys are stored normalised so the watch compares
+-- what the card compares, and the row keeps the strings as typed so the alert
+-- can say what was being watched for.
+--
+-- Deliveries are recorded per watch and token, because the notice must go out
+-- once whatever the indexer does with a block it has already seen.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS collision_watches (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  name       TEXT NOT NULL,
+  symbol     TEXT NOT NULL,
+  name_key   TEXT NOT NULL,
+  symbol_key TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  by_user    INTEGER,
+  stopped_at INTEGER
+);
+
+CREATE TABLE IF NOT EXISTS collision_watch_hits (
+  watch_id INTEGER NOT NULL,
+  token    TEXT NOT NULL,
+  seen_at  INTEGER NOT NULL,
+  PRIMARY KEY (watch_id, token)
+);
 `);
 
 const SCAN_EVENTS_DDL = `CREATE TABLE scan_events (

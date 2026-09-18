@@ -6,7 +6,7 @@ import { scanToken } from './scan.js';
 import { renderCardText, renderDefaultCard } from './card.js';
 import { runDueRechecks, startRecheckLoop } from './recheck.js';
 import { startWindowLoop, windowBacklog, indexWindows } from './indexer/windows.js';
-import { deliverAlerts, deliverLaunch } from './bot.js';
+import { deliverAlerts, deliverLaunch, deliverCollisionWatch } from './bot.js';
 import { initBot, startBot } from './bot.js';
 import { startWatchdog } from './watchdog.js';
 import { resumeDecodeRun } from './decoderun.js';
@@ -271,6 +271,9 @@ async function main(): Promise<void> {
       // The launch post first: it is the only message here with a published
       // three second budget, and the alert pass yields to interactive work.
       await deliverLaunch(tokens);
+      // Before the alerts: a lookalike of our own ticker landing during our
+      // own launch is the one notice here that is worth less every minute.
+      await deliverCollisionWatch(tokens);
       await deliverAlerts(tokens);
     });
       startRecheckLoop();
