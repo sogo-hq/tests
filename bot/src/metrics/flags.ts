@@ -1,4 +1,5 @@
 import { db, normaliseKey } from '../db.js';
+import { collisionKeys, countCollisions, collisionSymbols, MIN_COLLISION_MATCHES } from '../collision.js';
 import { isNativePair } from '../reads.js';
 import { clamp, MAX_TICKER, MAX_SAMPLE } from '../text.js';
 import { indexCoverage, coverageReason } from '../coverage.js';
@@ -216,7 +217,6 @@ const EXEMPT_SLOTS = 32;
  * count never includes the token being scanned -- it is excluded in SQL -- so
  * this threshold is about other launches only.
  */
-const MIN_COLLISION_MATCHES = 2;
 
 /**
  * How far past a declared dev buy counts as a different dev buy.
@@ -716,14 +716,8 @@ export function computeFlags(opts: {
   // Collisions here are homoglyphs, not exact duplicates, so both sides are
   // compared on a normalised key. The token being scanned is excluded in SQL,
   // so this counts OTHER launches only: a unique ticker counts zero.
-  const symKey = normaliseKey(opts.symbol);
-  const nameKey = normaliseKey(opts.name);
-  const where =
-    `token != ? AND ((symbol_key = ? AND ? != '') OR (name_key = ? AND ? != ''))`;
-  const args = [token, symKey, symKey, nameKey, nameKey];
-  const collisionCount = (db
-    .prepare(`SELECT COUNT(*) AS n FROM launches WHERE ${where}`)
-    .get(...args) as { n: number }).n;
+  const keys = collisionKeys(opts.name, opts.symbol);
+  const collisionCount = countCollisions(token, keys);
 
   if (collisionCount === 0 && !cov.trustNegatives.collision) {
     // "no match against indexed pons tokens" with an empty index is a confident
@@ -744,10 +738,7 @@ export function computeFlags(opts: {
   } else if (collisionCount >= MIN_COLLISION_MATCHES) {
     // Colliding tokens frequently share the same rendered symbol, so show
     // distinct spellings rather than the same glyph three times.
-    const samples = db
-      .prepare(`SELECT DISTINCT symbol FROM launches WHERE ${where} AND symbol IS NOT NULL LIMIT 25`)
-      .all(...args) as { symbol: string }[];
-    const ex = [...new Set(samples.map((c) => c.symbol).filter(Boolean))]
+    const ex = collisionSymbols(token, keys)
       .slice(0, 3)
       .map((sym) => clamp(sym, MAX_SAMPLE))
       .join(', ');
@@ -806,7 +797,7 @@ export function computeFlags(opts: {
   // a Cyrillic or mathematical-alphanumeric spelling of the pair's ticker is
   // caught too.
   const pairKey = normaliseKey(opts.pairSymbol);
-  const impersonatesPair = symKey !== '' && pairKey !== '' && symKey === pairKey;
+  const impersonatesPair = keys.symbolKey !== '' && pairKey !== '' && keys.symbolKey === pairKey;
   flags.push({
     key: 'pair_ticker',
     label: 'Ticker vs pair asset',

@@ -92,6 +92,24 @@ export async function runCheck({ configPath, as }) {
 
   const rows = checkConfig(raw, curve);
 
+  // --------------------------------------------------------- the ticker
+  // The same query the card runs, asked now rather than at T+15. Read-only,
+  // and it reads the index rather than the chain: if the index is not there,
+  // that is what it says. A collision is never a reason to refuse the config,
+  // so this row cannot fail it.
+  try {
+    const { collisionCheckRow } = await import(join(ROOT, 'dist/collision.js'));
+    const { indexCoverage, coverageReason } = await import(join(ROOT, 'dist/coverage.js'));
+    const cov = indexCoverage();
+    const { field, value, verdict, note } = collisionCheckRow(raw.name ?? '', raw.symbol ?? '', cov, coverageReason(cov));
+    rows.push({ field, value, verdict, note });
+  } catch (err) {
+    rows.push({
+      field: 'ticker collision', value: 'undetermined', verdict: 'unknown',
+      note: `the index could not be read: ${String(err.message).split('\n')[0]}`,
+    });
+  }
+
   // ------------------------------------------------------------- the image
   const candidates = gatewayUrls(raw.logo);
   if (!candidates.length) {
@@ -129,7 +147,9 @@ export async function runCheck({ configPath, as }) {
     const value = r.value.length > 46 ? `${r.value.slice(0, 43)}...` : r.value;
     const line = `  ${MARK[r.verdict]()}  ${r.field.padEnd(width)}  ${value}`;
     console.log(r.verdict === 'fail' ? line : line);
-    if (r.note) console.log(dim(`        ${' '.repeat(width)}  ${r.note}`));
+    // A note may run to more than one line. Continuations line up under the
+    // first so the column the eye is following does not move.
+    if (r.note) for (const l of r.note.split('\n')) console.log(dim(`        ${' '.repeat(width)}  ${l}`));
   }
 
   // --------------------------------------------------- the address the salt makes
