@@ -64,6 +64,7 @@ import {
 import { ALERTS_PER_HOUR } from './alerts.js';
 import { buildAlerts } from './alerts.js';
 import { exemptedHoldTime, holdTimeLine, MIN_HOLD_SAMPLES, type HoldTime } from './holdtime.js';
+import { collisionText } from './collision.js';
 export { exemptedHoldTime, holdTimeLine, MIN_HOLD_SAMPLES, type HoldTime };
 import { concentrationCoverageLine } from './metrics/concentration.js';
 import { inlineDescription, footerLine, GROUP_HANDLE } from './card.js';
@@ -191,8 +192,10 @@ const EXAMPLE = '0x147Bbaa458Ab7Cd11E1E478B87f08FE5A42A9E67';
 const HELP = [
   'VITALS: pons v2 launch scanner, Robinhood Chain',
   '',
-  'Send /scan <token address> for a card of what the chain shows. In a DM you',
-  'can paste an address on its own, and @BOTNAME <address> works inline in any',
+  // What the table does not already say. /scan is in the list below with its
+  // own line, so describing it again here was the same sentence twice, and
+  // the message has one screen to spend.
+  'In a DM an address on its own works. @BOTNAME <address> works inline in any',
   'chat. Add it to a group: t.me/BOTNAME?startgroup=true',
   '',
   // Generated from the table every handler is registered against, so a
@@ -211,7 +214,7 @@ const HELP = [
   '',
   'checkvitals.xyz',
   '@vitals_official: every change lands here first',
-  '@siriusthemaster: dev, tell me what\'s broken',
+  '@siriusthemaster: dev',
 ].join('\n');
 
 /**
@@ -2456,6 +2459,31 @@ export function createBot(token = TELEGRAM_BOT_TOKEN): Bot {
    * construction: it selects the rows that still need reading, so stopping and
    * starting again continues from the rows rather than from a cursor.
    */
+  /**
+   * /collision <name> <symbol>
+   *
+   * The count the card would print, asked from wherever the admin is rather
+   * than from the machine that holds the index. Read-only: it runs the query
+   * and nothing else, and it answers in a DM because it reports on the index
+   * rather than on a token anybody asked about.
+   */
+  bot.command('collision', async (ctx) => {
+    if (!isAdmin(ctx.from?.id)) return;
+    if (ctx.chat?.type !== 'private') {
+      await ctx.reply('that reads the whole index, so it answers in a DM only');
+      return;
+    }
+    const parts = (ctx.match ?? '').toString().trim().split(/\s+/).filter(Boolean);
+    if (parts.length < 2) {
+      await ctx.reply('/collision <name> <symbol>\nboth are compared after homoglyph normalisation, as the card compares them');
+      return;
+    }
+    // The symbol is the last word, so a name with spaces in it needs no quotes.
+    const symbol = parts[parts.length - 1]!;
+    const name = parts.slice(0, -1).join(' ');
+    await ctx.reply(clamp(collisionText(name, symbol), TELEGRAM_MAX_MESSAGE));
+  });
+
   bot.command('decode', async (ctx) => {
     if (!isAdmin(ctx.from?.id) || ctx.chat?.type !== 'private') return;
     const sub = (ctx.match ?? '').toString().trim().toLowerCase();

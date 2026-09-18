@@ -122,3 +122,43 @@ test('the threshold the row prints is the one the card raises at', async () => {
   for (let i = 0; i < MIN_COLLISION_MATCHES - 1; i++) launch('Vitals', 'VITALS');
   assert.equal(row().verdict, 'pass');
 });
+
+// --------------------------------------------------------------- /collision
+
+test('collisionText prints the three states, the keys and the denominator', () => {
+  reset();
+  launch('Chipper', 'CHIPPER');
+  const none = C.collisionText('VITALS', 'VITALS', COVERED, 'x');
+  // The comparison is printed, because the whole point of normalising is that
+  // it changes what is being compared.
+  assert.match(none, /compared as {2}vitals \/ vitals/);
+  assert.match(none, /0 other indexed tokens/);
+  assert.match(none, /out of 478,610 indexed, 478,188 of them decoded/);
+
+  reset();
+  launch('Vitals', 'VІTALS');
+  launch('vitals', 'VITALS');
+  const some = C.collisionText('VITALS', 'VITALS', COVERED, 'x');
+  assert.match(some, /2 other indexed tokens/);
+  assert.match(some, /the card calls this a finding at 2 or more/);
+
+  reset();
+  const thin = C.collisionText('VITALS', 'VITALS', THIN, 'index stalled 2h ago, counts may be behind');
+  assert.match(thin, /undetermined/);
+  assert.match(thin, /index stalled 2h ago/);
+  // Never the word that would make an undetermined read as a negative.
+  assert.doesNotMatch(thin, /\bclean\b|\bsafe\b|looks good/i);
+});
+
+test('a name with spaces keeps its spaces and the last word is the symbol', () => {
+  reset();
+  launch('Vital Signs', 'VITALS');
+  // What the handler does with "/collision Vital Signs VITALS".
+  const parts = 'Vital Signs VITALS'.split(/\s+/);
+  const symbol = parts[parts.length - 1];
+  const name = parts.slice(0, -1).join(' ');
+  assert.equal(name, 'Vital Signs');
+  assert.equal(symbol, 'VITALS');
+  assert.equal(C.collisionKeys(name, symbol).nameKey, 'vitalsigns');
+  assert.equal(C.collisionCheckRow(name, symbol, COVERED, 'x').matches, 1);
+});

@@ -1,4 +1,5 @@
 import { db, normaliseKey } from './db.js';
+import { indexCoverage, coverageReason, type IndexCoverage } from './coverage.js';
 
 /**
  * The name and ticker collision query, in one place.
@@ -125,4 +126,30 @@ export function collisionCheckRow(
       ? `no other decoded pons token shares this name or ticker, ${outOf}`
       : `below the ${MIN_COLLISION_MATCHES} that make it a finding on the card, ${outOf}`,
   };
+}
+
+/**
+ * The same three states, for somebody asking from a phone.
+ *
+ * Reads the index this process has and nothing else: no chain, no config, no
+ * write. The keys are printed beside the strings because the whole point of
+ * the normalisation is that it changes what is being compared, and a count
+ * whose comparison is invisible is a count nobody can check.
+ */
+export function collisionText(
+  name: string, symbol: string,
+  cov: IndexCoverage | { indexed: number; decoded: number; trustNegatives: { collision: boolean } } = indexCoverage(),
+  reason = coverageReason(cov as IndexCoverage),
+): string {
+  const keys = collisionKeys(name, symbol);
+  const r = collisionCheckRow(name, symbol, cov, reason);
+  return [
+    'collision check, against the index this bot holds',
+    `name    ${name || '(empty)'}`,
+    `symbol  ${symbol || '(empty)'}`,
+    `compared as  ${keys.nameKey || '(empty)'} / ${keys.symbolKey || '(empty)'}`,
+    '',
+    r.value,
+    ...r.note.split('\n'),
+  ].join('\n');
 }
