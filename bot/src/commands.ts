@@ -50,6 +50,11 @@ export const COMMANDS: CommandSpec[] = [
     what: 'what the markers on a card mean, and what a missing one does not mean' },
   { name: 'stats', usage: '', group: 'Scanning', scope: 'all', where: 'any',
     what: 'what has been indexed, as counters' },
+  // Not in the admin group, although it used to be. /help hides that group
+  // from everyone else, and a command every user can run cannot live in the
+  // one section they never see.
+  { name: 'start', aliases: ['help'], usage: '', group: 'Scanning', scope: 'all', where: 'any',
+    what: 'this list' },
 
   // --------------------------------------------------------------- alerts
   { name: 'watch', usage: '<deployer|wallet|filter> <address or name>', group: 'Alerts, delivered in DM and never into a group', scope: 'all', where: 'dm',
@@ -124,8 +129,6 @@ export const COMMANDS: CommandSpec[] = [
     what: 'whether a channel membership is required' },
   { name: 'kols', usage: '', group: 'Admin', scope: 'admin', where: 'any',
     what: 'the callers table' },
-  { name: 'start', aliases: ['help'], usage: '', group: 'Admin', scope: 'all', where: 'any',
-    what: 'this list' },
 ];
 
 /** Every name the bot answers to, aliases included. */
@@ -156,11 +159,20 @@ export function groupsInOrder(): string[] {
  * bot posts in rooms other people run, and what it can be told to do is not
  * a secret from the people in them.
  */
-export function commandList(): string {
+export function commandList(opts: { admin?: boolean } = {}): string {
+  // The full list by default, so every caller that is checking the table
+  // against the registrations still sees all of it. Only the rendered message
+  // asks for less.
+  const admin = opts.admin ?? true;
+  const visible = COMMANDS.filter((c) => admin || c.scope !== 'admin');
   const out: string[] = [];
   for (const group of groupsInOrder()) {
+    const inGroup = visible.filter((x) => x.group === group);
+    // A heading with nothing under it says there is a section being kept from
+    // you, which is worse than the section simply not being there.
+    if (!inGroup.length) continue;
     out.push(group + ':');
-    for (const c of COMMANDS.filter((x) => x.group === group)) out.push(`  ${commandLine(c)}`);
+    for (const c of inGroup) out.push(`  ${commandLine(c)}`);
     out.push('');
   }
   return out.join('\n').trimEnd();

@@ -189,7 +189,15 @@ const EXAMPLE = '0x147Bbaa458Ab7Cd11E1E478B87f08FE5A42A9E67';
  * copy-paste of /help is what was on screen rather than a mess of entities.
  * The previous version was the last HTML message left in the bot.
  */
-const HELP = [
+/**
+ * /help, for whoever asked.
+ *
+ * The admin section is not in a message to somebody who cannot run any of it.
+ * It is most of the message, it pushes the part they can use off the screen,
+ * and it tells a stranger what the operator's tooling is called. Admins get
+ * the whole table.
+ */
+const HELP = (admin: boolean) => [
   'VITALS: pons v2 launch scanner, Robinhood Chain',
   '',
   // What the table does not already say. /scan is in the list below with its
@@ -201,7 +209,7 @@ const HELP = [
   // Generated from the table every handler is registered against, so a
   // command cannot exist without a line here and a line cannot outlive its
   // command. Both directions are checked by a test.
-  commandList(),
+  commandList({ admin }),
   '',
   'holding $VITALS unlocks access, not yield. tiers: 250k, 1M, 10M.',
   'one paid line at the bottom funds this. it never touches what a card says.',
@@ -216,6 +224,7 @@ const HELP = [
   '@vitals_official: every change lands here first',
   '@siriusthemaster: dev',
 ].join('\n');
+
 
 /**
  * The bot's own username, taken from the context rather than module state.
@@ -1342,7 +1351,7 @@ export function createBot(token = TELEGRAM_BOT_TOKEN): Bot {
 
     // Days remaining, when there are any. Nothing is said to somebody who has
     // no grant: a line reading "0 days" is an advert, not a status.
-    let text = HELP.replace(/BOTNAME/g, usernameOf(ctx) ?? 'bot');
+    let text = HELP(isAdmin(ctx.from?.id)).replace(/BOTNAME/g, usernameOf(ctx) ?? 'bot');
     const userId = ctx.from?.id;
     if (userId !== undefined && ctx.chat?.type === 'private') {
       const r = await tierOf(userId);

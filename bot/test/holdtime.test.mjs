@@ -20,12 +20,15 @@ function inTempDb(seedAndAssert) {
       const { exemptedHoldTime, holdTimeLine } = await import('${CWD}/dist/bot.js');
       const A = (n) => '0x' + String(n).padStart(40, '0');
       let tx = 0;
-      const launch = (token, exempt) => db.prepare(
+      // exemption_source defaults to 'logs': the figure is only computed over
+      // sets the curve's own events settled, so a fixture that means "counts"
+      // has to say where it was read from.
+      const launch = (token, exempt, source = 'logs') => db.prepare(
         \`INSERT INTO launches (token, curve, deployer, pair_token, launch_config_id,
             graduation_threshold, block_number, tx_hash, launched_at,
-            snipe_exemption_count, snipe_exemptions)
-          VALUES (?,?,?,?,0,'0',1,?,0,?,?)\`
-      ).run(token, A(99), A(98), A(0), '0xtx' + token, exempt.length, JSON.stringify(exempt));
+            snipe_exemption_count, snipe_exemptions, exemption_source)
+          VALUES (?,?,?,?,0,'0',1,?,0,?,?,?)\`
+      ).run(token, A(99), A(98), A(0), '0xtx' + token, exempt.length, JSON.stringify(exempt), source);
       const trade = (token, side, wallet, t) => db.prepare(
         \`INSERT INTO trades (tx_hash, log_index, token, curve, side, trader, recipient,
             quote_amount, token_amount, fee, creator_tax, block_number, block_time)
@@ -51,7 +54,7 @@ test('the median is withheld below 30 observations', () => {
   `);
   const r = JSON.parse(out.trim().split('\n').pop());
   assert.equal(r.pairs, 29);
-  assert.equal(r.line, 'median hold time of exempted wallets not enough data yet (n=29)');
+  assert.equal(r.line, "median hold time of exempted wallets not published under 30 observations (n=29, read from the curve's own events)");
 });
 
 test('the median publishes at exactly 30 observations', () => {
@@ -67,7 +70,7 @@ test('the median publishes at exactly 30 observations', () => {
   const r = JSON.parse(out.trim().split('\n').pop());
   assert.equal(r.pairs, 30);
   assert.equal(r.median, 10);
-  assert.equal(r.line, 'median hold time of exempted wallets 10s (n=30)');
+  assert.equal(r.line, "median hold time of exempted wallets 10s (n=30, read from the curve's own events)");
 });
 
 test('an empty index reports not enough data, never a median', () => {
@@ -78,7 +81,7 @@ test('an empty index reports not enough data, never a median', () => {
   const r = JSON.parse(out.trim().split('\n').pop());
   assert.equal(r.pairs, 0);
   assert.equal(r.median, null);
-  assert.equal(r.line, 'median hold time of exempted wallets not enough data yet (n=0)');
+  assert.equal(r.line, "median hold time of exempted wallets not published under 30 observations (n=0, read from the curve's own events)");
 });
 
 // ------------------------------------------------------ the unit of observation
@@ -165,4 +168,70 @@ test('there is no 500-token cap on the population', () => {
     console.log(JSON.stringify({ pairs: a.pairs }));
   `);
   assert.equal(JSON.parse(out.trim().split('\n').pop()).pairs, 600);
+});
+
+// ------------------------------------------------------------- the source
+
+test('a launch read any other way contributes nothing, whatever its list says', () => {
+  const out = inTempDb(`
+    // Forty pairs, well past the floor, but the exemption sets were not
+    // settled by the curve's own events.
+    for (let i = 0; i < 40; i++) {
+      const tok = A(1000 + i), w = A(2000 + i);
+      launch(tok, [w], 'calldata');
+      trade(tok, 'buy', w, 100); trade(tok, 'sell', w, 110);
+    }
+    // And ten that were, which is under the floor on purpose.
+    for (let i = 0; i < 10; i++) {
+      const tok = A(3000 + i), w = A(4000 + i);
+      launch(tok, [w]);
+      trade(tok, 'buy', w, 100); trade(tok, 'sell', w, 130);
+    }
+    const a = exemptedHoldTime();
+    console.log(JSON.stringify({ pairs: a.pairs, median: a.medianSeconds, line: holdTimeLine(a) }));
+  `);
+  const r = JSON.parse(out.trim().split('\n').pop());
+  // The forty are not counted, so the ten are all there is and the median is
+  // withheld. Publishing nothing is the right answer here: a figure that is
+  // events-only by accident of what happened to be in the index is the shape
+  // of the number that had to be withdrawn.
+  assert.equal(r.pairs, 10);
+  // The computation still has a median for those ten; the floor lives in the
+  // line, which is the only thing anybody reads.
+  assert.equal(r.median, 30);
+  assert.match(r.line, /not published under 30 observations \(n=10/);
+  assert.doesNotMatch(r.line, /30s|\b10s\b/, 'the withheld median appeared anyway');
+});
+
+test('a null source is not a source either', () => {
+  const out = inTempDb(`
+    for (let i = 0; i < 40; i++) {
+      const tok = A(1000 + i), w = A(2000 + i);
+      launch(tok, [w], null);
+      trade(tok, 'buy', w, 100); trade(tok, 'sell', w, 110);
+    }
+    const a = exemptedHoldTime();
+    console.log(JSON.stringify({ pairs: a.pairs, median: a.medianSeconds }));
+  `);
+  const r = JSON.parse(out.trim().split('\n').pop());
+  assert.equal(r.pairs, 0);
+  assert.equal(r.median, null);
+});
+
+test('the line says where the number came from, in both states', () => {
+  const out = inTempDb(`
+    for (let i = 0; i < 30; i++) {
+      const tok = A(1000 + i), w = A(2000 + i);
+      launch(tok, [w]);
+      trade(tok, 'buy', w, 100); trade(tok, 'sell', w, 121);
+    }
+    const a = exemptedHoldTime();
+    console.log(JSON.stringify({ line: holdTimeLine(a), thin: holdTimeLine({ medianSeconds: null, pairs: 3 }) }));
+  `);
+  const r = JSON.parse(out.trim().split('\n').pop());
+  for (const line of [r.line, r.thin]) {
+    assert.match(line, /read from the curve's own events/);
+    assert.doesNotMatch(line, /\bclean\b|\bsafe\b/i);
+  }
+  assert.match(r.line, /21s \(n=30/);
 });

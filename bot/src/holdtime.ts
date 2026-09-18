@@ -39,6 +39,15 @@ export interface HoldTime {
  * whose buy fell outside the indexed window cannot be measured either, since
  * there is no start time to subtract.
  *
+ * Restricted to launches whose exemption set was read from the curve's own
+ * SnipeTaxExempted events. The filter is the one the "beyond the deployer"
+ * line two rows above it in /stats already uses, and it is asserted here
+ * rather than left to the state of the index: a figure that is events-only by
+ * accident is the exact shape of the 141s number that had to be withdrawn.
+ * A row read any other way is excluded even when its list would have been
+ * identical, because the point is that the code says where the number came
+ * from.
+ *
  * Drawn entirely from `trades`, which is only populated for tokens someone
  * scanned. That is the real bound on this figure: on the current index 183
  * launches carry exempted wallets but only a handful have any trade history at
@@ -52,7 +61,8 @@ export function exemptedHoldTime(): HoldTime {
     .prepare(
       `SELECT l.token AS token, l.snipe_exemptions AS ex
        FROM launches l
-       WHERE l.snipe_exemption_count > 0
+       WHERE l.exemption_source = 'logs'
+         AND l.snipe_exemption_count > 0
          AND l.snipe_exemptions IS NOT NULL
          AND EXISTS (SELECT 1 FROM trades t WHERE t.token = l.token AND t.side = 'sell')`,
     )
@@ -105,12 +115,23 @@ export function exemptedHoldTime(): HoldTime {
   return { medianSeconds: median, pairs: holds.length };
 }
 
-/** The /stats line for the hold time, floor applied. */
+/**
+ * The /stats line, floor applied, saying where the number came from.
+ *
+ * The source is printed beside the figure rather than left to a footnote. A
+ * median hold time is the single most quotable number this tool produces, and
+ * the one that went out wrong, so the line has to survive being screenshotted
+ * on its own.
+ */
+export const HOLD_TIME_SOURCE = "read from the curve's own events";
+
 export function holdTimeLine(hold: HoldTime): string {
   if (hold.pairs < MIN_HOLD_SAMPLES) {
-    return `median hold time of exempted wallets not enough data yet (n=${hold.pairs})`;
+    return `median hold time of exempted wallets not published under ${MIN_HOLD_SAMPLES} observations`
+      + ` (n=${hold.pairs.toLocaleString()}, ${HOLD_TIME_SOURCE})`;
   }
-  return `median hold time of exempted wallets ${humanDuration(hold.medianSeconds!)} (n=${hold.pairs.toLocaleString()})`;
+  return `median hold time of exempted wallets ${humanDuration(hold.medianSeconds!)}`
+    + ` (n=${hold.pairs.toLocaleString()}, ${HOLD_TIME_SOURCE})`;
 }
 
 function humanDuration(seconds: number): string {

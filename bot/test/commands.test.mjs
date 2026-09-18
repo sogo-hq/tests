@@ -64,7 +64,8 @@ test('a line is the command, its usage, its marks, then what it does', () => {
   assert.equal(commandLine(scan), '/scan <token address>\n    the card: what the chain shows about one launch');
 });
 
-test('admin commands are marked, and shown rather than hidden', () => {
+test('admin commands are marked, and in the table', () => {
+  // The table, not the message: /help hides this section from non-admins.
   const help = commandList();
   for (const c of COMMANDS.filter((x) => x.scope === 'admin')) {
     assert.ok(help.includes(`/${c.name}`), `/${c.name} is hidden from /help`);
@@ -149,9 +150,10 @@ test('the commands added this month are in it', () => {
  * a database left over from the last run would drop it from the measurement
  * and hide exactly the case this is measuring.
  */
-const renderHelp = async () => {
+const renderHelp = async ({ from = 5 } = {}) => {
   const { freshDb } = await import('./tmpdb.mjs');
   process.env.DB_PATH = freshDb('help-render');
+  process.env.ADMIN_IDS = '9001';
   process.env.LAUNCH_NOTICE = '$VITALS, the first declared launch on pons: 24 Sep · t.me/vitals_official';
   const { createBot } = await import('../dist/bot.js');
   const bot = createBot('1:FAKE');
@@ -167,8 +169,8 @@ const renderHelp = async () => {
   await bot.handleUpdate({
     update_id: 1,
     message: {
-      message_id: 1, date: 0, chat: { id: 5, type: 'private', first_name: 'A' },
-      from: { id: 5, is_bot: false, first_name: 'A' }, text: '/help',
+      message_id: 1, date: 0, chat: { id: from, type: 'private', first_name: 'A' },
+      from: { id: from, is_bot: false, first_name: 'A' }, text: '/help',
       entities: [{ type: 'bot_command', offset: 0, length: 5 }],
     },
   });
@@ -177,7 +179,8 @@ const renderHelp = async () => {
 
 test('the whole of /help reaches the user in one message', async () => {
   const { TELEGRAM_MAX_MESSAGE } = await import('../dist/text.js');
-  const help = await renderHelp();
+  // Measured on the admin render, which is the long one.
+  const help = await renderHelp({ from: 9001 });
   // With the launch notice appended, which is the longest it ever is. A
   // message one character over the limit is not a truncated /help, it is no
   // /help at all, and the list grows every time a command is added.
@@ -189,9 +192,39 @@ test('the whole of /help reaches the user in one message', async () => {
     `only ${TELEGRAM_MAX_MESSAGE - help.length} characters of headroom: trim the prose, not the table`);
 });
 
-test('every command in the table appears in the message a user gets', async () => {
+test('a user gets every command a user can run, and no admin command', async () => {
   const help = await renderHelp();
-  for (const c of COMMANDS) {
+  for (const c of COMMANDS.filter((x) => x.scope !== 'admin')) {
     assert.ok(help.includes(`/${c.name}`), `/${c.name} never reached the user`);
   }
+  for (const c of COMMANDS.filter((x) => x.scope === 'admin')) {
+    assert.ok(!help.includes(`/${c.name}`), `/${c.name} is admin only and reached a user`);
+  }
+  // Not the heading either. A section somebody cannot open is worse named
+  // than absent, and it says what the operator's tooling is called.
+  assert.ok(!help.includes('Admin:'), 'the admin heading reached a user');
+  // Every command that is still listed is one they can run, so nothing in the
+  // message is marked admin.
+  assert.ok(!/· admin/.test(help), 'an admin marker survived into a user message');
+});
+
+test('an admin gets the whole table', async () => {
+  const help = await renderHelp({ from: 9001 });
+  for (const c of COMMANDS) {
+    assert.ok(help.includes(`/${c.name}`), `/${c.name} never reached an admin`);
+  }
+  assert.ok(help.includes('Admin:'));
+});
+
+test('hiding the admin section is what buys the headroom back', async () => {
+  const { TELEGRAM_MAX_MESSAGE } = await import('../dist/text.js');
+  const user = await renderHelp();
+  const admin = await renderHelp({ from: 9001 });
+  assert.ok(user.length < admin.length, 'the two messages are the same size');
+  // The one that has to fit for everybody is the smaller one, and the admin
+  // message still has to fit at all.
+  assert.ok(admin.length <= TELEGRAM_MAX_MESSAGE,
+    `the admin /help is ${admin.length} of ${TELEGRAM_MAX_MESSAGE}`);
+  assert.ok(user.length <= TELEGRAM_MAX_MESSAGE - 800,
+    `a user's /help has only ${TELEGRAM_MAX_MESSAGE - user.length} characters of headroom`);
 });

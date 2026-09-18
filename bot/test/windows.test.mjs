@@ -350,9 +350,12 @@ test('exempted-wallet launches stop being read once the median has its pairs', (
     // with a buy and a later sell is one observation.
     for (let i = 300; i < 350; i++) {
       const token = A(i);
+      // exemption_source 'logs': the median only counts sets the curve's own
+      // events settled, so a row that is meant to feed it has to say so.
       db.prepare(\`INSERT INTO launches (token, curve, deployer, pair_token, launch_config_id,
-          graduation_threshold, block_number, tx_hash, launched_at, snipe_exemption_count, snipe_exemptions)
-        VALUES (?,?,?,?,0,'0',1000,?,?,1,?)\`)
+          graduation_threshold, block_number, tx_hash, launched_at, snipe_exemption_count,
+          snipe_exemptions, exemption_source)
+        VALUES (?,?,?,?,0,'0',1000,?,?,1,?,'logs')\`)
         .run(token, A(99), A(98), A(0), '0xhx' + i, NOW - 86400, JSON.stringify([A(70000 + i)]));
       const trade = (side, block, t) => db.prepare(
         \`INSERT INTO trades (tx_hash, log_index, token, curve, side, trader, recipient,
