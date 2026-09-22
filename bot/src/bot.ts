@@ -32,7 +32,7 @@ import { clamp, clampMessage, TELEGRAM_MAX_MESSAGE, ADDRESS_PATTERN, containsAdd
 } from './text.js';
 import {
   tierOf, atLeast, thresholds, setThreshold, setVitalsToken, vitalsToken,
-  grant, revokeGrant, linkedWallet, effectiveTier, type Tier,
+  grant, revokeGrant, linkedWallet, effectiveTier, type Tier, countLegacyTierGrants,
 } from './tiers.js';
 import { issueNonce, linkMessage, linkBySignature, linkByTxHash, unlink, verifyAddress } from './holder.js';
 import {
@@ -72,7 +72,7 @@ import {
 import {
   grantTg, ungrantTg, activeTgGrant, liveTgGrants, parseUserId, parseUserIds,
   isTgSubject, grantDmText, daysLeft as tgDaysLeft, dayStamp, audit as tgAudit,
-  MAX_TG_GRANT_DAYS, MAX_GRANT_BATCH,
+  startReminderLoop, MAX_TG_GRANT_DAYS, MAX_GRANT_BATCH,
 } from './tggrants.js';
 export { exemptedHoldTime, holdTimeLine, MIN_HOLD_SAMPLES, type HoldTime };
 import { concentrationCoverageLine } from './metrics/concentration.js';
@@ -1820,6 +1820,33 @@ export function createBot(token = TELEGRAM_BOT_TOKEN): Bot {
   // ---------------------------------------------------------------- premium
 
   /**
+   * Tell the person, once, that they have it.
+   *
+   * A grant that nobody is told about is a feature that quietly starts
+   * working, and the whole point of this route is that the person did nothing
+   * to earn it and has no reason to check. Failure is returned rather than
+   * raised: somebody who has never started the bot cannot be messaged, and
+   * that must not cost them the grant.
+   */
+  const dmGranted = async (ctx: any, target: number, expiresAt: number): Promise<boolean> => {
+    try {
+      await ctx.api.sendMessage(target, grantDmText(expiresAt), {
+        link_preview_options: { is_disabled: true },
+      });
+      return true;
+    } catch (err) {
+      console.log(`[premium] could not DM ${target}: ${String((err as Error)?.message ?? err).slice(0, 120)}`);
+      return false;
+    }
+  };
+
+  /** The same, as the line that goes in the admin's reply. */
+  const tellGranted = async (ctx: any, target: number, expiresAt: number): Promise<string> =>
+    (await dmGranted(ctx, target, expiresAt))
+      ? 'told them in a DM'
+      : 'could not DM them. they have premium; they have not started the bot, so nothing was delivered.';
+
+  /**
    * /myid
    *
    * The one thing a KOL has to do to be given premium: read a number off a
@@ -1852,6 +1879,51 @@ export function createBot(token = TELEGRAM_BOT_TOKEN): Bot {
     // on its own, and the holder path underneath it is untouched.
     if (sub === 'grant' || sub === 'ungrant') {
       if (!isAdmin(userId)) return;
+
+      // tg:<id> grants the ACCOUNT, with no wallet anywhere. Everything below
+      // this block is the wallet path and is untouched by it.
+      if (isTgSubject(parts[1] ?? '')) {
+        const target = parseUserId(parts[1]!);
+        if (target === null) {
+          await ctx.reply(sub === 'grant'
+            ? '/premium grant tg:<user id> <days> [note]'
+            : '/premium ungrant tg:<user id>');
+          return;
+        }
+        if (sub === 'ungrant') {
+          const gone = ungrantTg(target);
+          tgAudit('ungrant', {
+            admin: userId, target,
+            oldExpiry: gone?.expiresAt ?? null, newExpiry: null,
+          });
+          await ctx.reply(gone
+            ? `tg:${target}: grant removed. holding and payments are unaffected.`
+            : `tg:${target}: no grant`);
+          return;
+        }
+        const days = Number((parts[2] ?? '').replace(/d$/i, ''));
+        const note = parts.slice(3).join(' ');
+        const r = grantTg(target, days, { note, by: userId });
+        if (!r.ok) {
+          await ctx.reply(r.reason === 'user'
+            ? '/premium grant tg:<user id> <days> [note]'
+            : `days has to be a number from 1 to ${MAX_TG_GRANT_DAYS}`);
+          return;
+        }
+        const { grant: g, outcome, previousExpiry } = r.result;
+        tgAudit(outcome === 'added' ? 'grant' : outcome === 'extended' ? 'extend' : 'unchanged', {
+          admin: userId, target, oldExpiry: previousExpiry, newExpiry: g.expiresAt, note: g.note,
+        });
+        const dm = await tellGranted(ctx, target, g.expiresAt);
+        await ctx.reply([
+          `tg:${target}: premium ${outcome === 'added' ? 'granted' : outcome === 'extended' ? 'extended' : 'already runs longer, unchanged'}`
+            + ` until ${dayStamp(g.expiresAt)} UTC (${tgDaysLeft(g.expiresAt)} days)`,
+          g.note ? `note: ${g.note}` : '',
+          dm,
+        ].filter(Boolean).join('\n'));
+        return;
+      }
+
       if (sub === 'ungrant') {
         await ctx.reply(revokeAccessGrant('wallet', parts[1] ?? '')
           ? `${parts[1]}: grant removed. holding and payments are unaffected.`
@@ -1868,6 +1940,99 @@ export function createBot(token = TELEGRAM_BOT_TOKEN): Bot {
       }
       await ctx.reply(`${res.grant.subject}: premium ${res.extended ? 'extended' : 'granted'} `
         + `until ${new Date(res.grant.expiresAt * 1000).toISOString().slice(0, 10)}`);
+      return;
+    }
+
+    if (sub === 'grantmany') {
+      if (!isAdmin(userId)) return;
+      const days = Number((parts[1] ?? '').replace(/d$/i, ''));
+      if (!Number.isFinite(days) || days <= 0 || days > MAX_TG_GRANT_DAYS) {
+        await ctx.reply(`/premium grantmany <days> <note>\n<user ids, one per line or comma separated>\n\ndays is 1 to ${MAX_TG_GRANT_DAYS}`);
+        return;
+      }
+      // The note is the rest of the first line and the ids are everything
+      // after it, so a pasted block needs no punctuation around either.
+      const firstLineEnd = arg.indexOf('\n');
+      const head = firstLineEnd === -1 ? arg : arg.slice(0, firstLineEnd);
+      const body = firstLineEnd === -1 ? '' : arg.slice(firstLineEnd + 1);
+      const note = head.split(/\s+/).slice(2).join(' ');
+      const { ids, invalid, duplicates } = parseUserIds(body);
+      if (!ids.length && !invalid.length) {
+        await ctx.reply('no user ids in that. put them after the first line, one per line or comma separated.');
+        return;
+      }
+      if (ids.length > MAX_GRANT_BATCH) {
+        await ctx.reply(`${ids.length} ids is more than ${MAX_GRANT_BATCH} in one command. that is a paste accident more often than a room.`);
+        return;
+      }
+
+      const added: number[] = [];
+      const extended: number[] = [];
+      const unchanged: number[] = [];
+      const dmFailed: number[] = [];
+      for (const target of ids) {
+        const r = grantTg(target, days, { note, by: userId });
+        if (!r.ok) { invalid.push(String(target)); continue; }
+        const { grant: g, outcome, previousExpiry } = r.result;
+        tgAudit(outcome === 'added' ? 'grant' : outcome === 'extended' ? 'extend' : 'unchanged', {
+          admin: userId, target, oldExpiry: previousExpiry, newExpiry: g.expiresAt, note: g.note,
+        });
+        (outcome === 'added' ? added : outcome === 'extended' ? extended : unchanged).push(target);
+        // One DM each, and a failure is reported rather than raised: a KOL who
+        // has not started the bot still gets the grant.
+        if (!(await dmGranted(ctx, target, g.expiresAt))) dmFailed.push(target);
+      }
+
+      const L: string[] = [`${ids.length} id${ids.length === 1 ? '' : 's'}, ${days} day${days === 1 ? '' : 's'}${note ? `, note "${note}"` : ''}`];
+      L.push(`added ${added.length}`);
+      L.push(`extended ${extended.length}`);
+      if (unchanged.length) L.push(`already longer, unchanged ${unchanged.length}`);
+      L.push(`invalid ${invalid.length}${invalid.length ? `: ${invalid.slice(0, 12).join(' ')}${invalid.length > 12 ? ' ...' : ''}` : ''}`);
+      if (duplicates) L.push(`${duplicates} duplicate id${duplicates === 1 ? '' : 's'} in the paste, granted once`);
+      if (dmFailed.length) {
+        L.push('', `could not DM ${dmFailed.length}: ${dmFailed.slice(0, 12).join(' ')}${dmFailed.length > 12 ? ' ...' : ''}`);
+        L.push('they have premium. they have not started the bot, so nothing was delivered.');
+      }
+      await ctx.reply(clamp(L.join('\n'), TELEGRAM_MAX_MESSAGE));
+      return;
+    }
+
+    if (sub === 'list') {
+      if (!isAdmin(userId)) return;
+      const which = (parts[1] ?? 'all').toLowerCase();
+      if (!['tg', 'wallet', 'all'].includes(which)) {
+        await ctx.reply('/premium list [tg|wallet|all]');
+        return;
+      }
+      const L: string[] = [];
+      if (which === 'tg' || which === 'all') {
+        const live = liveTgGrants();
+        L.push(`by telegram id: ${live.length}`);
+        for (const g of live) {
+          L.push(`  ${String(g.userId).padEnd(12)} ${dayStamp(g.expiresAt)}  ${String(tgDaysLeft(g.expiresAt)).padStart(4)}d`
+            + (g.note ? `  ${g.note}` : ''));
+        }
+      }
+      if (which === 'wallet' || which === 'all') {
+        const live = liveGrants('wallet');
+        if (L.length) L.push('');
+        L.push(`by wallet: ${live.length}`);
+        for (const g of live) {
+          const d = Math.max(0, Math.ceil((g.expiresAt * 1000 - Date.now()) / 86_400_000));
+          L.push(`  ${g.subject}  ${new Date(g.expiresAt * 1000).toISOString().slice(0, 10)}  ${String(d).padStart(4)}d`
+            + (g.note ? `  ${g.note}` : ''));
+        }
+      }
+      // The older /grant writes tier_grants, which resolution still honours.
+      // Naming the count keeps those grants from being invisible here.
+      if (which === 'tg' || which === 'all') {
+        const legacy = countLegacyTierGrants();
+        if (legacy) {
+          L.push('', `${legacy} older grant${legacy === 1 ? '' : 's'} from /grant <id> <days>d are live too.`);
+          L.push('they still open premium. they carry no note and are not listed above.');
+        }
+      }
+      await ctx.reply(clamp(L.join('\n') || 'nothing granted', TELEGRAM_MAX_MESSAGE));
       return;
     }
 
@@ -3296,6 +3461,20 @@ export async function deliverLaunch(tokens: string[]): Promise<void> {
  * Every admin, not the person who set the watch. A watch is set once and the
  * launch is handled by whoever is at a keyboard.
  */
+/**
+ * The ending-soon DM, from the process that holds the token.
+ *
+ * Here rather than in tggrants.ts for the same reason the alerts are: that
+ * module needs no bot to be tested, and this is the only part of it that does.
+ */
+export function startPremiumReminders(intervalMs?: number): NodeJS.Timeout | null {
+  if (!liveBot) return null;
+  return startReminderLoop(
+    (userId, text) => liveBot!.api.sendMessage(userId, text, { link_preview_options: { is_disabled: true } }),
+    intervalMs,
+  );
+}
+
 export async function deliverCollisionWatch(tokens: string[]): Promise<number> {
   if (!liveBot || !tokens.length) return 0;
   const notices = claimWatchNotices(tokens);

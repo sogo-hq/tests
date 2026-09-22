@@ -6,7 +6,7 @@ import { scanToken } from './scan.js';
 import { renderCardText, renderDefaultCard } from './card.js';
 import { runDueRechecks, startRecheckLoop } from './recheck.js';
 import { startWindowLoop, windowBacklog, indexWindows } from './indexer/windows.js';
-import { deliverAlerts, deliverLaunch, deliverCollisionWatch } from './bot.js';
+import { deliverAlerts, deliverLaunch, deliverCollisionWatch, startPremiumReminders } from './bot.js';
 import { initBot, startBot } from './bot.js';
 import { startWatchdog } from './watchdog.js';
 import { resumeDecodeRun } from './decoderun.js';
@@ -162,6 +162,9 @@ async function main(): Promise<void> {
       if (rest[0] === '--loop') {
         console.log('Recheck worker running. Rechecks fire at +1h, +6h, +24h and +7d after each scan.');
         startRecheckLoop();
+      // The ending-soon DM for granted premium. Hourly, and silent when there
+      // is nothing inside the window.
+      startPremiumReminders();
         return; // keep the process alive
       }
       const n = await runDueRechecks(Number(rest[0] ?? 50));
