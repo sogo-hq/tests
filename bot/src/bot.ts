@@ -28,7 +28,8 @@ import { shouldOnboard, markOnboarded, onboardingText } from './onboard.js';
 import { addWatcher, removeWatcher, watchers, watchersText, MAX_WATCH_DELAY_SECONDS } from './launchwatch.js';
 import { setSeatNote, MAX_SEAT_NOTE } from './roster.js';
 import { commandList, COMMANDS, registeredNames } from './commands.js';
-import { clamp, clampMessage, TELEGRAM_MAX_MESSAGE, ADDRESS_PATTERN, containsAddress } from './text.js';
+import { clamp, clampMessage, TELEGRAM_MAX_MESSAGE, ADDRESS_PATTERN, containsAddress, splitMessage
+} from './text.js';
 import {
   tierOf, atLeast, thresholds, setThreshold, setVitalsToken, vitalsToken,
   grant, revokeGrant, linkedWallet, effectiveTier, type Tier,
@@ -68,6 +69,11 @@ import {
   collisionText, startCollisionWatch, stopCollisionWatch, liveCollisionWatches,
   claimWatchNotices, watchNoticeText,
 } from './collision.js';
+import {
+  grantTg, ungrantTg, activeTgGrant, liveTgGrants, parseUserId, parseUserIds,
+  isTgSubject, grantDmText, daysLeft as tgDaysLeft, dayStamp, audit as tgAudit,
+  MAX_TG_GRANT_DAYS, MAX_GRANT_BATCH,
+} from './tggrants.js';
 export { exemptedHoldTime, holdTimeLine, MIN_HOLD_SAMPLES, type HoldTime };
 import { concentrationCoverageLine } from './metrics/concentration.js';
 import { inlineDescription, footerLine, GROUP_HANDLE } from './card.js';
@@ -1377,11 +1383,18 @@ export function createBot(token = TELEGRAM_BOT_TOKEN): Bot {
     // Clamped rather than trusted to fit: the list is generated from the
     // command table, so it grows whenever a command is added, and a message
     // one character over the limit is not a truncated /help but no /help.
-    await ctx.reply(clampMessage(withLaunchNotice(text, userId)), {
-      // No preview: the footer carries a domain, and a link card would push the
-      // text off the first screen.
-      link_preview_options: { is_disabled: true },
-    });
+    // Split rather than clamped. The list is generated from the command table,
+    // so it grows whenever a command is added, and an admin's copy no longer
+    // fits one message. Clamping would drop whichever commands happen to be
+    // last in the table, which is the one failure a generated list must not
+    // have: it would read as those commands not existing.
+    for (const part of splitMessage(withLaunchNotice(text, userId))) {
+      await ctx.reply(part, {
+        // No preview: the footer carries a domain, and a link card would push
+        // the text off the first screen.
+        link_preview_options: { is_disabled: true },
+      });
+    }
     // The markers mean nothing to somebody seeing them for the first time, and
     // the one thing a card cannot convey by itself is that a missing marker is
     // not an all-clear. Said once, on the way in.
@@ -1805,6 +1818,27 @@ export function createBot(token = TELEGRAM_BOT_TOKEN): Bot {
   });
 
   // ---------------------------------------------------------------- premium
+
+  /**
+   * /myid
+   *
+   * The one thing a KOL has to do to be given premium: read a number off a
+   * screen and send it on. Private only, because a user id posted into a room
+   * is one more thing about that person sitting in a public log, and nothing
+   * here needs it to be there.
+   */
+  bot.command('myid', async (ctx) => {
+    if (ctx.chat?.type !== 'private') {
+      await ctx.reply('DM me /myid');
+      return;
+    }
+    const id = ctx.from?.id;
+    if (id === undefined) {
+      await ctx.reply('telegram did not send an id with that message. try again from a DM.');
+      return;
+    }
+    await ctx.reply(`${id}\n\nsend this to sirius`);
+  });
 
   bot.command('premium', async (ctx) => {
     const userId = ctx.from?.id;

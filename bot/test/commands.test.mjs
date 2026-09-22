@@ -126,10 +126,14 @@ test('it says nothing a card is not allowed to say', () => {
   assert.doesNotMatch(help, /\bclean\b|\bsafe\b|looks good|\bscore\b|\bgrade\b|price target/i);
 });
 
-test('the whole message fits in one Telegram message', async () => {
+test('the list a user sees fits one message with the prose around it', async () => {
   const { TELEGRAM_MAX_MESSAGE } = await import('../dist/text.js');
-  assert.ok(commandList().length < TELEGRAM_MAX_MESSAGE * 0.8,
-    `the command list alone is ${commandList().length} of ${TELEGRAM_MAX_MESSAGE}`);
+  // The user's list, which is the one that has to fit alongside the prose,
+  // the notice and the premium line. The admin list is allowed to be longer:
+  // /help splits it rather than cutting it.
+  const user = commandList({ admin: false });
+  assert.ok(user.length < TELEGRAM_MAX_MESSAGE * 0.8,
+    `a user's command list is ${user.length} of ${TELEGRAM_MAX_MESSAGE}`);
 });
 
 test('the commands added this month are in it', () => {
@@ -150,6 +154,8 @@ test('the commands added this month are in it', () => {
  * a database left over from the last run would drop it from the measurement
  * and hide exactly the case this is measuring.
  */
+let lastSent = [];
+
 const renderHelp = async ({ from = 5 } = {}) => {
   const { freshDb } = await import('./tmpdb.mjs');
   process.env.DB_PATH = freshDb('help-render');
@@ -162,6 +168,7 @@ const renderHelp = async ({ from = 5 } = {}) => {
     can_join_groups: true, can_read_all_group_messages: false, supports_inline_queries: true,
   };
   const sent = [];
+  lastSent = sent;
   bot.api.config.use(async (_p, m, pl) => {
     if (m === 'sendMessage') sent.push(pl.text);
     return { ok: true, result: { message_id: 1, chat: { id: 1 }, date: 0 } };
@@ -174,22 +181,45 @@ const renderHelp = async ({ from = 5 } = {}) => {
       entities: [{ type: 'bot_command', offset: 0, length: 5 }],
     },
   });
-  return sent[0];
+  return sent.join('\n\n');
 };
 
-test('the whole of /help reaches the user in one message', async () => {
+/**
+ * The /help messages, as sent.
+ *
+ * The legend follows /help as its own message on a first run, so the parts
+ * that carry a command group heading are the ones /help itself produced.
+ */
+const renderHelpParts = async (opts) => {
+  await renderHelp(opts);
+  return lastSent.filter((m) => groupsInOrder().some((g) => m.includes(`${g}:`)));
+};
+
+test('every part of /help is a sendable message, and nothing is cut', async () => {
   const { TELEGRAM_MAX_MESSAGE } = await import('../dist/text.js');
-  // Measured on the admin render, which is the long one.
-  const help = await renderHelp({ from: 9001 });
-  // With the launch notice appended, which is the longest it ever is. A
-  // message one character over the limit is not a truncated /help, it is no
-  // /help at all, and the list grows every time a command is added.
-  assert.ok(help.length <= TELEGRAM_MAX_MESSAGE,
-    `/help is ${help.length} of ${TELEGRAM_MAX_MESSAGE}`);
-  assert.ok(help.includes('24 Sep'), 'the notice is in the measurement');
-  assert.ok(!help.endsWith('…'), '/help was clamped, so something was cut');
-  assert.ok(help.length <= TELEGRAM_MAX_MESSAGE - 100,
-    `only ${TELEGRAM_MAX_MESSAGE - help.length} characters of headroom: trim the prose, not the table`);
+  // The admin render, which is the long one, with the launch notice appended.
+  const parts = await renderHelpParts({ from: 9001 });
+  assert.ok(parts.length >= 1);
+  for (const p of parts) {
+    assert.ok(p.length <= TELEGRAM_MAX_MESSAGE, `a part is ${p.length} of ${TELEGRAM_MAX_MESSAGE}`);
+    assert.ok(!p.endsWith('…'), 'a part was clamped, so something was cut');
+  }
+  const whole = parts.join('\n\n');
+  assert.ok(whole.includes('24 Sep'), 'the notice is in the measurement');
+  // The reason it is split rather than clamped: every command in the table
+  // still arrives. A generated list that drops its own tail reads as those
+  // commands not existing.
+  for (const c of COMMANDS) {
+    assert.ok(whole.includes(`/${c.name}`), `/${c.name} never reached an admin`);
+  }
+});
+
+test('a user gets /help in one message, with room to spare', async () => {
+  const { TELEGRAM_MAX_MESSAGE } = await import('../dist/text.js');
+  const parts = await renderHelpParts();
+  assert.equal(parts.length, 1, 'a normal user should never need two messages');
+  assert.ok(parts[0].length <= TELEGRAM_MAX_MESSAGE - 800,
+    `a user's /help has only ${TELEGRAM_MAX_MESSAGE - parts[0].length} characters of headroom`);
 });
 
 test('a user gets every command a user can run, and no admin command', async () => {

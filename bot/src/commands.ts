@@ -89,6 +89,8 @@ export const COMMANDS: CommandSpec[] = [
     what: 'how your access stands and how long it lasts. /premium <tx hash> credits a payment' },
   { name: 'license', usage: 'status', group: 'Your account', scope: 'all', where: 'any',
     what: 'whether this group is licensed, and by what' },
+  { name: 'myid', usage: '', group: 'Your account', scope: 'all', where: 'dm',
+    what: 'your telegram user id, for when an admin needs it' },
   { name: 'export', usage: '', group: 'Your account', scope: 'all', where: 'dm',
     what: 'your scans as a file' },
   { name: 'sponsor', usage: '', group: 'Your account', scope: 'all', where: 'any',

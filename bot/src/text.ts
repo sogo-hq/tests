@@ -94,3 +94,27 @@ export function containsAddress(text: string): boolean {
 export function addressesIn(text: string): string[] {
   return text.match(new RegExp(ADDRESS_PATTERN, 'g')) ?? [];
 }
+
+/**
+ * Split a message at blank lines so every part fits.
+ *
+ * /help is generated from the command table, so it grows every time a command
+ * is added, and it has now outgrown one message for an admin. Clamping it
+ * would drop whichever commands happened to be last in the table, which is the
+ * one failure a generated list must not have. Parts break between blocks, and
+ * a single block longer than the limit is clamped rather than cut mid-word.
+ */
+export function splitMessage(text: string, max = TELEGRAM_MAX_MESSAGE): string[] {
+  if (text.length <= max) return [text];
+  const parts: string[] = [];
+  let current = '';
+  for (const block of text.split('\n\n')) {
+    const candidate = current ? `${current}\n\n${block}` : block;
+    if (candidate.length <= max) { current = candidate; continue; }
+    if (current) parts.push(current);
+    current = block.length <= max ? block : '';
+    if (!current) parts.push(clampMessage(block, max));
+  }
+  if (current) parts.push(current);
+  return parts.length ? parts : [clampMessage(text, max)];
+}
