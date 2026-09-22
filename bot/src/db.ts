@@ -641,6 +641,36 @@ CREATE TABLE IF NOT EXISTS cursors (
 -- Deliveries are recorded per watch and token, because the notice must go out
 -- once whatever the indexer does with a block it has already seen.
 -- ---------------------------------------------------------------------------
+-- ---------------------------------------------------------------------------
+-- Premium granted to a Telegram account, with no wallet and nothing on chain.
+--
+-- The KOLs in a room are reachable by user id and by nothing else: they have
+-- no wallet linked, they are not going to link one to read a card, and an
+-- invitation that needs an on-chain step is an invitation most of them decline.
+--
+-- The id is all that is stored about the person. No handle, no name, no chat.
+-- A user id is what the grant is keyed on and what an admin was given, and
+-- anything else here would be a record nobody asked us to keep.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS premium_tg_grants (
+  user_id    INTEGER PRIMARY KEY,
+  expires_at INTEGER NOT NULL,
+  note       TEXT,
+  granted_by INTEGER,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+-- The ending-soon DM, recorded so it goes out once per expiry rather than
+-- once per pass. Keyed on the expiry it was sent about, so extending a grant
+-- arms the reminder again for the new date without any cleanup.
+CREATE TABLE IF NOT EXISTS premium_tg_reminders (
+  user_id    INTEGER NOT NULL,
+  expires_at INTEGER NOT NULL,
+  sent_at    INTEGER NOT NULL,
+  PRIMARY KEY (user_id, expires_at)
+);
+
 CREATE TABLE IF NOT EXISTS collision_watches (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,
   name       TEXT NOT NULL,

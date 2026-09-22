@@ -3,6 +3,8 @@ import { client } from './chain.js';
 import { erc20Abi } from './abi.js';
 import { db } from './db.js';
 import { getSetting, setSetting, normaliseWallet } from './ready.js';
+import { activeTgGrant } from './tggrants.js';
+import { activeGrant } from './grants.js';
 
 /**
  * What holding $VITALS unlocks.
@@ -193,6 +195,42 @@ export type TierResolution =
   | { state: 'undetermined'; reason: string };
 
 /**
+ * Every granted route to a tier, as one grant: the later date wins.
+ *
+ * Three ways an admin or a payment can open premium without a balance, and
+ * they are checked together rather than in sequence so that having two of them
+ * is never worse than having one:
+ *
+ *   tier_grants        a payment, or the older /grant <id> <days>d
+ *   premium_tg_grants  a grant to the account itself, no wallet anywhere
+ *   access_grants      a grant to the wallet this account has proven it holds
+ *
+ * The wallet leg only counts through a PROVEN link. entitlement() answers a
+ * question about an address and an address is public, so reading a wallet
+ * grant without holder_links behind it would hand premium to anyone who can
+ * name a granted wallet.
+ */
+export function adminGrantOf(userId: number, now = Date.now()): Grant | null {
+  const candidates: Grant[] = [];
+  const paid = grantOf(userId, now);
+  if (paid) candidates.push(paid);
+
+  const tg = activeTgGrant(userId, Math.floor(now / 1000));
+  if (tg) candidates.push({ tier: 'premium', expiresAt: tg.expiresAt * 1000, source: 'admin' });
+
+  const wallet = linkedWallet(userId);
+  if (wallet) {
+    const w = activeGrant('wallet', wallet);
+    if (w) candidates.push({ tier: 'premium', expiresAt: w.expiresAt * 1000, source: 'admin' });
+  }
+
+  if (!candidates.length) return null;
+  // The strongest tier first, and among equals the one that lasts longest.
+  return candidates.sort((a, b) =>
+    TIER_ORDER.indexOf(b.tier) - TIER_ORDER.indexOf(a.tier) || b.expiresAt - a.expiresAt)[0]!;
+}
+
+/**
  * The tier this Telegram user actually has, right now.
  *
  * A grant and a balance are both real routes, so the higher of the two wins:
@@ -200,7 +238,7 @@ export type TierResolution =
  * somebody whose tokens fell below PREMIUM keeps the month they paid for.
  */
 export async function tierOf(userId: number, now = Date.now()): Promise<TierResolution> {
-  const g = grantOf(userId, now);
+  const g = adminGrantOf(userId, now);
   const wallet = linkedWallet(userId);
 
   if (!wallet) {
@@ -250,4 +288,18 @@ export function holderOfWallet(wallet: string): number | null {
   const row = db.prepare('SELECT user_id FROM holder_links WHERE wallet = ?').get(wallet.toLowerCase()) as
     | { user_id: number } | undefined;
   return row?.user_id ?? null;
+}
+
+/**
+ * How many older /grant rows are live.
+ *
+ * tier_grants predates premium_tg_grants and still opens premium, so a list
+ * of telegram grants that ignored it would under-report what is handed out.
+ * Counted rather than listed: those rows carry no note and no granting admin,
+ * so there is nothing to put in the columns beside them.
+ */
+export function countLegacyTierGrants(now = Date.now()): number {
+  return (db
+    .prepare("SELECT COUNT(*) n FROM tier_grants WHERE source = 'admin' AND expires_at > ?")
+    .get(Math.floor(now / 1000)) as { n: number }).n;
 }
