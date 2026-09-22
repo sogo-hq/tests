@@ -115,6 +115,16 @@ export function openapiDocument(publicUrl = process.env.API_PUBLIC_URL || 'https
           responses: { 200: { description: 'health', content: { 'application/json': { schema: ref('Health') } } } },
         },
       },
+      '/revenue': {
+        get: {
+          summary: 'Revenue and the declared split, in ETH',
+          description:
+            'Public and keyless. Creator income claimed to date, the declared split computed '
+            + 'from it, every BLOCK ZERO payout with its transaction, and what is still owed. '
+            + 'ETH only: no price, no USD and no projection. Cached 60 seconds.',
+          responses: { 200: { description: 'The current figures' } },
+        },
+      },
       '/openapi.json': {
         get: { summary: 'This document', responses: { 200: { description: 'the document' } } },
       },

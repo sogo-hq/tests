@@ -1,3 +1,5 @@
+import { buildRevenue, type Revenue } from '../revenue.js';
+import { feeWalletBalance } from '../ledger.js';
 import { db, getCursor } from '../db.js';
 import { client } from '../chain.js';
 import { indexCoverage } from '../coverage.js';
@@ -233,3 +235,36 @@ export async function lagRefusal(): Promise<Outcome | null> {
 }
 
 export { indexCoverage };
+
+
+// ----------------------------------------------------------------- revenue
+
+/** Sixty seconds, as specified. Long enough that a post to a room cannot bill us. */
+export const REVENUE_CACHE_MS = Number(process.env.REVENUE_CACHE_MS || 60_000) || 60_000;
+
+let revenueHit: { at: number; body: Revenue } | null = null;
+
+/** For tests: the cache is a module-level fact and has to be clearable. */
+export function resetRevenueCache(): void {
+  revenueHit = null;
+}
+
+/**
+ * GET /v1/revenue
+ *
+ * Public and keyless, like /stats. It names no wallet but the fee wallet
+ * itself, which is on chain and in the declaration, and no seat, no handle and
+ * no amount owed to any individual.
+ */
+export async function getRevenue(now = Date.now()): Promise<Outcome> {
+  if (revenueHit && now - revenueHit.at < REVENUE_CACHE_MS) {
+    return { status: 200, body: revenueHit.body, headers: { 'x-cache': 'hit', 'cache-control': 'public, max-age=60' } };
+  }
+  const [balanceWei, head] = await Promise.all([
+    feeWalletBalance().catch(() => null),
+    lagBlocks().then((l) => l.head).catch(() => null),
+  ]);
+  const body = buildRevenue({ balanceWei, headBlock: head, now });
+  revenueHit = { at: now, body };
+  return { status: 200, body, headers: { 'x-cache': 'miss', 'cache-control': 'public, max-age=60' } };
+}

@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>VITALS revenue</title>
+<meta name="description" content="What the VITALS creator fee has taken in, the declared split, and every payout to BLOCK ZERO. ETH only.">
+<meta name="robots" content="index,follow">
+<link rel="canonical" href="https://checkvitals.xyz/revenue">
+<style>
+  :root {
+    --bg: #000;
+    --fg: #e8e8e8;
+    --dim: #7a7a7a;
+    --rule: #1e1e1e;
+    --link: #9ecbff;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  }
+  * { box-sizing: border-box; }
+  html { background: var(--bg); }
+  body {
+    margin: 0;
+    padding: 48px 16px 96px;
+    background: var(--bg);
+    color: var(--fg);
+    font-family: var(--mono);
+    font-size: 14px;
+    line-height: 1.6;
+    -webkit-text-size-adjust: 100%;
+  }
+  main { max-width: 760px; margin: 0 auto; }
+  h1 {
+    font-size: 14px; font-weight: 400; letter-spacing: 0.18em;
+    text-transform: uppercase; margin: 0 0 4px; color: var(--fg);
+  }
+  .sub { color: var(--dim); margin: 0 0 40px; }
+  h2 {
+    font-size: 12px; font-weight: 400; letter-spacing: 0.14em;
+    text-transform: uppercase; color: var(--dim);
+    margin: 40px 0 12px; padding-bottom: 8px; border-bottom: 1px solid var(--rule);
+  }
+  a { color: var(--link); text-decoration: none; }
+  a:hover, a:focus-visible { text-decoration: underline; }
+  .row { display: flex; justify-content: space-between; gap: 16px; padding: 3px 0; }
+  .row .k { color: var(--dim); }
+  .row .v { font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .big { font-size: 28px; line-height: 1.25; font-variant-numeric: tabular-nums; }
+  .note { color: var(--dim); font-size: 12px; margin: 8px 0 0; }
+  .empty { color: var(--dim); padding: 24px 0; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th {
+    text-align: left; font-weight: 400; color: var(--dim);
+    padding: 0 0 6px; border-bottom: 1px solid var(--rule);
+  }
+  td { padding: 5px 0; border-bottom: 1px solid var(--rule); vertical-align: top; }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  td.hash { word-break: break-all; }
+  footer { color: var(--dim); font-size: 12px; margin-top: 56px; }
+  @media (max-width: 560px) {
+    body { padding: 32px 16px 72px; }
+    .big { font-size: 22px; }
+    th.when, td.when { display: none; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <h1>VITALS revenue</h1>
+  <p class="sub">every figure in ETH, read from chain and from the ledger. no price, no projection.</p>
+
+  <div id="view" class="empty">reading...</div>
+
+  <footer>
+    <a href="/">checkvitals.xyz</a>
+    &nbsp;&middot;&nbsp;
+    <a href="https://docs.checkvitals.xyz/vitals">the token</a>
+    &nbsp;&middot;&nbsp;
+    <a href="https://docs.checkvitals.xyz/whitepaper">whitepaper</a>
+    <div id="asof" class="note"></div>
+  </footer>
+</main>
+
+<script>
+(function () {
+  var API = 'https://api.checkvitals.xyz/v1/revenue';
+  var SCAN = 'https://robinhoodchain.blockscout.com/tx/';
+  var view = document.getElementById('view');
+  var asof = document.getElementById('asof');
+
+  function el(tag, cls, text) {
+    var n = document.createElement(tag);
+    if (cls) n.className = cls;
+    if (text !== undefined && text !== null) n.textContent = String(text);
+    return n;
+  }
+
+  function row(k, v) {
+    var r = el('div', 'row');
+    r.appendChild(el('span', 'k', k));
+    r.appendChild(el('span', 'v', v));
+    return r;
+  }
+
+  /** A hash, linked out, shortened in the middle so the row stays one line. */
+  function txLink(hash) {
+    var a = el('a', null, hash.slice(0, 10) + '…' + hash.slice(-8));
+    a.href = SCAN + hash;
+    a.rel = 'noopener';
+    a.target = '_blank';
+    a.title = hash;
+    return a;
+  }
+
+  function stamp(seconds) {
+    if (!seconds) return 'unknown';
+    return new Date(seconds * 1000).toISOString().replace('T', ' ').slice(0, 16) + ' UTC';
+  }
+
+  function table(head, rows) {
+    var t = el('table');
+    var thead = el('thead');
+    var tr = el('tr');
+    head.forEach(function (h) {
+      var th = el('th', h.cls || null, h.label);
+      tr.appendChild(th);
+    });
+    thead.appendChild(tr);
+    t.appendChild(thead);
+    var tb = el('tbody');
+    rows.forEach(function (cells) {
+      var r = el('tr');
+      cells.forEach(function (c) {
+        var td = el('td', c.cls || null);
+        if (c.node) td.appendChild(c.node); else td.textContent = c.text;
+        r.appendChild(td);
+      });
+      tb.appendChild(r);
+    });
+    t.appendChild(tb);
+    return t;
+  }
+
+  function render(d) {
+    view.className = '';
+    view.textContent = '';
+
+    // Before anything has come in there is one sentence and nothing else. A
+    // table of zeros invites the reader to work out what the zeros mean.
+    if (d.as_of && d.as_of.empty) {
+      var e = el('div', 'empty', 'no revenue yet. first payout roughly 4h after launch.');
+      view.appendChild(e);
+      return;
+    }
+
+    view.appendChild(el('h2', null, 'claimed to date'));
+    view.appendChild(el('div', 'big', d.claimed_eth + ' ETH'));
+    if (d.unclaimed_eth === null) {
+      view.appendChild(el('p', 'note', 'unclaimed: undetermined. ' + d.unclaimed_note));
+    } else {
+      view.appendChild(row('unclaimed', d.unclaimed_eth + ' ETH'));
+    }
+    if (!d.claims || !d.claims.length) {
+      view.appendChild(el('p', 'note', d.claims_note));
+    } else {
+      view.appendChild(table(
+        [{ label: 'claim' }, { label: 'when', cls: 'when' }, { label: 'ETH', cls: 'num' }],
+        d.claims.map(function (c) {
+          return [
+            { node: txLink(c.txHash), cls: 'hash' },
+            { text: stamp(c.at), cls: 'when' },
+            { text: c.eth, cls: 'num' },
+          ];
+        })
+      ));
+    }
+
+    view.appendChild(el('h2', null, 'the declared split, computed from that'));
+    view.appendChild(row('BLOCK ZERO ' + d.split.block_zero_pct + '%', d.split.block_zero_eth + ' ETH'));
+    view.appendChild(row('ecosystem ' + d.split.ecosystem_pct + '%', d.split.ecosystem_eth + ' ETH'));
+    view.appendChild(row('the build ' + d.split.build_pct + '%', d.split.build_eth + ' ETH'));
+
+    view.appendChild(el('h2', null, 'BLOCK ZERO'));
+    view.appendChild(row('paid to date', d.block_zero.paid_eth + ' ETH'));
+    view.appendChild(row('owed now', d.block_zero.owed_eth + ' ETH'));
+    if (d.block_zero.payouts.length) {
+      view.appendChild(table(
+        [{ label: 'payout' }, { label: 'when', cls: 'when' }, { label: 'ETH', cls: 'num' }],
+        d.block_zero.payouts.map(function (p) {
+          return [
+            { node: txLink(p.txHash), cls: 'hash' },
+            { text: stamp(p.at), cls: 'when' },
+            { text: p.eth, cls: 'num' },
+          ];
+        })
+      ));
+    } else {
+      view.appendChild(el('p', 'note', 'no payout has gone out yet.'));
+    }
+  }
+
+  function footerStamp(d) {
+    var parts = [];
+    if (d.as_of && d.as_of.block !== null && d.as_of.block !== undefined) {
+      parts.push('block ' + d.as_of.block.toLocaleString('en-US'));
+    }
+    if (d.as_of && d.as_of.time) {
+      parts.push(d.as_of.time.replace('T', ' ').slice(0, 19) + ' UTC');
+    }
+    asof.textContent = parts.length ? 'last updated ' + parts.join(', ') : '';
+  }
+
+  fetch(API, { headers: { accept: 'application/json' } })
+    .then(function (r) {
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return r.json();
+    })
+    .then(function (d) { render(d); footerStamp(d); })
+    .catch(function (err) {
+      view.className = 'empty';
+      view.textContent = 'the figures could not be read just now. ' + String(err.message || err);
+    });
+})();
+</script>
+</body>
+</html>

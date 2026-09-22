@@ -3,7 +3,7 @@ import { callerOf, consume, RATES } from './auth.js';
 import { openapiDocument } from './openapi.js';
 import {
   getLaunch, postLaunches, getStats, getHealth, lagRefusal,
-  validateAddress, validateBatch,
+  validateAddress, validateBatch, getRevenue,
 } from './handlers.js';
 import { API_VERSION } from './types.js';
 
@@ -137,6 +137,13 @@ export async function handle(req: IncomingMessage, res: ServerResponse): Promise
     }
     if (route === '/stats' && req.method === 'GET') {
       const out = getStats();
+      send(res, out.status, out.body, { ...rateHeaders, ...out.headers });
+      return;
+    }
+    // Public, cached a minute, and never refused for index lag: it answers
+    // from the ledger and the fee wallet, neither of which the indexer feeds.
+    if (route === '/revenue' && req.method === 'GET') {
+      const out = await getRevenue();
       send(res, out.status, out.body, { ...rateHeaders, ...out.headers });
       return;
     }
