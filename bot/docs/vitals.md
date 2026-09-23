@@ -63,9 +63,9 @@ dev buy: 5% of supply, held by the deployer wallet, 2% team and 3% partnerships,
 tax-free at launch: the deployer only
 creator tax: 400 bps
 tax split: 10% the room, 10% ecosystem, 80% the build, treasury rules as declared
-the room: 50 seats. the room is owed 10% of the fee wallet's cumulative gross income, paid daily in ETH for 30 days by shares (T1 5, T2 2, T3 1), every payout printed before it leaves and recorded with its hash. a seat is given by the deployer, its tier is fixed when taken and reviewed once after the 30 days. a seat given up is reused and both occupants stay in the history. 10% of gross income goes to ecosystem integrations, 80% to the build.
+the room: BLOCK ZERO is 3 seats today, the deployer and two others, who say they are crew whenever they post. the room is owed 10% of the fee wallet's cumulative gross income, paid daily in ETH for 30 days, split equally between the seats held that day, every payout printed before it leaves and recorded with its hash. seats are added after launch on what people actually did, given by the deployer, never sold and never given for a payment. when a seat is added the split is recomputed from that day's payout forward and printed with it. a seat given up is reused and both occupants stay in the history. 10% of gross income goes to ecosystem integrations, 80% to the build: development, infrastructure, integrations and the dev's pay.
 holder fee share is off at launch. the token is access, not yield: 250k = watch, 1M = the holder feed, 10M = desk.
-nothing changes in the first 10 days. the room reviews it with holders on 5 oct. any change is announced 7 days ahead.
+nothing changes in the first 10 days. the room reviews it with holders on 9 oct. any change is announced 7 days ahead.
 docs: https://checkvitals.xyz/declared/001
 nonce: <issued by the bot>
 ```
@@ -76,12 +76,15 @@ whether the chain agreed with it.
 
 ### The room
 
-Fifty seats. That is the whole room and the number does not move.
+Three seats today: the deployer and two others, who say they are crew whenever
+they post. Seats are added after the launch, on what people actually did. The
+10% is split equally between the seats held that day, and when a seat is added
+the split is recomputed from that day's payout forward and printed with it.
 
 - **The CA goes into the room at T+3s**, after the opening tax window has
   closed. Not before. The window is the three seconds the protocol charges a
-  snipe tax for, and posting the address inside it would be handing fifty
-  people a tax bill.
+  snipe tax for, and posting the address inside it would be handing the room a
+  tax bill.
 - **The dev buy is the team allocation and is declared as one.** 5% of supply,
   held by the deployer wallet, 2% team and 3% partnerships, vesting contracts
   in october, nothing distributed at launch. There is no separate team tokens
@@ -90,6 +93,10 @@ Fifty seats. That is the whole room and the number does not move.
   beyond the deployer, which the protocol exempts on its own. Nobody in the
   room buys tax free, and the launch transaction is where that is checked
   rather than promised.
+- **Every seat is paid the same.** The tier a seat carries is a label on the
+  roster. It does not decide money, and a run whose table would divide the
+  10% by any rule other than the one signed above is refused before it is
+  paid.
 - **Seat numbers are public. Names are not.** The roster the room sees carries
   seat numbers and tiers. It carries no handle, no wallet and no user id, and
   the public payout post carries transaction hashes without handles.
@@ -102,16 +109,16 @@ share says what a seat is owed. The holder fee share says what holding the
 token is owed, and the answer is nothing.
 
 ```
-the room: 50 seats. the room is owed 10% of the fee wallet's cumulative gross income, paid daily in ETH for 30 days by shares (T1 5, T2 2, T3 1), every payout printed before it leaves and recorded with its hash. a seat is given by the deployer, its tier is fixed when taken and reviewed once after the 30 days. a seat given up is reused and both occupants stay in the history. 10% of gross income goes to ecosystem integrations, 80% to the build.
+the room: BLOCK ZERO is 3 seats today, the deployer and two others, who say they are crew whenever they post. the room is owed 10% of the fee wallet's cumulative gross income, paid daily in ETH for 30 days, split equally between the seats held that day, every payout printed before it leaves and recorded with its hash. seats are added after launch on what people actually did, given by the deployer, never sold and never given for a payment. when a seat is added the split is recomputed from that day's payout forward and printed with it. a seat given up is reused and both occupants stay in the history. 10% of gross income goes to ecosystem integrations, 80% to the build: development, infrastructure, integrations and the dev's pay.
 holder fee share is off at launch. the token is access, not yield: 250k = watch, 1M = the holder feed, 10M = desk.
-nothing changes in the first 10 days. the room reviews it with holders on 5 oct. any change is announced 7 days ahead.
+nothing changes in the first 10 days. the room reviews it with holders on 9 oct. any change is announced 7 days ahead.
 ```
 
 The token is access, not yield. That is stated before the launch rather than
 explained after it, because a token that pays holders a share of fees and a
 token that opens a tool are different things and the difference is worth
 knowing on the day rather than a month later. The three tiers are what
-`/tiers` reads and what the holder checks gate on today. The 5 oct review is a
+`/tiers` reads and what the holder checks gate on today. The 9 oct review is a
 date, and any change to it is announced seven days ahead, which is the part
 that can be held against us.
 

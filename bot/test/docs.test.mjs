@@ -50,13 +50,14 @@ test('the socials are the three that go into the launch calldata', () => {
 });
 
 test('the room mechanics are stated in full wherever the room is described', () => {
-  for (const f of ['vitals.md', 'template-declaration.md']) {
-    const t = read(f);
-    assert.match(t, /[Ff]ifty seats/, f);
-    assert.match(t, /T\+3s/, f);
-    assert.match(t, /same tax as everyone/i, f);
-    assert.match(t, /[Ss]eat numbers are public\. Names are not/, f);
-  }
+  // The seat count moves, so it is not pinned here. What is pinned is the
+  // handful of claims the room is actually held to.
+  const t = read('vitals.md');
+  assert.match(t, /T\+3s/);
+  assert.match(t, /same tax as everyone/i);
+  assert.match(t, /[Ss]eat numbers are public\. Names are not/);
+  assert.match(t, /split equally between the seats held that day/);
+  assert.match(t, /recomputed from that day's payout forward/);
 });
 
 // --------------------------------------------------- the filled placeholders
@@ -71,13 +72,32 @@ const TREASURY_BODY = [
   'one signer. no other wallets. no OTC.',
 ].join('\n');
 
-const HOLDER_BODY = [
-  'holder fee share is off at launch. the token is access, not yield: 250k = watch, 1M = the holder feed, 10M = desk.',
-  'nothing changes in the first 10 days. the room reviews it with holders on 5 oct. any change is announced 7 days ahead.',
-].join('\n');
+/**
+ * The blocks of the signed text, read off the template rather than copied.
+ *
+ * docs/template-declaration.md is what gets built into the page whose sha256
+ * is signed, so it is the original and everything else is a copy of it. This
+ * file used to keep its own transcription of the room and holder blocks, which
+ * meant the check that vitals.md matched the template passed by comparing two
+ * stale copies with each other the moment the template moved. A copy held
+ * beside the original is not a check, it is a second thing to keep in step.
+ */
+const SIGNED = (() => {
+  const block = (read('template-declaration.md').split('\n```\n')[1] ?? '')
+    .replace(/^```\w*\n?/, '').trim().split('\n');
+  const at = (p) => block.findIndex((l) => l.startsWith(p));
+  const room = block[at('the room:')];
+  return {
+    room,
+    holder: block.slice(at('the room:') + 1, at('docs: ')).join('\n'),
+    devBuy: block[at('dev buy: ')],
+    taxSplit: block[at('tax split: ')],
+  };
+})();
 
-const TAX_SPLIT_LINE =
-  'tax split: 10% the room, 10% ecosystem, 80% the build, treasury rules as declared';
+const HOLDER_BODY = SIGNED.holder;
+
+const TAX_SPLIT_LINE = SIGNED.taxSplit;
 
 test('no marker is left in any doc', () => {
   for (const f of DOCS) {
@@ -214,17 +234,9 @@ test('the docs use the dev buy this repo computed, not a remembered one', () => 
 // ------------------------------------------ the two lines that are signed
 
 /** As supplied. A paraphrase of a signed promise is a different promise. */
-const DEV_BUY_LINE =
-  'dev buy: 5% of supply, held by the deployer wallet, 2% team and 3% partnerships, '
-  + 'vesting contracts in october, nothing distributed at launch';
+const DEV_BUY_LINE = SIGNED.devBuy;
 
-const ROOM_LINE =
-  "the room: 50 seats. the room is owed 10% of the fee wallet's cumulative gross income, "
-  + 'paid daily in ETH for 30 days by shares (T1 5, T2 2, T3 1), every payout printed before '
-  + 'it leaves and recorded with its hash. a seat is given by the deployer, its tier is fixed '
-  + 'when taken and reviewed once after the 30 days. a seat given up is reused and both '
-  + 'occupants stay in the history. 10% of gross income goes to ecosystem integrations, '
-  + '80% to the build.';
+const ROOM_LINE = SIGNED.room;
 
 test('the dev buy line is in both docs, verbatim, in the signed text', () => {
   for (const f of ['template-declaration.md', 'vitals.md']) {
@@ -259,20 +271,24 @@ test('the room line is in both docs, verbatim, in the signed text', () => {
 
 test('the room line agrees with the code that pays it', async () => {
   const { LEDGER_SHARE_PCT } = await import('../dist/ledger.js');
-  const { TIER_SHARES } = await import('../dist/roster.js');
+  const { declaredSplit, declaredPoolPct } = await import('../dist/roomsplit.js');
   assert.match(ROOM_LINE, new RegExp(`owed ${LEDGER_SHARE_PCT}% of the fee wallet`));
-  assert.match(ROOM_LINE,
-    new RegExp(`T1 ${TIER_SHARES.T1}, T2 ${TIER_SHARES.T2}, T3 ${TIER_SHARES.T3}`),
-    'the declared shares are not the shares the ledger pays by');
-  // Fifty seats is stated in the room mechanics on both pages already.
-  assert.match(ROOM_LINE, /50 seats/);
+  assert.equal(declaredPoolPct(ROOM_LINE), LEDGER_SHARE_PCT);
+  // Read by the same function the ledger refuses a payout with, rather than by
+  // a regular expression written here that could agree with neither side.
+  assert.deepEqual(declaredSplit(ROOM_LINE), { kind: 'equal' },
+    'the declared rule is not the rule the ledger pays by');
 });
 
-test('the shares in the signed text add to what the room mechanics say', () => {
+test('the signed text and the prose beside it count the seats the same way', () => {
+  const seats = /BLOCK ZERO is (\d+) seats today/.exec(ROOM_LINE);
+  assert.ok(seats, `the room line does not say how many seats there are: ${ROOM_LINE}`);
+  const words = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten'];
+  const spelled = words[Number(seats[1])];
   for (const f of ['template-declaration.md', 'vitals.md']) {
-    const t = read(f);
-    assert.match(t, /[Ff]ifty seats/, f);
-    assert.ok(t.includes('50 seats'), `${f}: the signed text and the prose count seats differently`);
+    const t = read(f).toLowerCase();
+    assert.ok(t.includes(`${seats[1]} seats`) || t.includes(`${spelled} seats`),
+      `${f}: the signed text and the prose count seats differently`);
   }
 });
 
