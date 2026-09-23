@@ -107,7 +107,7 @@ import { marketSnapshot, resetMarketFor, MARKET_BUDGET_MS, type MarketSnapshot }
 import { indexOneCurve } from './indexer/trades.js';
 import {
   startDraft, answerDraft, draftOpen, clearDraft, signDraft, recentDeclarations,
-  STEPS, DECLARE_PRICE, DECLARE_FREE_UNTIL, declarationCount,
+  STEPS, DECLARE_PRICE, DECLARE_FREE_UNTIL, declarationCount, rejectionText, signPrompt,
   declarationLink, declarationOutcome, shortWallet, byId,
 } from './declare.js';
 import { renderDeclarationPng } from './image.js';
@@ -3384,7 +3384,7 @@ export function createBot(token = TELEGRAM_BOT_TOKEN): Bot {
     if (userId !== undefined && draftOpen(userId)) {
       const res = answerDraft(userId, text);
       if (res.state === 'rejected') {
-        await ctx.reply(`${res.error}.\n\n${res.step + 1} of ${STEPS.length}. ${res.prompt}`);
+        await ctx.reply(rejectionText(res));
         return;
       }
       if (res.state === 'asked') {
@@ -3397,17 +3397,11 @@ export function createBot(token = TELEGRAM_BOT_TOKEN): Bot {
         // does not answer adds no line: signing is not blocked on a web server.
         const pinned = await pinDocsHash(userId);
         const canonical = pinned?.canonical ?? res.canonical;
-        await ctx.reply([
-          'sign this exact text with the deployer wallet:',
-          '',
-          canonical,
-          '',
-          pinned?.hash
-            ? 'the docs line is pinned to the page as it is right now. change the page after signing and the card says so.'
-            : 'the docs page could not be read, so there is no hash line. the link is signed, its contents are not.',
-          '',
-          'then send: /declare sign <signature>',
-        ].join('\n'), { link_preview_options: { is_disabled: true } });
+        // In parts when it does not fit, never clamped. The text being signed
+        // is the one thing on this bot that may not arrive abbreviated.
+        for (const part of signPrompt(canonical, pinned?.hash ?? null)) {
+          await ctx.reply(part, { link_preview_options: { is_disabled: true } });
+        }
         return;
       }
     }

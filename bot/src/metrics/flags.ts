@@ -1,7 +1,7 @@
 import { db, normaliseKey } from '../db.js';
 import { collisionKeys, countCollisions, collisionSymbols, MIN_COLLISION_MATCHES } from '../collision.js';
 import { isNativePair } from '../reads.js';
-import { clamp, MAX_TICKER, MAX_SAMPLE } from '../text.js';
+import { clamp, clampWords, MAX_TICKER, MAX_SAMPLE } from '../text.js';
 import { indexCoverage, coverageReason } from '../coverage.js';
 import {
   concentrationThreshold,
@@ -960,7 +960,11 @@ export function computeFlags(opts: {
   if (declaration) {
     const attach = (key: string, line: string) => {
       const f = flags.find((x) => x.key === key);
-      if (f) f.declared = clamp(line, MAX_DECLARED_LINE);
+      // Word boundary, and marked as cut. A declared line that runs out of
+      // room mid sentence used to keep whatever punctuation the knife landed
+      // on, so "80% to the build: development, ..." rendered as
+      // "80% to the build:", which reads as the whole of what was declared.
+      if (f) f.declared = clampWords(line, MAX_DECLARED_LINE);
     };
     const others = declaration.exemptCount - 1;
     attach('snipe_exemptions', others === 0
@@ -1030,7 +1034,7 @@ export function computeFlags(opts: {
       // already about what the creator has tied up, and there is no vesting
       // check of its own to hang it under: nothing on chain states a team
       // allocation, which is exactly why a creator saying so is worth a line.
-      declared: declaration ? clamp(`declared: ${declaration.vesting}`, MAX_DECLARED_LINE) : null,
+      declared: declaration ? clampWords(`declared: ${declaration.vesting}`, MAX_DECLARED_LINE) : null,
     },
     worst,
     snipeExemptionCount: exCount,

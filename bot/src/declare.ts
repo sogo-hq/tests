@@ -1,5 +1,6 @@
 import { recoverMessageAddress, isAddress, getAddress, type Hex } from 'viem';
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
+import { splitVerbatim, TELEGRAM_MAX_MESSAGE } from './text.js';
 import { db } from './db.js';
 import { client } from './chain.js';
 import { effectiveTier, atLeast, vitalsBalance, tierForBalance } from './tiers.js';
@@ -37,17 +38,27 @@ export const DECLARE_FREE_UNTIL = (() => {
  */
 const EM_DASH = String.fromCharCode(0x2014);
 
-/** Free text fields are bounded so the canonical text stays a readable page. */
-export const MAX_FREE_TEXT = 120;
-
 /**
- * The two optional blocks are longer than a field and shorter than a page.
+ * Every free text field is bounded, and bounded the same way.
  *
- * A room's terms or a fee-share policy does not fit in 120 characters and is
- * not worth signing if it has to be abbreviated into a slogan. Bounded anyway:
- * what is signed has to stay readable by the person signing it.
+ * A room's terms or a fee-share policy does not fit in a slogan and is not
+ * worth signing if it has to be abbreviated into one. Bounded anyway: what is
+ * signed has to stay readable by the person signing it.
  */
 export const MAX_BLOCK_TEXT = 700;
+
+/**
+ * The single-line fields used to stop at 120 characters.
+ *
+ * That was below what the form asks for. The vesting question asks who the dev
+ * buy is for, when it vests and what moves at launch, which is three clauses,
+ * and 120 characters refuses a straight answer to it. A cap that rejects the
+ * answer its own prompt requested is not a cap, it is a trap: the rejection
+ * re-asks, the next message lands in the slot the rejected one was meant for,
+ * and everything after it is one step out. Same bound as a block now, so the
+ * only reason to be refused is writing more than fits on a page.
+ */
+export const MAX_FREE_TEXT = MAX_BLOCK_TEXT;
 
 /** Each "declared:" line on a card, so it cannot push a finding off it. */
 export const MAX_DECLARED_LINE = 59;
@@ -105,19 +116,49 @@ export interface Step {
   parse(input: string, sofar?: Record<string, unknown>): { ok: true; value: unknown } | { ok: false; error: string };
 }
 
-function parseAddressList(input: string): { ok: true; value: string[] } | { ok: false; error: string } {
+/**
+ * The wallets exempt BESIDES the deployer.
+ *
+ * The deployer is exempt by the protocol, is counted separately everywhere it
+ * is counted, and is the address a creator is most likely to paste here,
+ * because the question is about exemptions and theirs is the one they know.
+ * Naming it used to put it in the list as well: the signed text then read
+ * "the deployer and 1 other" above the deployer's own address, and the count
+ * signed was 2 against a chain that would show 1. So it is taken out here,
+ * where the answer is read, rather than explained away later.
+ */
+function parseAddressList(
+  input: string, sofar?: Record<string, unknown>,
+): { ok: true; value: string[] } | { ok: false; error: string } {
   const t = input.trim();
+  const deployer = typeof sofar?.deployer === 'string' ? sofar.deployer.toLowerCase() : null;
   if (/^(dev wallet only|deployer only|none|just the dev|just me)$/i.test(t)) return { ok: true, value: [] };
+  // An empty answer is not an answer. It used to mean "no exemptions", which
+  // is a claim about the launch made by somebody who typed nothing.
+  if (!t) return { ok: false, error: 'addresses, or say: dev wallet only' };
   const found = t.split(/[\s,;]+/).filter(Boolean);
   const out: string[] = [];
   for (const raw of found) {
     if (!isAddress(raw)) return { ok: false, error: `not an address: ${raw.slice(0, 24)}` };
     const a = getAddress(raw).toLowerCase();
+    if (a === deployer) continue;
     if (!out.includes(a)) out.push(a);
   }
   // The protocol caps exemptions at 32, the deployer among them.
   if (out.length > 31) return { ok: false, error: 'more wallets than the curve can exempt' };
   return { ok: true, value: out };
+}
+
+/** The list with the deployer taken out, wherever it is read from. */
+export function othersThanDeployer(deployer: string, list: string[]): string[] {
+  const d = deployer.toLowerCase();
+  const out: string[] = [];
+  for (const w of list) {
+    const a = String(w).toLowerCase();
+    if (a === d || out.includes(a)) continue;
+    out.push(a);
+  }
+  return out;
 }
 
 /**
@@ -133,8 +174,21 @@ const NOTHING_ALLOCATED =
 function parseFreeText(input: string): { ok: true; value: string } | { ok: false; error: string } {
   const t = input.trim().replace(/\s+/g, ' ');
   if (!t) return { ok: false, error: 'say something, or say none' };
-  if (t.length > MAX_FREE_TEXT) return { ok: false, error: `${t.length} characters, keep it under ${MAX_FREE_TEXT}` };
+  if (t.length > MAX_FREE_TEXT) return { ok: false, error: tooLong(t.length, MAX_FREE_TEXT) };
   return { ok: true, value: withoutEmDash(t) };
+}
+
+/**
+ * How far over, not just that it is over.
+ *
+ * The old message named the length and the limit and left the subtraction to
+ * somebody halfway through a form. Given the number to cut, a person cuts
+ * exactly that much off the end, which is what happened to the last clause of
+ * a room block: 736 characters, 36 over, and the clause deleted to fit was 62.
+ * Nothing shortened it; the bound did, through the person holding the keyboard.
+ */
+function tooLong(length: number, max: number): string {
+  return `${length} characters, ${length - max} over. keep it under ${max}`;
 }
 
 /**
@@ -160,9 +214,7 @@ function parseBlock(input: string): { ok: true; value: string } | { ok: false; e
   // Blank, or an explicit skip. Both mean the line is left out entirely, which
   // is not the same as declaring it empty.
   if (!t || /^(skip|none|no|n\/?a|nothing)\.?$/i.test(t)) return { ok: true, value: '' };
-  if (t.length > MAX_BLOCK_TEXT) {
-    return { ok: false, error: `${t.length} characters, keep it under ${MAX_BLOCK_TEXT}` };
-  }
+  if (t.length > MAX_BLOCK_TEXT) return { ok: false, error: tooLong(t.length, MAX_BLOCK_TEXT) };
   return { ok: true, value: withoutEmDash(t) };
 }
 
@@ -180,7 +232,12 @@ export const STEPS: Step[] = [
     key: 'devBuy',
     prompt: 'the buy you plan to make yourself, as a percentage of supply. 0 if none.',
     parse: (input) => {
-      const n = Number(input.trim().replace(/%$/, ''));
+      // Spelled out rather than handed to Number, which reads '' and '  ' as
+      // zero and '0x10' as sixteen. A blank message must never become a
+      // declared dev buy of 0% of supply.
+      const t = input.trim().replace(/\s*%$/, '');
+      if (!/^\d{1,3}(\.\d{1,4})?$/.test(t)) return { ok: false, error: 'a percentage between 0 and 100, digits only' };
+      const n = Number(t);
       if (!Number.isFinite(n) || n < 0 || n > 100) return { ok: false, error: 'a percentage between 0 and 100' };
       return { ok: true, value: Math.round(n * 100) / 100 };
     },
@@ -197,11 +254,36 @@ export const STEPS: Step[] = [
       + 'example: 400, half to the artist and half to the treasury',
     parse: (input) => {
       const t = input.trim();
-      const m = /^(\d{1,5})\s*(?:bps?)?\s*[,.:]?\s*([\s\S]*)$/i.exec(t);
+      const m = /^(\d{1,5})\s*(bps?\b|%)?\s*[,.:]?\s*([\s\S]*)$/i.exec(t);
       if (!m) return { ok: false, error: 'start with the number of basis points' };
+      // A leading percentage is not a rate in basis points, and reading it as
+      // one both changes the figure and eats a digit: "10% the room, 10%
+      // ecosystem" was read as 10 bps with a split of "% the room, ...". The
+      // conversion is obvious and is still refused, because guessing which unit
+      // somebody meant is guessing at the number they are about to sign.
+      if (m[2] === '%') {
+        return {
+          ok: false,
+          error: `basis points, not a percentage. ${m[1]}% is ${Number(m[1]) * 100} bps, `
+            + 'and this question wants the creator tax, not the split',
+        };
+      }
       const bps = Number(m[1]);
       if (!Number.isFinite(bps) || bps > 10_000) return { ok: false, error: 'basis points, 0 to 10000' };
-      const rest = parseFreeText(m[2] || 'not stated');
+      // A bare number used to be accepted, with the words "not stated" put in
+      // where the split should be, and the form moved on. Two things went
+      // wrong at once: a phrase nobody typed went into a text somebody signed,
+      // and the split they typed next landed in the following answer, which
+      // put it on the dev buy line. The form asks two things and it takes two.
+      if (!m[3]!.trim()) {
+        return {
+          ok: false,
+          error: `${bps} bps is the rate, and this question also asks where it goes. `
+            + 'say both on one line, for example: 400, 10% the room, 10% ecosystem, '
+            + '80% the build. if none of it is taken, say that in words',
+        };
+      }
+      const rest = parseFreeText(m[3]!);
       if (!rest.ok) return rest;
       return { ok: true, value: { bps, split: rest.value } };
     },
@@ -312,8 +394,19 @@ export function startDraft(userId: number, now = Date.now(), nonce = randomNonce
   return STEPS[0]!.prompt;
 }
 
+/**
+ * The replay guard, from the system generator rather than from Math.random.
+ *
+ * The nonce is the only thing stopping a signature taken for one declaration
+ * being presented for another, so it is the one field in the form whose value
+ * an adversary must not be able to predict. Math.random is seeded per process
+ * and is not built to resist anyone; eight base-36 characters of it is roughly
+ * forty bits, from a generator that never claimed to be unguessable. Sixteen
+ * hex characters from randomBytes is sixty-four bits that were never a
+ * sequence.
+ */
 function randomNonce(): string {
-  return Math.random().toString(36).slice(2, 10);
+  return randomBytes(8).toString('hex');
 }
 
 export type AnswerResult =
@@ -346,10 +439,13 @@ export function answerDraft(userId: number, input: string): AnswerResult {
 
 function answersOf(d: Draft): DeclarationAnswers {
   const tax = d.answers.tax as { bps: number; split: string };
+  const deployer = d.answers.deployer as string;
   return {
-    deployer: d.answers.deployer as string,
+    deployer,
     devBuyPct: d.answers.devBuy as number,
-    exemptList: d.answers.exemptions as string[],
+    // Cleaned here as well as at the answer, so a draft started before the
+    // deployer was taken out of this list cannot be finished with it still in.
+    exemptList: othersThanDeployer(deployer, (d.answers.exemptions as string[]) ?? []),
     creatorTaxBps: tax.bps,
     taxSplit: tax.split,
     vesting: d.answers.vesting as string,
@@ -358,6 +454,56 @@ function answersOf(d: Draft): DeclarationAnswers {
     docsUrl: d.answers.docs as string,
     docsSha256: (d.answers.docsSha256 as string) ?? '',
   };
+}
+
+/**
+ * What a rejected answer looks like to the person who sent it.
+ *
+ * The old reply put the reason above the question and nothing else, which
+ * reads as a note attached to a prompt rather than as "that message is gone".
+ * A form that re-asks quietly is how an answer ends up one slot along: the
+ * creator reads a question, believes the last one was taken, and sends the
+ * next thing they had ready. So the rejection says it was not recorded, says
+ * which question is still open, and asks that one again.
+ */
+export function rejectionText(res: { error: string; prompt: string; step: number }): string {
+  return [
+    `not recorded: ${res.error}.`,
+    '',
+    `nothing was saved for question ${res.step + 1}. it is still open, and this is`,
+    'the answer i am waiting for. send it again.',
+    '',
+    `${res.step + 1} of ${STEPS.length}. ${res.prompt}`,
+  ].join('\n');
+}
+
+/**
+ * The pre-sign review, in as many messages as it takes.
+ *
+ * The canonical text is the thing being signed, so it is never clamped and
+ * never shortened: a declaration that arrives one ellipsis short of what the
+ * wallet will be asked for is worse than one that arrives in two messages.
+ * Under the limit this is one message and reads exactly as it always did.
+ */
+export function signPrompt(
+  canonical: string, pinnedHash: string | null, max = TELEGRAM_MAX_MESSAGE,
+): string[] {
+  const note = pinnedHash
+    ? 'the docs line is pinned to the page as it is right now. change the page after signing and the card says so.'
+    : 'the docs page could not be read, so there is no hash line. the link is signed, its contents are not.';
+  const head = 'sign this exact text with the deployer wallet:';
+  const tail = ['then send: /declare sign <signature>'];
+  const whole = [head, '', canonical, '', note, '', ...tail].join('\n');
+  if (whole.length <= max) return [whole];
+
+  const parts = splitVerbatim(canonical, max);
+  return [
+    `${head}\n\nit is longer than one message, so it follows in ${parts.length} parts. `
+      + 'sign the parts joined back together with a newline between them, in order, '
+      + 'and nothing else.',
+    ...parts,
+    [note, '', ...tail].join('\n'),
+  ];
 }
 
 /** The answers of a finished form, for the signing step. */
@@ -369,9 +515,16 @@ export function draftAnswers(userId: number): { answers: DeclarationAnswers; non
 
 // ------------------------------------------------------------- the signature
 
-/** The count the curve will emit: the wallets named, plus the deployer. */
+/**
+ * The count the curve will emit: the wallets named, plus the deployer.
+ *
+ * The deployer is added once, here, so it has to be absent from the list. The
+ * form takes it out at the answer; this takes it out again, because a draft
+ * written before that fix is still a draft somebody can finish, and a count
+ * that is wrong by one is a declaration disagreeing with the chain.
+ */
 export function declaredExemptCount(a: DeclarationAnswers): number {
-  return a.exemptList.length + 1;
+  return othersThanDeployer(a.deployer, a.exemptList).length + 1;
 }
 
 /**
@@ -383,10 +536,14 @@ export function declaredExemptCount(a: DeclarationAnswers): number {
  * rebuild the string the same way.
  */
 export function canonicalText(a: DeclarationAnswers, nonce: string): string {
-  const others = a.exemptList.length;
+  const exempt = othersThanDeployer(a.deployer, a.exemptList);
+  const others = exempt.length;
   return [
     'vitals declaration',
-    `deployer: ${a.deployer}`,
+    // Checksummed, which is how the address appears on the declaration page and
+    // how a wallet shows it back to the person signing. A lowercase address is
+    // forty characters nobody can check by eye; the mixed case IS the checksum.
+    `deployer: ${getAddress(a.deployer)}`,
     // One line, not two. It used to say "dev buy: 5% of supply" here and
     // "team tokens: none" four lines down, and both were signed: the first is
     // true, the second is false, and the second is false BECAUSE of the first.
@@ -395,7 +552,7 @@ export function canonicalText(a: DeclarationAnswers, nonce: string): string {
     others === 0
       ? 'tax-free at launch: the deployer only'
       : `tax-free at launch: the deployer and ${others} other${others === 1 ? '' : 's'}`,
-    ...a.exemptList.map((w) => `  ${w}`),
+    ...exempt.map((w) => `  ${w}`),
     `creator tax: ${a.creatorTaxBps} bps`,
     `tax split: ${a.taxSplit}`,
     // Optional, and omitted rather than emitted empty. A declaration that

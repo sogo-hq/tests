@@ -88,8 +88,12 @@ test('free text is bounded and carries no em dash', () => {
   D.answerDraft(u, DEPLOYER);
   D.answerDraft(u, '2.5');
   D.answerDraft(u, 'dev wallet only');
-  const long = D.answerDraft(u, `400, ${'x'.repeat(200)}`);
+  // Bounded at the block bound, not below it: the old 120 was under what the
+  // form's own questions ask for.
+  assert.equal(D.MAX_FREE_TEXT, D.MAX_BLOCK_TEXT);
+  const long = D.answerDraft(u, `400, ${'x'.repeat(D.MAX_FREE_TEXT + 1)}`);
   assert.equal(long.state, 'rejected');
+  assert.equal(long.step, 3, 'a rejected answer must not advance the form');
   D.answerDraft(u, '400, half to the artist');
   const dash = D.answerDraft(u, `held by the deployer ${String.fromCharCode(0x2014)} vesting in october`);
   assert.equal(dash.state, 'asked');

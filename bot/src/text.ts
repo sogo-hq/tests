@@ -20,6 +20,32 @@ export function clamp(s: string, max: number): string {
 }
 
 /**
+ * Clamp at a word boundary, and say that something was cut.
+ *
+ * `clamp` cuts at the code point the budget runs out on, which puts the knife
+ * in the middle of a word and keeps whatever punctuation happened to be there.
+ * On a card that produced "80% to the build:…", which reads as a declaration
+ * that ends in a colon rather than as a line with more behind it.
+ *
+ * So: back up to the last space, drop the punctuation that was holding the
+ * next clause on, and mark the cut with a space before the ellipsis so it
+ * cannot be mistaken for part of the sentence. The word boundary is skipped
+ * when backing up would throw away more than half the budget, because one
+ * very long token is better shown cut than shown as nothing.
+ */
+export function clampWords(s: string, max: number): string {
+  const t = [...String(s).trim()];
+  if (t.length <= max) return t.join('');
+  const mark = ' …';
+  const room = Math.max(1, max - mark.length);
+  const head = t.slice(0, room).join('');
+  const space = head.lastIndexOf(' ');
+  const cut = space > room / 2 ? head.slice(0, space) : head;
+  const tidy = cut.replace(/[\s,;:.!?-]+$/, '');
+  return `${tidy || cut || head}${mark}`;
+}
+
+/**
  * Last-resort guard on a rendered card.
  *
  * Drops whole lines from the body and always keeps the final one. Two reasons
@@ -117,4 +143,37 @@ export function splitMessage(text: string, max = TELEGRAM_MAX_MESSAGE): string[]
   }
   if (current) parts.push(current);
   return parts.length ? parts : [clampMessage(text, max)];
+}
+
+/**
+ * Split without losing a character.
+ *
+ * `splitMessage` clamps a single block that is longer than one message, which
+ * is the right last resort for /help and the wrong one for anything a person
+ * is about to sign: a declaration that arrives one ellipsis short of what the
+ * wallet will be asked to sign is worse than one that arrives in two messages.
+ *
+ * Breaks at line boundaries, so `parts.join('\n')` is the input again. The one
+ * exception is a single line longer than the limit, which is cut into pieces
+ * because it has nowhere else to go; nothing is dropped there either.
+ */
+export function splitVerbatim(text: string, max = TELEGRAM_MAX_MESSAGE): string[] {
+  if (text.length <= max) return [text];
+  const parts: string[] = [];
+  let cur: string | null = null;
+  for (const line of text.split('\n')) {
+    const candidate: string = cur === null ? line : `${cur}\n${line}`;
+    let held: string = candidate;
+    if (cur !== null && candidate.length > max) {
+      parts.push(cur);
+      held = line;
+    }
+    while (held.length > max) {
+      parts.push(held.slice(0, max));
+      held = held.slice(max);
+    }
+    cur = held;
+  }
+  if (cur) parts.push(cur);
+  return parts.length ? parts : [text];
 }
