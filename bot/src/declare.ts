@@ -44,8 +44,14 @@ const EM_DASH = String.fromCharCode(0x2014);
  * A room's terms or a fee-share policy does not fit in a slogan and is not
  * worth signing if it has to be abbreviated into one. Bounded anyway: what is
  * signed has to stay readable by the person signing it.
+ *
+ * It was 700, and the room block on the page being signed is 736. The bound
+ * refused it and named only the length, so the clause that came off the end to
+ * fit was the last 62 characters of what the room is actually owed. Nothing in
+ * the bot shortened it: the bound did, through the person holding the keyboard.
+ * A bound set below a real declaration is a bound that edits declarations.
  */
-export const MAX_BLOCK_TEXT = 700;
+export const MAX_BLOCK_TEXT = 1000;
 
 /**
  * The single-line fields used to stop at 120 characters.

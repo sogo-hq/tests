@@ -134,12 +134,15 @@ test('a rejection says it was not recorded, by how much, and which question is o
 });
 
 test('a block over the bound is refused rather than shortened, and says by how much', () => {
-  // The observed run: a 736 character room block, a bound of 700, and the 62
-  // character clause on the end gone from the signed text. Nothing in the bot
-  // shortened it. The bound refused it, and the person cut it to fit.
+  // The observed run: a 736 character room block against a bound of 700, and
+  // the 62 character clause on the end gone from the signed text. Nothing in
+  // the bot shortened it. The bound refused it and named only the length, and
+  // the person cut it to fit. The bound is 1000 now and it still refuses
+  // rather than shortening, which is the part that has to stay true.
   const tail = ": development, infrastructure, integrations and the dev's pay.";
-  const room = `the room: ${'x'.repeat(736 - 10 - tail.length)}${tail}`;
-  assert.equal(room.length, 736);
+  const over = D.MAX_BLOCK_TEXT + 36;
+  const room = `the room: ${'x'.repeat(over - 10 - tail.length)}${tail}`;
+  assert.equal(room.length, over);
 
   const r = drive([
     DEPLOYER_001, '5', 'dev wallet only', '400, to the treasury',
@@ -147,7 +150,7 @@ test('a block over the bound is refused rather than shortened, and says by how m
   ]);
   const rej = last(r);
   assert.equal(rej.state, 'rejected', 'a block over the bound was accepted, so something shortened it');
-  assert.match(rej.error, /736 characters, 36 over/);
+  assert.match(rej.error, new RegExp(`${over} characters, 36 over`));
   assert.equal(rej.step, 5, 'the room question is still the open one');
 });
 
@@ -328,43 +331,101 @@ test('splitting verbatim never drops a line and never drops a character', () => 
  * site/declared/001.html, whose sha256 is signed. The form is the other way to
  * the same text. If they can drift, one of them is wrong at the moment of
  * signing and nothing else in this file would catch it.
+ *
+ * The eight answers are DERIVED from the template rather than written out here.
+ * The first version of this test carried its own copy of the room block, went
+ * green, and was proving convergence on a document nobody was signing: the
+ * template had moved and the test had not. A copy of the target held beside the
+ * target is not a check, it is a second thing to keep in step. So the only
+ * thing written down below is how a person reads each question off the
+ * document, and the assertion is that the form renders those answers back into
+ * the document, line for line.
  */
 const TEMPLATE = readFileSync('docs/template-declaration.md', 'utf8');
 const fenced = (n) => (TEMPLATE.split('\n```\n')[n * 2 - 1] ?? '').replace(/^```\w*\n?/, '').trim();
-
-const ROOM_001 =
-  "the room: 50 seats. the room is owed 10% of the fee wallet's cumulative gross income, "
-  + 'paid daily in ETH for 30 days by shares (T1 5, T2 2, T3 1), every payout printed before '
-  + 'it leaves and recorded with its hash. a seat is given by the deployer, its tier is fixed '
-  + 'when taken and reviewed once after the 30 days. a seat given up is reused and both '
-  + 'occupants stay in the history. 10% of gross income goes to ecosystem integrations, '
-  + '80% to the build.';
-
-const HOLDER_001 =
-  'holder fee share is off at launch. the token is access, not yield: 250k = watch, 1M = the holder feed, 10M = desk.\n'
-  + 'nothing changes in the first 10 days. the room reviews it with holders on 5 oct. any change is announced 7 days ahead.';
-
-const ANSWERS_001 = [
-  DEPLOYER_001,
-  '5',
-  'dev wallet only',
-  '400, 10% the room, 10% ecosystem, 80% the build, treasury rules as declared',
-  'held by the deployer wallet, 2% team and 3% partnerships, vesting contracts in october, '
-    + 'nothing distributed at launch',
-  ROOM_001,
-  HOLDER_001,
-  'https://checkvitals.xyz/declared/001',
-];
+const BLOCK = fenced(1);
 
 /** Only these two lines may differ: one is issued per draft, one is a hash. */
 const ISSUED = (l) => l.startsWith('nonce:') || l.startsWith('docs sha256:');
 
-test('the eight answers for DECLARED #001 produce the template, line for line', () => {
-  const r = drive(ANSWERS_001);
-  const done = last(r);
-  assert.equal(done.state, 'complete', JSON.stringify(done).slice(0, 300));
+/**
+ * What a person types into each of the eight questions, read off the document.
+ *
+ * Every field is taken from the line that declares it, so this cannot go stale.
+ * The tax answer is the one place two lines of the document become one answer,
+ * which is the shape of the question and the reason it could be half answered.
+ */
+function answersFromTemplate(block = BLOCK) {
+  const lines = block.split('\n');
+  const after = (prefix) => {
+    const line = lines.find((l) => l.startsWith(prefix));
+    assert.ok(line, `the template has no "${prefix}" line`);
+    return line.slice(prefix.length);
+  };
 
-  const wanted = fenced(1).split('\n').filter((l) => !ISSUED(l));
+  const devBuy = after('dev buy: ');
+  const m = /^(\d+(?:\.\d+)?)% of supply, ([\s\S]+)$/.exec(devBuy);
+  assert.ok(m, `the dev buy line is not shaped like an answer: ${devBuy}`);
+
+  const exempt = after('tax-free at launch: ');
+  assert.equal(exempt, 'the deployer only',
+    'this launch exempts more than the deployer, so the answer below is wrong');
+
+  // Everything between the tax split and the docs line is the two optional
+  // blocks. The room block is the line that names itself; the rest is the
+  // holder fee share, which is more than one line and stays more than one.
+  const between = lines.slice(
+    lines.findIndex((l) => l.startsWith('tax split: ')) + 1,
+    lines.findIndex((l) => l.startsWith('docs: ')),
+  );
+  const room = between.filter((l) => l.startsWith('the room:'));
+  const holder = between.filter((l) => !l.startsWith('the room:'));
+  assert.equal(room.length, 1, 'the room is not one line');
+  assert.ok(holder.length >= 1, 'the holder fee share block is missing');
+
+  return {
+    typed: [
+      after('deployer: '),
+      m[1],
+      'dev wallet only',
+      `${after('creator tax: ').replace(/ bps$/, '')}, ${after('tax split: ')}`,
+      m[2],
+      room[0],
+      holder.join('\n'),
+      after('docs: '),
+    ],
+    room: room[0],
+    holder: holder.join('\n'),
+  };
+}
+
+const T = answersFromTemplate();
+
+test('the answers read off the template are eight answers, and shaped like answers', () => {
+  assert.equal(T.typed.length, 8);
+  for (const [i, a] of T.typed.entries()) assert.ok(a && a.trim(), `answer ${i + 1} is empty`);
+  assert.match(T.typed[0], /^0x[0-9a-fA-F]{40}$/);
+  assert.match(T.typed[1], /^\d+(\.\d+)?$/);
+  assert.match(T.typed[3], /^\d{1,5}, \S/, 'the tax answer is not a rate followed by a split');
+  assert.match(T.typed[5], /^the room:/);
+  assert.match(T.typed[7], /^https:\/\//);
+});
+
+test('the bound admits the room block on the page being signed', () => {
+  // The bound was 700 and this is 736. A bound set below a real declaration is
+  // a bound that edits declarations, so it is checked against the real one.
+  assert.ok(T.room.length <= D.MAX_BLOCK_TEXT,
+    `the room block is ${T.room.length} characters and the bound is ${D.MAX_BLOCK_TEXT}`);
+  assert.ok(T.holder.length <= D.MAX_BLOCK_TEXT, `${T.holder.length} characters`);
+  // And the last clause of it, which is the part that went missing at 700.
+  assert.ok(T.room.endsWith('.'), T.room.slice(-40));
+});
+
+test('the eight answers for DECLARED #001 produce the template, line for line', () => {
+  const done = last(drive(T.typed));
+  assert.equal(done.state, 'complete', JSON.stringify(done).slice(0, 400));
+
+  const wanted = BLOCK.split('\n').filter((l) => !ISSUED(l));
   const got = done.canonical.split('\n').filter((l) => !ISSUED(l));
 
   // Line by line first, so a failure names the line rather than the page.
@@ -374,24 +435,31 @@ test('the eight answers for DECLARED #001 produce the template, line for line', 
   assert.equal(got.join('\n'), wanted.join('\n'));
 });
 
+test('the room block reaches the signed text with its last clause on it', () => {
+  const done = last(drive(T.typed));
+  const room = done.canonical.split('\n').find((l) => l.startsWith('the room:'));
+  assert.equal(room, T.room);
+  assert.equal(room.length, T.room.length, 'the room block was shortened on the way in');
+});
+
 test('the nonce line is the only issued line, and it is present', () => {
-  const done = last(drive(ANSWERS_001, { nonce: 'aabbccddeeff0011' }));
+  const done = last(drive(T.typed, { nonce: 'aabbccddeeff0011' }));
   const lines = done.canonical.split('\n');
   assert.equal(lines[lines.length - 1], 'nonce: aabbccddeeff0011');
   assert.equal(lines.filter(ISSUED).length, 1, 'the unpinned form has a docs sha256 line');
   // And the template's own placeholder is on the line this one replaces.
-  const tmpl = fenced(1).split('\n');
+  const tmpl = BLOCK.split('\n');
   assert.match(tmpl[tmpl.length - 1], /^nonce: /);
 });
 
 test('the docs sha256 is the second and last line allowed to differ', async () => {
-  const { user } = drive(ANSWERS_001);
+  const { user } = drive(T.typed);
   const body = '<!doctype html><title>001</title>';
   const pinned = await D.pinDocsHash(user, async () => ({
     ok: true, status: 200, bytes: new Uint8Array(Buffer.from(body, 'utf8')),
   }));
   const got = pinned.canonical.split('\n').filter((l) => !ISSUED(l));
-  assert.equal(got.join('\n'), fenced(1).split('\n').filter((l) => !ISSUED(l)).join('\n'));
+  assert.equal(got.join('\n'), BLOCK.split('\n').filter((l) => !ISSUED(l)).join('\n'));
   assert.ok(pinned.canonical.includes(`docs sha256: ${D.sha256Hex(body)}`));
 });
 
@@ -399,21 +467,66 @@ test('the deployer is signed the way the page prints it, checksummed', () => {
   // The page is byte frozen and its hash is signed. An address written one way
   // there and another way in the text the wallet signs is exactly the drift
   // this pair of tests exists to refuse.
-  const done = last(drive(ANSWERS_001));
-  assert.match(done.canonical, new RegExp(`^deployer: ${DEPLOYER_001}$`, 'm'));
+  const done = last(drive(T.typed));
+  assert.match(done.canonical, new RegExp(`^deployer: ${T.typed[0]}$`, 'm'));
+  assert.notEqual(T.typed[0], T.typed[0].toLowerCase(), 'the template prints it lowercase');
   // Typed in lowercase, signed checksummed: one address, one rendering.
-  const lower = last(drive([DEPLOYER_001.toLowerCase(), ...ANSWERS_001.slice(1)]));
+  const lower = last(drive([T.typed[0].toLowerCase(), ...T.typed.slice(1)]));
   assert.equal(lower.canonical, done.canonical);
 });
 
 test('the review of DECLARED #001 is one message, so nothing about it is split', () => {
-  const done = last(drive(ANSWERS_001));
+  const done = last(drive(T.typed));
   assert.equal(D.signPrompt(done.canonical, 'a'.repeat(64)).length, 1);
 });
 
 test('nothing in the produced text is a phrase the form supplied', () => {
-  const done = last(drive(ANSWERS_001));
+  const done = last(drive(T.typed));
   assert.ok(!done.canonical.includes('not stated'));
   assert.ok(!done.canonical.includes(EM_DASH));
   assert.ok(!done.canonical.includes('['), done.canonical);
+});
+
+// ------------------------------ the page is what the template builds
+
+/**
+ * The page and the signed text can only drift one way from here: the template
+ * edited and the page not rebuilt. The builder is run into a scratch file and
+ * the committed page is compared against it, never overwritten, because a check
+ * that destroys the thing it is checking is worse than no check at the moment
+ * somebody is about to sign its hash.
+ */
+test('build:declared reproduces the committed site/declared/001.html byte for byte', async () => {
+  const { execFileSync } = await import('node:child_process');
+  const { mkdtempSync, readFileSync: rf, writeFileSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+
+  const committed = rf('site/declared/001.html');
+  const before = D.sha256Hex(committed);
+
+  const out = join(mkdtempSync(join(tmpdir(), 'declared-')), '001.html');
+  const printed = execFileSync(process.execPath, ['scripts/build-declared-001.mjs', out], { encoding: 'utf8' });
+  const built = rf(out);
+
+  assert.deepEqual(built, committed,
+    'docs/template-declaration.md changed without site/declared/001.html being rebuilt');
+  // The builder prints the hash it produced. It is the hash that gets signed,
+  // so it is asserted against the committed bytes rather than read back off
+  // the file the builder just wrote.
+  assert.match(printed, new RegExp(`sha256 ${before}`));
+
+  // And the committed page is exactly as it was: the check did not touch it.
+  assert.equal(D.sha256Hex(rf('site/declared/001.html')), before);
+  writeFileSync(out, '');
+});
+
+test('the signed text on the page is the signed text the form builds', () => {
+  const page = readFileSync('site/declared/001.html', 'utf8');
+  const esc = (s) => s.split('&').join('&amp;').split('<').join('&lt;').split('>').join('&gt;');
+  const done = last(drive(T.typed));
+  for (const line of done.canonical.split('\n')) {
+    if (ISSUED(line)) continue;
+    assert.ok(page.includes(esc(line)), `the page is missing:\n  ${line}`);
+  }
 });

@@ -204,7 +204,12 @@ test('the page carries the signed text, the treasury, the holder block and the r
     const escaped = text.split('&').join('&amp;').split('<').join('&lt;').split('>').join('&gt;');
     assert.ok(PAGE.includes(escaped), `the page does not carry the ${what} block`);
   }
-  assert.ok(PAGE.includes(ROOM_LINE), 'the page does not carry the room line');
+  // The room line is repeated on the page under its own heading. Read off the
+  // template rather than from a copy kept here: a copy goes stale silently and
+  // then this passes against a room nobody declared.
+  const room = fenced(1).split('\n').find((l) => l.startsWith('the room:'));
+  assert.ok(room, 'the template has no room line');
+  assert.ok(PAGE.includes(room), 'the page does not carry the room line');
 });
 
 test('the page is self-contained: nothing is fetched to render it', () => {
@@ -255,41 +260,12 @@ test('the builder reproduces the page that is checked in', async () => {
 });
 
 // ------------------------------------------- DECLARED #001 through the form
-
-/** The answers DECLARED #001 gives, taken from the document itself. */
-const VESTING_001 =
-  'held by the deployer wallet, 2% team and 3% partnerships, vesting contracts in october, '
-  + 'nothing distributed at launch';
-const TAX_001 = '400, 10% the room, 10% ecosystem, 80% the build, treasury rules as declared';
-
-function walk001(u) {
-  D.clearDraft(u);
-  D.startDraft(u, NOW, 'nonce123');
-  return [DEPLOYER, '5', 'dev wallet only', TAX_001, VESTING_001, ROOM_LINE, HOLDER_BLOCK, DOCS]
-    .map((a) => D.answerDraft(u, a)).pop();
-}
-
-test('the form produces exactly the text the template says gets signed', () => {
-  // The whole point of the two optional fields: #001 signs through the same
-  // flow as anyone, so the document and the bot cannot disagree about what
-  // was signed.
-  const done = walk001(520);
-  assert.equal(done.state, 'complete');
-
-  const fromDocs = fenced(1).split('\n');
-  const produced = done.canonical.split('\n');
-
-  // Every line of the document's block, in order, allowing for the fields this
-  // walk answers differently: the deployer, and the nonce the bot issues.
-  const skip = (l) => l.startsWith('deployer:') || l.startsWith('nonce:') || l.startsWith('docs:');
-  const wanted = fromDocs.filter((l) => !skip(l));
-  let at = 0;
-  for (const line of wanted) {
-    const found = produced.indexOf(line, at);
-    assert.notEqual(found, -1, `the form cannot produce this line:\n  ${line}`);
-    at = found;
-  }
-});
+//
+// The walk that drives the whole form with #001's answers and compares the
+// result to the template lives in declare-repair.test.mjs, which derives those
+// answers from the template instead of keeping a copy of them. The copy that
+// used to be here went green against a room block the document no longer
+// carried, which is the failure a convergence test exists to make impossible.
 
 test('the template explains the one line it cannot print', () => {
   assert.match(TEMPLATE, /One line is missing from the block below/);
@@ -303,11 +279,3 @@ test('the page says the same thing, so nobody compares and finds a mismatch', ()
   assert.match(PAGE, /the hash of a page cannot be part\nof the page/);
 });
 
-test('the docs sha256 line is the only line the page does not carry', () => {
-  const done = walk001(521);
-  const escaped = (s) => s.split('&').join('&amp;').split('<').join('&lt;').split('>').join('&gt;');
-  for (const line of done.canonical.split('\n')) {
-    if (line.startsWith('nonce:') || line.startsWith('deployer:') || line.startsWith('docs:')) continue;
-    assert.ok(PAGE.includes(escaped(line)), `the page is missing:\n  ${line}`);
-  }
-});

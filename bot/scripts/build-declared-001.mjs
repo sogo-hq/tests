@@ -13,11 +13,24 @@
  */
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { createHash } from 'node:crypto';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
-const OUT = join(ROOT, 'site', 'declared', '001.html');
+/**
+ * Where the page goes. The default is the committed page, and a path given on
+ * the command line sends it somewhere else instead.
+ *
+ * A test that checks the builder still reproduces the committed page used to
+ * run this with no argument, which writes over that page: if the template and
+ * the page had drifted, the check that catches the drift would have destroyed
+ * the evidence of it and left the signed bytes overwritten in the working tree.
+ * With a path it builds somewhere harmless and the committed page is compared,
+ * never replaced.
+ */
+const OUT = process.argv[2]
+  ? resolve(process.argv[2])
+  : join(ROOT, 'site', 'declared', '001.html');
 
 /** Lifted from the template, which the docs tests check character for character. */
 const TEMPLATE = readFileSync(join(ROOT, 'docs', 'template-declaration.md'), 'utf8');
