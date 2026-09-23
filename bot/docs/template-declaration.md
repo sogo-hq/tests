@@ -28,9 +28,9 @@ dev buy: 5% of supply, held by the deployer wallet, 2% team and 3% partnerships,
 tax-free at launch: the deployer only
 creator tax: 400 bps
 tax split: 10% the room, 10% ecosystem, 80% the build, treasury rules as declared
-the room: 50 seats. the room is owed 10% of the fee wallet's cumulative gross income, paid daily in ETH for 30 days by shares (T1 5, T2 2, T3 1), every payout printed before it leaves and recorded with its hash. a seat is given by the deployer, its tier is fixed when taken and reviewed once after the 30 days. a seat given up is reused and both occupants stay in the history. 10% of gross income goes to ecosystem integrations, 80% to the build.
+the room: BLOCK ZERO is 3 seats today, the deployer and two others, who say they are crew whenever they post. the room is owed 10% of the fee wallet's cumulative gross income, paid daily in ETH for 30 days, split equally between the seats held that day, every payout printed before it leaves and recorded with its hash. seats are added after launch on what people actually did, given by the deployer, never sold and never given for a payment. when a seat is added the split is recomputed from that day's payout forward and printed with it. a seat given up is reused and both occupants stay in the history. 10% of gross income goes to ecosystem integrations, 80% to the build: development, infrastructure, integrations and the dev's pay.
 holder fee share is off at launch. the token is access, not yield: 250k = watch, 1M = the holder feed, 10M = desk.
-nothing changes in the first 10 days. the room reviews it with holders on 5 oct. any change is announced 7 days ahead.
+nothing changes in the first 10 days. the room reviews it with holders on 9 oct. any change is announced 7 days ahead.
 docs: https://checkvitals.xyz/declared/001
 nonce: <issued by the bot, one per draft>
 ```
@@ -44,7 +44,7 @@ Field by field, and what the launch transaction has to show for each to hold:
 | tax-free at launch | the wallets the launch transaction pre-exempts |
 | creator tax | `creatorTaxBps` in the launch parameters |
 | tax split | the payout hashes and the sweep hashes, against the three shares stated |
-| the room | the payout hashes, against the shares and the 30 days stated |
+| the room | the payout hashes, against the seats held that day and the 30 days stated |
 | holder fee share | off, so nothing is paid to a holder who did not take a seat |
 | docs | a page that exists before the launch, not after |
 
@@ -87,7 +87,7 @@ Written, and signed as part of the declaration:
 
 ```
 holder fee share is off at launch. the token is access, not yield: 250k = watch, 1M = the holder feed, 10M = desk.
-nothing changes in the first 10 days. the room reviews it with holders on 5 oct. any change is announced 7 days ahead.
+nothing changes in the first 10 days. the room reviews it with holders on 9 oct. any change is announced 7 days ahead.
 ```
 
 Off at launch, and stated as off rather than left unsaid. A token that pays
@@ -96,19 +96,28 @@ and saying which one this is before the launch is worth more than saying it
 after. The three tiers are what `/tiers` reads and what the holder checks gate
 on today.
 
-The 5 oct review is a date, not an intention. Any change to it is announced
+The 9 oct review is a date, not an intention. Any change to it is announced
 seven days ahead, which is the part that can be held against us: a change that
 appears without the notice is a broken declaration, and the declaration is
 stored with its signature so that is checkable.
 
 ## The room, stated in the declaration
 
-Fifty seats, and the number does not move.
+Three seats today, and no seat is sold.
 
-- The CA goes into the room at T+3s, after the opening tax window has closed.
+- The seats are the deployer and two others. They say they are crew whenever
+  they post about a launch this room is behind.
+- The CA goes into the room at T+3s, after the opening tax window has closed,
+  and reaches BLOCK ZERO and THE FLOOR in the same second.
 - The room pays the same tax as everyone else. No exemptions beyond the
   deployer, which the protocol exempts on its own.
-- Seat numbers are public. Names are not.
+- The 10% is split equally between the seats held that day. When a seat is
+  added the split is recomputed from that day's payout forward and printed
+  with it, so nobody is diluted quietly.
+- Seats are added after the launch, on what people actually did. Never for a
+  payment, never for supply, never in advance.
+- Seat numbers are public. A seat holder names themselves when they post; the
+  deployer does not name them.
 - A seat given up is reused, and both occupants stay in the history.
 
 ## Rules for this text
