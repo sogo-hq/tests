@@ -17,10 +17,12 @@ import { freshDb } from './tmpdb.mjs';
 
 process.env.DB_PATH = process.env.DB_PATH || freshDb('roundtrip');
 process.env.ADMIN_IDS = '9001';
+process.env.VITALS_TOKEN_ADDRESS = '0x' + '11'.repeat(20);
 const { createBot } = await import('../dist/bot.js');
 const L = await import('../dist/ledger.js');
 const PP = await import('../dist/payplan.js');
 const { liveSeats, totalShares } = await import('../dist/roster.js');
+const dbModule = await import('../dist/db.js');
 
 const bot = createBot('123456:FAKE');
 bot.botInfo = {
@@ -58,12 +60,45 @@ const said = async (text, o) => (await send(text, o)).map((c) => c.payload.text 
 const W = (n) => '0x' + String(n).padStart(40, '0');
 const HANDLES = [];
 
+/**
+ * The signed declaration this ledger pays under.
+ *
+ * The T+4h journey on launch day starts from one, so this journey does too.
+ * Without it every run below reads as "the split was not checked against a
+ * declaration", which is true and is not what launch day looks like.
+ */
+const DEPLOYER = '0x' + '44'.repeat(20);
+const ROOM_DECLARED =
+  "the room: BLOCK ZERO is 3 seats today. the room is owed 10% of the fee wallet's cumulative "
+  + 'gross income, paid daily in ETH for 30 days, split equally between the seats held that day, '
+  + 'every payout printed before it leaves and recorded with its hash.';
+
+const declare = (room = ROOM_DECLARED) => {
+  const { db } = dbModule;
+  db.prepare('DELETE FROM launch_declarations').run();
+  db.prepare(
+    `INSERT OR REPLACE INTO launches (token, curve, deployer, pair_token, launch_config_id,
+       graduation_threshold, block_number, tx_hash, launched_at)
+     VALUES (?,?,?,?,?,?,?,?,?)`,
+  ).run(process.env.VITALS_TOKEN_ADDRESS.toLowerCase(), W(2), DEPLOYER.toLowerCase(), W(3), 1,
+        '0', 500, '0x' + 'e'.repeat(64), 1_789_000_000);
+  db.prepare(
+    `INSERT INTO launch_declarations (deployer, declared_by, declared_at, block_number,
+       dev_buy_pct, exempt_list, exempt_count, creator_tax_bps, tax_split, vesting, room,
+       docs_url, canonical, signature, free_slot)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+  ).run(DEPLOYER.toLowerCase(), 9001, 1_789_000_000, 400, 5, '[]', 1, 400,
+        '10% the room', 'held by the deployer', room,
+        'https://checkvitals.xyz/declared/001', 'signed text', '0xsig', 1);
+};
+
 // Shared across the file: this is one journey, in order.
 let csv = null;
 let runId = null;
 let plan = null;
 
-test('1. the roster: 4 T1, 6 T2, 10 T3', async () => {
+test('1. the roster: 20 seats, carrying three tiers that no longer decide money', async () => {
+  declare();
   let n = 0;
   for (const [tier, count] of [['T1', 4], ['T2', 6], ['T3', 10]]) {
     for (let i = 0; i < count; i++) {
@@ -75,17 +110,26 @@ test('1. the roster: 4 T1, 6 T2, 10 T3', async () => {
   }
   const seats = liveSeats();
   assert.equal(seats.length, 20);
-  assert.equal(totalShares(), 42, '4*5 + 6*2 + 10*1');
+  // The roster still adds tier shares, because the roster still records a
+  // tier. The payout path below does not read either of them.
+  assert.equal(totalShares(), 42, '4*5 + 6*2 + 10*1, on the roster');
 });
 
-test('2. the preview, on a typed balance of 10 ETH', async () => {
-  const out = await said('/ledger preview 10');
-  assert.match(out, /gross income\s+= 10\.0000 ETH/);
-  assert.match(out, /pool now\s+= 1\.0000 ETH/);
-  assert.match(out, /total shares\s+42/);
-  // 1.0000 / 42 rounded down to 4dp is 0.0238, so a share pays 0.0238 and the
-  // run distributes 0.9996 with 0.0004 left over.
-  assert.match(out, /per share\s+0\.0238 ETH/);
+test('2. the preview, on a typed balance of 10.01 ETH', async () => {
+  // A balance that does not divide cleanly by twenty, on purpose: the carry is
+  // the thing this journey exists to check, and a pool that divides exactly
+  // would leave no dust to carry.
+  const out = await said('/ledger preview 10.01');
+  assert.match(out, /gross income\s+= 10\.0100 ETH/);
+  assert.match(out, /pool now\s+= 1\.0010 ETH/);
+  // Equal, and said to be equal. Twenty seats, not forty-two shares.
+  assert.match(out, /equal split, 20 seats held today/);
+  assert.doesNotMatch(out, /total shares/);
+  // And the signed text agrees with it, by name.
+  assert.match(out, /declaration \d+: equal split, 20 seats held today/);
+  // 1.0010 / 20 rounded down to 4dp is 0.0500, so each seat is paid 0.0500 and
+  // the run distributes 1.0000 with 0.0010 left over.
+  assert.match(out, /per seat\s+0\.0500 ETH/);
   runId = Number(/run (\d+)/.exec(out)?.[1] ?? /\brun\b\D*(\d+)/.exec(out)?.[1]);
   if (!Number.isFinite(runId)) runId = L.latestRun()?.id;
   assert.ok(runId, 'the preview stored a run');
@@ -133,13 +177,15 @@ test('5. the amounts survive the trip to four decimal places', () => {
   }
   // And in the aggregate, which is what the confirmation prompt compares.
   assert.equal(PP.totalWei(parsed.rows), run.distributedWei);
-  assert.equal(L.eth(PP.totalWei(parsed.rows)), '0.9996');
+  assert.equal(L.eth(PP.totalWei(parsed.rows)), '1.0000');
 });
 
 test('6. the dust carries rather than being paid or lost', () => {
   const run = L.loadRun(runId);
   assert.equal(run.poolWei - run.distributedWei, run.dustWei);
-  assert.equal(L.eth(run.dustWei), '0.0004');
+  assert.equal(L.eth(run.dustWei), '0.0010');
+  // Every seat was paid the same, which is the rule that was signed.
+  assert.equal(new Set(run.rows.map((r) => String(r.amountWei))).size, 1);
   // Nothing below the 4dp floor is sent, so no row is short of a whole unit.
   for (const r of run.rows) assert.equal(r.amountWei % L.PAYOUT_PRECISION_WEI, 0n);
 });
@@ -201,12 +247,12 @@ test('11. the public post: the hashes, and nothing that names anyone', async () 
   const post = await said(`/ledger post ${runId}`, { chat: GROUP });
 
   // The arithmetic the room checks.
-  assert.match(post, /gross income\s+10\.0000 ETH/);
-  assert.match(post, /the room's 10%\s+1\.0000 ETH/);
-  assert.match(post, /this run\s+1\.0000 ETH/);
-  assert.match(post, /total shares\s+42/);
-  assert.match(post, /paid out\s+0\.9996 ETH/);
-  assert.match(post, /undistributed\s+0\.0004 ETH/);
+  assert.match(post, /gross income\s+10\.0100 ETH/);
+  assert.match(post, /the room's 10%\s+1\.0010 ETH/);
+  assert.match(post, /this run\s+1\.0010 ETH/);
+  assert.match(post, /equal split, 20 seats held today/);
+  assert.match(post, /paid out\s+1\.0000 ETH/);
+  assert.match(post, /undistributed\s+0\.001 ETH/);
   assert.match(post, /20 transfers:/);
 
   // The twenty hashes are there.
@@ -227,27 +273,29 @@ test('11b. bare /ledger post does not reach the typed-balance run', async () => 
   assert.doesNotMatch(out, /gross income/, 'a hypothetical reached the room');
 });
 
-test('12. the room sees tiers, never people', async () => {
+test('12. the room sees one amount, and never a person', async () => {
   const post = await said(`/ledger post ${runId}`, { chat: GROUP });
-  assert.match(post, /T1\s+4 seats · 0\.1190 ETH each · 0\.4760 ETH/);
-  assert.match(post, /T2\s+6 seats · 0\.0476 ETH each · 0\.2856 ETH/);
-  assert.match(post, /T3\s+10 seats · 0\.0238 ETH each · 0\.2380 ETH/);
-  // 4*5 + 6*2 + 10*1 shares at 0.0238 each.
-  assert.equal(0.4760 + 0.2856 + 0.2380, 0.9996);
+  assert.match(post, /equal split, 20 seats held today/);
+  assert.match(post, /0\.0500 ETH each/);
+  // The post used to group by tier, which is how it showed that different
+  // seats were paid different amounts. No seat is any more, and a post still
+  // grouped by tier would suggest the tier decided it.
+  assert.doesNotMatch(post, /^T[123]\s+\d+ seats/m);
+  assert.equal(0.0500 * 20, 1.0000);
   assert.doesNotMatch(post, /!/);
   assert.ok(!post.includes(String.fromCharCode(0x2014)));
 });
 
 test('13. the next run starts from the dust, not from zero', async () => {
   // The same wallet balance, less what went out: the room has been paid
-  // 0.9996 of its 1.0000, so the next run owes the 0.0004 and nothing more.
-  const out = await said('/ledger preview 9.0004');
-  assert.match(out, /gross income\s+= 10\.0000 ETH/);
-  assert.match(out, /the room's 10%\s+1\.0000 ETH/);
-  assert.match(out, /paid out to date\s+\+ 0\.9996 ETH/);
-  assert.match(out, /pool now\s+= 0\.0004 ETH/);
-  // Below the floor over 42 shares, so it pays nothing and carries again.
-  assert.match(out, /per share\s+0\.0000 ETH/);
+  // 1.0000 of its 1.0010, so the next run owes the 0.0010 and nothing more.
+  const out = await said('/ledger preview 9.01');
+  assert.match(out, /gross income\s+= 10\.0100 ETH/);
+  assert.match(out, /the room's 10%\s+1\.0010 ETH/);
+  assert.match(out, /paid out to date\s+\+ 1\.0000 ETH/);
+  assert.match(out, /pool now\s+= 0\.0010 ETH/);
+  // Below the floor over twenty seats, so it pays nothing and carries again.
+  assert.match(out, /per seat\s+0\.0000 ETH/);
 });
 
 // ---------------------------------------- the guard that nearly broke the post

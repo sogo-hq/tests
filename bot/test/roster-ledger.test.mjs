@@ -31,40 +31,49 @@ const seed = (t1, t2, t3) => {
 
 // ------------------------------------------------------------ share maths
 
-test('a mixed roster adds its shares the way the tiers say', () => {
+test('a mixed roster is paid equally, whatever its tiers are worth on the roster', () => {
   seed(4, 6, 10);
+  // The roster still adds tier shares, because the roster still records a
+  // tier. Nothing in the payout path below reads either of them.
   assert.equal(R.totalShares(), 42);
   assert.deepEqual(R.TIER_SHARES, { T1: 5, T2: 2, T3: 1 });
-  const run = L.computeRun({ balanceWei: ETH(10), paidToDateWei: 0n });
-  assert.equal(run.totalShares, 42);
-  assert.equal(L.eth(run.poolWei), '1.0000');
-  assert.equal(L.eth(run.perShareWei), '0.0238');
-  const byTier = (t) => run.rows.filter((r) => r.tier === t);
-  assert.equal(L.eth(byTier('T1')[0].amountWei), '0.1190');
-  assert.equal(L.eth(byTier('T2')[0].amountWei), '0.0476');
-  assert.equal(L.eth(byTier('T3')[0].amountWei), '0.0238');
-  assert.equal(L.eth(run.distributedWei), '0.9996');
-  assert.equal(L.eth(run.dustWei, 6), '0.000400');
-  // Every payout is the per-share amount times the shares, with nothing lost
-  // between the table and the total.
+
+  const run = L.computeRun({ balanceWei: ETH(10.01), paidToDateWei: 0n });
+  assert.equal(run.totalShares, 20, 'the payout weight is one per seat, not the tier total');
+  assert.equal(L.eth(run.poolWei), '1.0010');
+  assert.equal(L.eth(run.perShareWei), '0.0500');
+  // One amount, on every row, whatever tier the row carries.
+  assert.equal(new Set(run.rows.map((r) => String(r.amountWei))).size, 1);
+  for (const t of ['T1', 'T2', 'T3']) {
+    assert.equal(L.eth(run.rows.find((r) => r.tier === t).amountWei), '0.0500', t);
+  }
+  assert.deepEqual([...new Set(run.rows.map((r) => r.shares))], [1]);
+  assert.equal(L.eth(run.distributedWei), '1.0000');
+  assert.equal(L.eth(run.dustWei, 6), '0.001000');
+  // Nothing is lost between the table and the total.
   assert.equal(run.rows.reduce((a, r) => a + r.amountWei, 0n), run.distributedWei);
   assert.equal(run.distributedWei + run.dustWei, run.poolWei);
 });
 
-test('shares are stored, so changing what a tier is worth does not rewrite a past run', () => {
+test('a tier is a label: changing one moves nobody money, then or now', () => {
   seed(1, 1, 0);
   const before = L.computeRun({ balanceWei: ETH(10), paidToDateWei: 0n });
   const id = L.saveRun(before);
-  assert.equal(before.totalShares, 7);
-  // A promotion changes the next run, not the one already computed.
+  assert.equal(before.totalShares, 2, 'two seats, one share each');
+  const [a, b] = before.rows;
+  assert.equal(a.amountWei, b.amountWei);
+
+  // A promotion changes what the roster prints, and nothing that is paid.
   const r = R.setTier('t2_1', 'T1', { at: 2000 });
   assert.equal(r.ok, true);
-  assert.equal(R.totalShares(), 10);
+  assert.equal(R.totalShares(), 10, 'the roster still adds tier shares');
   const after = L.computeRun({ balanceWei: ETH(10), paidToDateWei: 0n });
-  assert.equal(after.totalShares, 10);
+  assert.equal(after.totalShares, 2);
+  assert.deepEqual(after.rows.map((x) => String(x.amountWei)), before.rows.map((x) => String(x.amountWei)));
+
   const stored = L.loadRun(id);
-  assert.equal(stored.totalShares, 7, 'a stored run changed when a tier did');
-  assert.equal(stored.rows.find((x) => x.handle === 't2_1').shares, 2);
+  assert.equal(stored.totalShares, 2, 'a stored run changed when a tier did');
+  assert.equal(stored.rows.find((x) => x.handle === 't2_1').shares, 1);
   // And the change is in the history, with what it was before.
   const ev = R.seatHistory().filter((e) => e.event === 'tier');
   assert.equal(ev.length, 1);
@@ -109,29 +118,31 @@ test('four runs: new income moves the pool, a sweep does not, and nothing is pai
   seed(4, 6, 10);
   const paid = (r) => r.rows.reduce((a, x) => a + x.amountWei, 0n);
 
-  // Run 1. A wallet holding 10 ETH, nothing ever paid, nothing ever swept.
-  const one = L.computeRun({ balanceWei: ETH(10), paidToDateWei: 0n, sweptToDateWei: 0n });
-  assert.equal(L.eth(one.grossIncomeWei), '10.0000');
-  assert.equal(L.eth(one.poolTargetWei), '1.0000');
-  assert.equal(L.eth(one.poolWei), '1.0000');
-  assert.equal(L.eth(one.perShareWei), '0.0238');
-  assert.equal(L.eth(one.distributedWei), '0.9996');
-  assert.equal(L.eth(one.dustWei, 6), '0.000400');
+  // Run 1. A wallet holding 10.01 ETH, nothing ever paid, nothing ever swept.
+  // Not a round ten: twenty seats divide a tenth of ten exactly, and a pool
+  // that divides exactly leaves no dust for the carry below to carry.
+  const one = L.computeRun({ balanceWei: ETH(10.01), paidToDateWei: 0n, sweptToDateWei: 0n });
+  assert.equal(L.eth(one.grossIncomeWei), '10.0100');
+  assert.equal(L.eth(one.poolTargetWei), '1.0010');
+  assert.equal(L.eth(one.poolWei), '1.0010');
+  assert.equal(L.eth(one.perShareWei), '0.0500');
+  assert.equal(L.eth(one.distributedWei), '1.0000');
+  assert.equal(L.eth(one.dustWei, 6), '0.001000');
 
   // Paid, out of this same wallet. Gas is zero in this test so the figures
   // are the ones the model is specified with; gas is exercised on its own.
   const paidOne = paid(one);
-  const balTwo = ETH(10) - paidOne;
-  assert.equal(L.eth(balTwo), '9.0004');
+  const balTwo = ETH(10.01) - paidOne;
+  assert.equal(L.eth(balTwo), '9.0100');
 
   // Run 2. No new fees at all. Gross income has not moved, so the room is
   // owed nothing further except the dust run 1 could not divide.
   const two = L.computeRun({ balanceWei: balTwo, paidToDateWei: paidOne, sweptToDateWei: 0n });
-  assert.equal(L.eth(two.grossIncomeWei), '10.0000', 'gross income moved without any income');
-  assert.equal(L.eth(two.poolTargetWei), '1.0000');
+  assert.equal(L.eth(two.grossIncomeWei), '10.0100', 'gross income moved without any income');
+  assert.equal(L.eth(two.poolTargetWei), '1.0010');
   assert.equal(two.poolWei, one.dustWei, 'run 2 pays for income the room was already paid for');
-  assert.equal(L.eth(two.poolWei, 6), '0.000400');
-  // 0.0004 over 42 shares is under the 0.0001 ETH a payout is rounded to.
+  assert.equal(L.eth(two.poolWei, 6), '0.001000');
+  // 0.0010 over twenty seats is under the 0.0001 ETH a payout is rounded to.
   assert.equal(two.perShareWei, 0n);
   assert.equal(two.distributedWei, 0n, 'something was sent below the printed precision');
   assert.equal(two.dustWei, two.poolWei, 'the dust stays whole and waits');
@@ -140,33 +151,34 @@ test('four runs: new income moves the pool, a sweep does not, and nothing is pai
   // Run 3. Five ETH of new fees arrive; run 2 sent nothing.
   const balThree = balTwo + ETH(5);
   const three = L.computeRun({ balanceWei: balThree, paidToDateWei: paidOne, sweptToDateWei: 0n });
-  assert.equal(L.eth(three.grossIncomeWei), '15.0000');
-  assert.equal(L.eth(three.poolTargetWei), '1.5000');
+  assert.equal(L.eth(three.grossIncomeWei), '15.0100');
+  assert.equal(L.eth(three.poolTargetWei), '1.5010');
   // A tenth of the new five, plus the dust the earlier runs could not divide.
-  assert.equal(L.eth(three.poolWei, 6), '0.500400');
+  assert.equal(L.eth(three.poolWei, 6), '0.501000');
   assert.equal(three.poolWei, ETH(0.5) + one.dustWei, 'the carried dust is not in the pool');
-  assert.equal(L.eth(three.perShareWei), '0.0119');
-  assert.equal(L.eth(three.distributedWei), '0.4998');
+  assert.equal(L.eth(three.perShareWei), '0.0250');
+  assert.equal(L.eth(three.distributedWei), '0.5000');
 
   // Run 4. Eight ETH is swept out to the treasury. Run 3 was not paid.
   const swept = ETH(8);
   const balFour = balThree - swept;
   const four = L.computeRun({ balanceWei: balFour, paidToDateWei: paidOne, sweptToDateWei: swept });
-  assert.equal(L.eth(four.balanceWei), '6.0004');
+  assert.equal(L.eth(four.balanceWei), '6.0100');
   assert.equal(L.eth(four.sweptToDateWei), '8.0000');
-  assert.equal(L.eth(four.grossIncomeWei), '15.0000', 'a sweep changed gross income');
+  assert.equal(L.eth(four.grossIncomeWei), '15.0100', 'a sweep changed gross income');
   assert.equal(four.poolWei, three.poolWei, 'the sweep moved the pool');
   assert.equal(four.refusal, null);
-  assert.equal(L.eth(four.distributedWei), '0.4998');
+  assert.equal(L.eth(four.distributedWei), '0.5000');
 
   // And the arithmetic is visible, every term of it.
   const text = L.previewText(four);
-  assert.match(text, /fee wallet balance\s+6\.0004 ETH/);
-  assert.match(text, /paid out to date\s+\+ 0\.9996 ETH, payout values and their gas/);
+  assert.match(text, /fee wallet balance\s+6\.0100 ETH/);
+  assert.match(text, /paid out to date\s+\+ 1\.0000 ETH, payout values and their gas/);
   assert.match(text, /swept to date\s+\+ 8\.0000 ETH, moved out by hand and recorded/);
-  assert.match(text, /gross income\s+= 15\.0000 ETH/);
-  assert.match(text, /the room's 10%\s+1\.5000 ETH of it, in total, ever/);
-  assert.match(text, /pool now\s+= 0\.5004 ETH/);
+  assert.match(text, /gross income\s+= 15\.0100 ETH/);
+  assert.match(text, /the room's 10%\s+1\.5010 ETH of it, in total, ever/);
+  assert.match(text, /pool now\s+= 0\.5010 ETH/);
+  assert.match(text, /equal split, 20 seats held today/);
 });
 
 test('a pool larger than the wallet is refused, and says what to do about it', () => {

@@ -2,8 +2,10 @@
  * The roster and the ledger, driven through the real commands.
  *
  * The seeded roster is the one the payout table was specified against: 4 T1,
- * 6 T2 and 10 T3, which is 42 shares. The balance is typed in, so the
- * arithmetic can be checked against a figure rather than against a wallet.
+ * 6 T2 and 10 T3, which the roster still adds to 42 shares and which the
+ * payout path no longer reads. Twenty seats, paid equally. The balance is
+ * typed in, so the arithmetic can be checked against a figure rather than
+ * against a wallet.
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -77,26 +79,27 @@ test('the payout table against a balance of 10 ETH', async () => {
   assert.match(out, /the room's 10%\s+1\.0000 ETH of it, in total, ever/);
   assert.match(out, /pool now\s+= 1\.0000 ETH/);
   assert.doesNotMatch(out, /unpaid remainder/);
-  assert.match(out, /total shares\s+42/);
-  // 1 / 42 = 0.0238095..., rounded down to the four places the table prints.
-  assert.match(out, /per share {12}0\.0238 ETH/);
-  // And the rows, one per tier.
-  assert.match(out, /t1_member_1\s+T1\s+5\s+0\.1190/);
-  assert.match(out, /t2_member_1\s+T2\s+2\s+0\.0476/);
-  assert.match(out, /t3_member_1\s+T3\s+1\s+0\.0238/);
-  // 0.0238 * 42 = 0.9996, leaving 0.0004 of the 1 ETH pool.
-  assert.match(out, /distributed {10}0\.9996 ETH to 20 wallets/);
-  assert.match(out, /dust, stays in the wallet and goes out with the next run: 0\.0004 ETH/);
+  assert.match(out, /equal split, 20 seats held today/);
+  assert.doesNotMatch(out, /total shares/);
+  // 1 / 20 = 0.0500, and every seat is paid it whatever tier it carries.
+  assert.match(out, /per seat {13}0\.0500 ETH/);
+  assert.match(out, /t1_member_1\s+T1\s+0\.0500/);
+  assert.match(out, /t2_member_1\s+T2\s+0\.0500/);
+  assert.match(out, /t3_member_1\s+T3\s+0\.0500/);
+  // 0.0500 * 20 = 1.0000, which is the whole pool and leaves nothing behind.
+  assert.match(out, /distributed {10}1\.0000 ETH to 20 wallets/);
+  assert.match(out, /dust, stays in the wallet and goes out with the next run: 0 ETH/);
 });
 
 test('the run adds up, in wei, not just on screen', () => {
   const run = L.computeRun({ balanceWei: 10n * 10n ** 18n, paidToDateWei: 0n, sweptToDateWei: 0n });
   assert.equal(run.poolWei, 10n ** 18n);
-  assert.equal(run.perShareWei, 23_800_000_000_000_00n * 10n);
+  assert.equal(run.perShareWei, 5n * 10n ** 16n);
   assert.equal(run.rows.reduce((a, r) => a + r.amountWei, 0n), run.distributedWei);
   assert.equal(run.distributedWei + run.dustWei, run.poolWei, 'the pool is exactly what went out plus what stayed');
   for (const r of run.rows) {
-    assert.equal(r.amountWei, run.perShareWei * BigInt(r.shares));
+    assert.equal(r.shares, 1, 'a seat carries a payout weight other than one');
+    assert.equal(r.amountWei, run.perShareWei);
     assert.equal(r.amountWei % L.PAYOUT_PRECISION_WEI, 0n, 'a payout that is not a whole number of the printed unit');
   }
 });
@@ -114,7 +117,7 @@ test('the csv is the table, and the send command holds no key', async () => {
   assert.equal(rows.length, 20);
   assert.ok(rows.every((l) => /^0x[0-9a-fA-F]{40},\d+\.\d{4}$/.test(l)), rows[0]);
   const total = rows.reduce((a, l) => a + Math.round(Number(l.split(',')[1]) * 1e4), 0);
-  assert.equal(total, 9996, '0.9996 ETH in units of 0.0001');
+  assert.equal(total, 10_000, '1.0000 ETH in units of 0.0001');
 
   const cmd = await said(`/ledger send ${id}`);
   // Named explicitly, so the command it prints says what it is before the
@@ -163,10 +166,12 @@ test('no view that can reach a group ever carries a wallet', async () => {
 
   const post = await said(`/ledger post ${L.latestRun().id}`, { chat: GROUP });
   assert.doesNotMatch(post, /0x[0-9a-fA-F]{40}/, 'the public ledger post carried a wallet');
-  assert.match(post, /T1 {2}4 seats · 0\.1190 ETH each · 0\.4760 ETH/);
-  assert.match(post, /T2 {2}6 seats · 0\.0476 ETH each · 0\.2856 ETH/);
-  assert.match(post, /T3 {2}10 seats · 0\.0238 ETH each · 0\.2380 ETH/);
-  assert.match(post, /undistributed {5}0\.0004 ETH/);
+  assert.match(post, /equal split, 20 seats held today/);
+  assert.match(post, /0\.0500 ETH each/);
+  // Grouping by tier is how the post showed that seats were paid differently.
+  // None is, and a tier line would say the tier decided it.
+  assert.doesNotMatch(post, /^T[123] {2}\d+ seats/m);
+  assert.match(post, /undistributed {5}0 ETH/);
   assert.match(post, /no transaction hashes recorded yet/);
 });
 
@@ -192,17 +197,17 @@ test('a typed preview prints the whole table and says it is hypothetical', async
   assert.match(out, /fee wallet balance {3}12\.5000 ETH/);
   assert.match(out, /gross income\s+= 12\.5000 ETH/);
   assert.match(out, /the room's 10%\s+1\.2500 ETH/);
-  assert.match(out, /total shares\s+42/);
+  assert.match(out, /equal split, 20 seats held today/);
   // Every seat is in it, so it is the real roster and not a sketch: a row per
-  // seat with its tier, its shares, its amount and its wallet.
-  assert.match(out, /seat {2}handle {11}tier sh {2}amount ETH {2}wallet/);
+  // seat with its tier, its amount and its wallet.
+  assert.match(out, /seat {2}handle {11}tier {2}amount ETH {2}wallet/);
   for (const s of liveSeats()) {
     assert.ok(out.includes(s.handle), `${s.handle} is missing from the preview`);
     assert.ok(out.includes(s.wallet), `${s.handle}'s wallet is missing`);
   }
   assert.equal(liveSeats().length, 20);
-  // And the arithmetic: 1.2500 over 42 shares is 0.0297 a share, rounded down.
-  assert.match(out, /per share {12}0\.0297 ETH/);
+  // And the arithmetic: 1.2500 over twenty seats is 0.0625 each.
+  assert.match(out, /per seat {13}0\.0625 ETH/);
 });
 
 test('running it twice leaves no warning about an unpaid run', async () => {

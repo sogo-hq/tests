@@ -1,7 +1,11 @@
 import { db } from './db.js';
 import { client } from './chain.js';
 import { api as atApiPriority } from './ratelimit.js';
-import { liveSeats, totalShares, TIERS, type Seat, type Tier } from './roster.js';
+import { liveSeats, type Seat, type Tier } from './roster.js';
+import {
+  EQUAL_SHARE, checkAgainstDeclaration, splitRefusal, splitLine, ledgerDeclaration,
+  type SplitCheck,
+} from './roomsplit.js';
 
 /**
  * The ledger.
@@ -228,8 +232,10 @@ export interface LedgerRun {
   poolTargetWei: bigint;
   /** That target less what it has already had. */
   poolWei: bigint;
-  /** Set when the pool exceeds the balance, which is when nothing is sent. */
+  /** Set when the pool exceeds the balance, or when the split is not the signed one. */
   refusal: string | null;
+  /** The table against the declaration stored with its signature. */
+  split: SplitCheck;
   totalShares: number;
   perShareWei: bigint;
   distributedWei: bigint;
@@ -252,6 +258,8 @@ export function computeRun(opts: {
   sweptToDateWei?: bigint;
   now?: number;
   hypothetical?: boolean;
+  /** The check against the signed declaration, when a caller states it. */
+  split?: SplitCheck;
 }): LedgerRun {
   const seats = opts.seats ?? liveSeats();
   const paidToDate = opts.paidToDateWei ?? paidOutWei();
@@ -274,15 +282,32 @@ export function computeRun(opts: {
       + `${eth(pool - opts.balanceWei)} ETH more is owed than is there, because income was moved out `
       + 'before the room was paid its share of it. move it back, or record what it was spent on.'
     : null;
-  const shares = totalShares(seats);
+  // One seat, one share.
+  //
+  // The seat rows still carry a tier and the shares that tier was worth, and
+  // neither is read here. The signed declaration says the room's share is
+  // "split equally between the seats held that day", and a payout path that
+  // derives weights from a tier is a payout path that can quietly stop paying
+  // what was signed the moment somebody is made T2. Tier is a label on the
+  // roster; it does not decide money.
+  const shares = seats.length * EQUAL_SHARE;
   const perShare = shares > 0 && !refusal
     ? ((pool / BigInt(shares)) / PAYOUT_PRECISION_WEI) * PAYOUT_PRECISION_WEI
     : 0n;
   const rows: PayoutRow[] = seats.map((s) => ({
-    seat: s.seat, handle: s.handle, tier: s.tier, shares: s.shares,
-    wallet: s.wallet, amountWei: perShare * BigInt(s.shares),
+    seat: s.seat, handle: s.handle, tier: s.tier, shares: EQUAL_SHARE,
+    wallet: s.wallet, amountWei: perShare * BigInt(EQUAL_SHARE),
   }));
-  const distributed = rows.reduce((a, r) => a + r.amountWei, 0n);
+
+  // The table against the text that was signed, before anybody reads a list of
+  // wallets and amounts. A difference is a refusal, not a warning: a payout
+  // that contradicts a signed declaration should be impossible rather than
+  // unlikely. Passed in only by tests that need to state both sides.
+  const split = opts.split ?? checkAgainstDeclaration(rows, LEDGER_SHARE_PCT);
+  const declined = refusal ?? splitRefusal(split);
+  const payable = declined === null;
+
+  const distributed = payable ? rows.reduce((a, r) => a + r.amountWei, 0n) : 0n;
   return {
     id: null,
     balanceWei: opts.balanceWei,
@@ -291,12 +316,13 @@ export function computeRun(opts: {
     grossIncomeWei: gross,
     poolTargetWei: target,
     poolWei: pool,
-    refusal,
+    refusal: declined,
+    split,
     totalShares: shares,
-    perShareWei: perShare,
+    perShareWei: payable ? perShare : 0n,
     distributedWei: distributed,
     dustWei: pool - distributed,
-    rows,
+    rows: payable ? rows : rows.map((r) => ({ ...r, amountWei: 0n })),
     hypothetical: opts.hypothetical ?? false,
     createdAt: opts.now ?? Math.floor(Date.now() / 1000),
   };
@@ -330,12 +356,18 @@ export function loadRun(id: number): LedgerRun | null {
   if (!r) return null;
   const rows = (db.prepare('SELECT * FROM ledger_payments WHERE run_id = ? ORDER BY seat').all(id) as any[])
     .map((p) => ({ seat: p.seat, handle: p.handle, tier: p.tier as Tier, shares: p.shares, wallet: p.wallet, amountWei: BigInt(p.amount_wei) }));
+  // Re-checked against the declaration as it stands NOW, not as it stood when
+  // the run was computed. A run is previewed and then handed to the payer in a
+  // separate command, and what has to hold is that the table about to be paid
+  // agrees with what is signed at the moment it goes out. A stored refusal
+  // would be a check that passed once.
+  const split = checkAgainstDeclaration(rows, LEDGER_SHARE_PCT);
   return {
     id, balanceWei: BigInt(r.balance_wei), paidToDateWei: BigInt(r.paid_before_wei),
     sweptToDateWei: BigInt(r.swept_to_date_wei ?? '0'),
     grossIncomeWei: BigInt(r.gross_income_wei ?? r.balance_wei),
     poolTargetWei: BigInt(r.pool_wei) + BigInt(r.paid_before_wei),
-    poolWei: BigInt(r.pool_wei), refusal: null, totalShares: r.total_shares,
+    poolWei: BigInt(r.pool_wei), refusal: splitRefusal(split), split, totalShares: r.total_shares,
     perShareWei: BigInt(r.per_share_wei), distributedWei: BigInt(r.distributed_wei),
     dustWei: BigInt(r.dust_wei), rows, hypothetical: !!r.hypothetical, createdAt: r.created_at,
   };
@@ -440,6 +472,43 @@ const day = (t: number) => new Date(t * 1000).toISOString().slice(0, 10);
  *
  * Wallets are in this one. It is the admin view and it is DM only.
  */
+/**
+ * What changed since the last run that was actually paid.
+ *
+ * The declaration says a seat added after launch recomputes the split "from
+ * that day's payout forward and printed with it". The recompute needs no code:
+ * every run divides the pool between the seats held when it is computed, so a
+ * seat added on day 9 changes day 9 onward and cannot reach back into days 1
+ * to 8, which were paid and are recorded with their hashes. What was missing
+ * was the printing, and a split that silently changes size between two runs is
+ * exactly the thing a room is owed a sentence about.
+ */
+/**
+ * A wei figure at full precision with its trailing zeros dropped.
+ *
+ * And the trailing point with them. Zero used to render as "0.", which is not
+ * a number: an equal split divides the pool exactly far more often than a
+ * tiered one did, so a run with no dust at all went from rare to ordinary on
+ * the same day this line started being read on launch day.
+ */
+export function trimmed(wei: bigint): string {
+  return eth(wei, 18).replace(/0+$/, '').replace(/\.$/, '');
+}
+
+export function seatChangeNote(run: LedgerRun): string | null {
+  const prev = db.prepare(
+    `SELECT r.id, (SELECT COUNT(*) FROM ledger_payments p WHERE p.run_id = r.id) AS seats
+       FROM ledger_runs r
+      WHERE r.hypothetical = 0 AND (? IS NULL OR r.id < ?)
+      ORDER BY r.id DESC LIMIT 1`,
+  ).get(run.id, run.id) as { id: number; seats: number } | undefined;
+  if (!prev || prev.seats === 0 || prev.seats === run.rows.length) return null;
+  const added = run.rows.length > prev.seats;
+  return `seats held changed since run ${prev.id}: ${prev.seats} then, ${run.rows.length} now. `
+    + `the equal split is recomputed from this run forward and run ${prev.id} and everything `
+    + `before it stay exactly as they were paid. ${added ? 'nobody already paid is paid less for a day they were already paid for.' : 'a seat given up is reused and both occupants stay in the history.'}`;
+}
+
 export function previewText(run: LedgerRun, opts: { warnings?: string[] } = {}): string {
   const L: string[] = [];
   if (run.hypothetical) L.push('HYPOTHETICAL: the balance below was typed in, not read from the fee wallet');
@@ -460,11 +529,22 @@ export function previewText(run: LedgerRun, opts: { warnings?: string[] } = {}):
     L.push('nothing is payable until that is settled.');
     return L.join('\n');
   }
-  L.push(`total shares         ${run.totalShares}`);
-  L.push(`per share            ${eth(run.perShareWei)} ETH`);
+  if (run.split.state === 'undetermined') {
+    // Said above the table rather than under it. It is not a match and it is
+    // not a contradiction, and it must never read as either.
+    L.push('');
+  }
+  // What this run does, then whether the signed text agrees with it. Two
+  // lines, because they are two facts: the second is not a restatement of the
+  // first, and on the day they disagree the reader has to see both.
+  L.push(`equal split, ${run.rows.length} seat${run.rows.length === 1 ? '' : 's'} held today`);
+  L.push(`per seat             ${eth(run.perShareWei)} ETH`);
+  L.push(splitLine(run.split));
+  const changed = seatChangeNote(run);
+  if (changed) L.push(changed);
   L.push('');
   if (run.perShareWei === 0n && run.poolWei > 0n) {
-    L.push(`the pool is ${eth(run.poolWei, 18).replace(/0+$/, '')} ETH over ${run.totalShares} shares, which is under the `
+    L.push(`the pool is ${trimmed(run.poolWei)} ETH over ${run.totalShares} seat${run.totalShares === 1 ? '' : 's'}, which is under the `
       + `${eth(PAYOUT_PRECISION_WEI)} ETH a payout is rounded to. nothing is sent; it stays in the wallet.`);
     L.push('');
   }
@@ -472,13 +552,15 @@ export function previewText(run: LedgerRun, opts: { warnings?: string[] } = {}):
     L.push('no seats, so nothing to divide. /seat add <handle> <tier> <wallet>');
     return L.join('\n');
   }
-  L.push('seat  handle           tier sh  amount ETH  wallet');
+  // Tier is printed because the roster carries it and a reader recognises the
+  // seats by it. It is a label: every row is paid the same, whatever it says.
+  L.push('seat  handle           tier  amount ETH  wallet');
   for (const r of run.rows) {
-    L.push(`${String(r.seat).padStart(3)}   ${r.handle.padEnd(16)} ${r.tier}  ${String(r.shares).padStart(2)}  ${eth(r.amountWei).padStart(10)}  ${r.wallet}`);
+    L.push(`${String(r.seat).padStart(3)}   ${r.handle.padEnd(16)} ${r.tier}  ${eth(r.amountWei).padStart(10)}  ${r.wallet}`);
   }
   L.push('');
   L.push(`distributed          ${eth(run.distributedWei)} ETH to ${run.rows.length} wallet${run.rows.length === 1 ? '' : 's'}`);
-  L.push(`dust, stays in the wallet and goes out with the next run: ${eth(run.dustWei, 18).replace(/0+$/, '')} ETH`);
+  L.push(`dust, stays in the wallet and goes out with the next run: ${trimmed(run.dustWei)} ETH`);
   if (run.id !== null) L.push(`\nrun ${run.id}. /ledger csv ${run.id} · /ledger send ${run.id}`);
   for (const w of opts.warnings ?? []) L.push(`\n${w}`);
   return L.join('\n');
@@ -535,17 +617,23 @@ export function postText(run: LedgerRun): string {
   L.push(`the room's ${LEDGER_SHARE_PCT}%       ${eth(run.poolTargetWei)} ETH of it, in total`);
   L.push(`already paid      ${eth(run.paidToDateWei)} ETH`);
   L.push(`this run          ${eth(run.poolWei)} ETH`);
-  L.push(`total shares      ${run.totalShares}`);
   L.push('');
-  for (const t of TIERS) {
-    const rows = run.rows.filter((r) => r.tier === t);
-    if (!rows.length) continue;
-    const each = rows[0]!.amountWei;
-    L.push(`${t}  ${rows.length} seat${rows.length === 1 ? '' : 's'} · ${eth(each)} ETH each · ${eth(each * BigInt(rows.length))} ETH`);
+  // One line, because there is one amount. Grouping by tier was how the post
+  // showed that different seats were paid different amounts, and no seat is
+  // any more: the room's share is split equally between the seats held today,
+  // and a post that still grouped by tier would suggest the tier decided it.
+  if (run.rows.length) {
+    L.push(`equal split, ${run.rows.length} seat${run.rows.length === 1 ? '' : 's'} held today`);
+    L.push(`${eth(run.rows[0]!.amountWei)} ETH each`);
+  }
+  const changed = seatChangeNote(run);
+  if (changed) {
+    L.push('');
+    L.push(changed);
   }
   L.push('');
   L.push(`paid out          ${eth(run.distributedWei)} ETH`);
-  L.push(`undistributed     ${eth(run.dustWei, 18).replace(/0+$/, '')} ETH, left in the wallet for the next run`);
+  L.push(`undistributed     ${trimmed(run.dustWei)} ETH, left in the wallet for the next run`);
 
   // The hashes, and deliberately not who they went to.
   //

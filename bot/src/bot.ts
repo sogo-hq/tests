@@ -2995,10 +2995,23 @@ export function createBot(token = TELEGRAM_BOT_TOKEN): Bot {
         : `no run to ${verb}. /ledger preview first`;
     };
 
+    /**
+     * A run whose table does not match the signed declaration never reaches
+     * the payer, in any of the three ways a table leaves this command.
+     * Checked here as well as in the preview because the preview and the send
+     * are separate commands, and what has to hold is that the table going out
+     * agrees with what is signed at the moment it goes out.
+     */
+    const refusedSplit = (run: Ledger.LedgerRun) => run.refusal
+      ? `REFUSED: ${run.refusal}`
+      : null;
+
     if (sub === 'csv') {
       if (!isDm) { await dmOnly(); return; }
       const run = payableRunFrom(1);
       if (!run) { await ctx.reply(noRun('export', 'csv')); return; }
+      const stop = refusedSplit(run);
+      if (stop) { await ctx.reply(stop); return; }
       const name = `vitals-ledger-run-${run.id}.csv`;
       await ctx.replyWithDocument(new InputFile(Buffer.from(Ledger.csvText(run), 'utf8'), name));
       return;
@@ -3007,6 +3020,8 @@ export function createBot(token = TELEGRAM_BOT_TOKEN): Bot {
       if (!isDm) { await dmOnly(); return; }
       const run = payableRunFrom(1);
       if (!run) { await ctx.reply(noRun('send', 'send')); return; }
+      const stop = refusedSplit(run);
+      if (stop) { await ctx.reply(stop); return; }
       await ctx.reply(clamp(Ledger.sendCommand(run, `vitals-ledger-run-${run.id}.csv`), TELEGRAM_MAX_MESSAGE));
       return;
     }
@@ -3036,6 +3051,8 @@ export function createBot(token = TELEGRAM_BOT_TOKEN): Bot {
       // here either, and naming its id is the whole of the decision to post it.
       const run = payableRunFrom(1);
       if (!run) { await ctx.reply(noRun('post', 'post')); return; }
+      const stop = refusedSplit(run);
+      if (stop) { await ctx.reply(stop); return; }
       const text = Ledger.postText(run);
       // The public message is the one place a wallet must never reach, so it
       // is checked for one rather than assumed not to have any.
