@@ -580,6 +580,10 @@ export function csvText(run: LedgerRun): string {
     L.push(`${CSV_HYPOTHETICAL_MARK}: run ${run.id ?? '?'} was computed against a balance typed into /ledger preview`);
     L.push('# not read from the fee wallet. these amounts were never owed.');
   }
+  // As a comment, which parsePayCsv skips, so it reaches the machine holding
+  // the key without becoming a row. The person about to send these transfers
+  // is the one person who can stop them.
+  L.push(`# ${splitLine(run.split)}`);
   L.push('wallet,amount');
   for (const r of run.rows) L.push(`${r.wallet},${eth(r.amountWei)}`);
   return L.join('\n');
@@ -626,6 +630,11 @@ export function postText(run: LedgerRun): string {
     L.push(`equal split, ${run.rows.length} seat${run.rows.length === 1 ? '' : 's'} held today`);
     L.push(`${eth(run.rows[0]!.amountWei)} ETH each`);
   }
+  // Word for word what the preview says, including when it says the check did
+  // not resolve. "Undetermined" is what this project prints in public when the
+  // data cannot support a claim, and a payout of our own money is not the one
+  // place that word gets to stay on an admin screen.
+  L.push(splitLine(run.split));
   const changed = seatChangeNote(run);
   if (changed) {
     L.push('');

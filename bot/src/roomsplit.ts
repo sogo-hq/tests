@@ -64,22 +64,56 @@ export function declaredPoolPct(room: string): number | null {
   return m ? Number(m[1]) : null;
 }
 
+export interface DeclarationLookup {
+  declaration: Declaration | null;
+  /** Why there is none. Null when there is one. */
+  reason: string | null;
+}
+
 /**
- * The signed declaration this ledger pays under.
+ * The signed declaration this ledger pays under, and why there is none.
  *
  * Found the same way a card finds one: the launch of the configured token, the
  * wallet that deployed it, and the most recent declaration that wallet signed
  * BEFORE that block. A statement made after the launch is a description and
  * carries no authority over a payout.
+ *
+ * The reason is separate for each step, and that is the point rather than a
+ * detail. The chain runs through a token that does not exist until the launch
+ * transaction is mined, so a run made before that can only ever be
+ * undetermined. One shared "no declaration was found" would print the same
+ * sentence for the Sunday rehearsal and for a Monday run where the token is
+ * live, the launch is indexed and the declaration is the thing that is missing.
+ * Those are not the same fact and a reader four hours into a launch has to be
+ * able to tell them apart at a glance.
  */
-export function ledgerDeclaration(): Declaration | null {
+export function ledgerDeclaration(): DeclarationLookup {
   const token = vitalsToken();
-  if (!token) return null;
+  if (!token) {
+    return {
+      declaration: null,
+      reason: 'VITALS_TOKEN_ADDRESS is not set, so there is no launch to find a declaration for',
+    };
+  }
+  const at = token.toLowerCase();
   const launch = db
     .prepare('SELECT deployer, block_number FROM launches WHERE token = ?')
-    .get(token.toLowerCase()) as { deployer: string; block_number: number } | undefined;
-  if (!launch) return null;
-  return declarationFor(launch.deployer, launch.block_number);
+    .get(at) as { deployer: string; block_number: number } | undefined;
+  if (!launch) {
+    return {
+      declaration: null,
+      reason: `no launch is indexed for ${at}, so there is nothing a declaration could cover yet`,
+    };
+  }
+  const declaration = declarationFor(launch.deployer, launch.block_number);
+  if (!declaration) {
+    return {
+      declaration: null,
+      reason: `the launch of ${at} is indexed at block ${launch.block_number} `
+        + 'and no declaration signed before that block covers it',
+    };
+  }
+  return { declaration, reason: null };
 }
 
 export interface SplitRow {
@@ -106,12 +140,13 @@ export interface SplitCheck {
  * quantities on both sides, so any difference at all is a difference.
  */
 export function checkAgainstDeclaration(
-  rows: SplitRow[], sharePct: number, declaration: Declaration | null = ledgerDeclaration(),
+  rows: SplitRow[], sharePct: number, found: DeclarationLookup = ledgerDeclaration(),
 ): SplitCheck {
+  const declaration = found.declaration;
   if (!declaration) {
     return {
       state: 'undetermined',
-      detail: 'no signed declaration was found for this launch, so the split was not checked against one',
+      detail: found.reason ?? 'no signed declaration was found for this launch',
       declared: null,
       declarationId: null,
     };

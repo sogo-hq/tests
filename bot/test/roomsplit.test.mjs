@@ -296,7 +296,7 @@ test('no declaration is undetermined, which is neither a match nor a contradicti
   assert.equal(run.split.state, 'undetermined');
   assert.equal(run.refusal, null, 'an absent lookup blocked a payout');
   const text = L.previewText(run);
-  assert.match(text, /split not checked: no signed declaration was found/);
+  assert.match(text, /split not checked: no launch is indexed for 0x1{40}, so there is nothing a declaration could cover yet/);
   // It must never print as agreement.
   assert.doesNotMatch(text, /declaration \d+: equal split/);
 });
@@ -350,4 +350,133 @@ test('the room block DECLARED #001 signs reads as an equal split of a tenth', as
     'the ledger pays equally and the signed text does not say that is what it does');
   assert.equal(S.declaredPoolPct(room), L.LEDGER_SHARE_PCT,
     'the share of gross the ledger pays is not the share that was signed');
+});
+
+// ------------------------------- undetermined is public, and says which one
+
+/**
+ * The same sentence on every surface.
+ *
+ * "Undetermined" is what this project prints in public when the data cannot
+ * support a claim, and a payout of our own money is not the one place that
+ * word gets to stay on an admin screen. So whatever the preview says about the
+ * check, the room's post says it and the file handed to the machine holding
+ * the key says it.
+ */
+const splitLineOf = (text) => text.split('\n')
+  .map((l) => l.replace(/^# /, ''))
+  .find((l) => l.startsWith('split not checked:') || /^declaration \d+: /.test(l));
+
+test('the preview, the public post and the csv carry the same split line', () => {
+  for (const room of [EQUAL_ROOM, null]) {
+    reset();
+    if (room) declare(room);
+    seat('deployer', 'T1', 1, 1000);
+    seat('crew_one', 'T1', 2, 1000);
+    const run = L.computeRun({ balanceWei: ETH(10), paidToDateWei: 0n });
+    run.id = L.saveRun(run);
+
+    const line = splitLineOf(L.previewText(run));
+    assert.ok(line, 'the preview has no split line');
+    assert.equal(splitLineOf(L.postText(run)), line, 'the room is told something else');
+    assert.equal(splitLineOf(L.csvText(run)), line, 'the payer is told something else');
+    assert.equal(run.split.state, room ? 'match' : 'undetermined');
+  }
+});
+
+test('the csv carries it as a comment, so the payer reads it and the parser does not', async () => {
+  const PP = await import('../dist/payplan.js');
+  reset();
+  seat('deployer', 'T1', 1, 1000);
+  seat('crew_one', 'T1', 2, 1000);
+  const run = L.computeRun({ balanceWei: ETH(10), paidToDateWei: 0n });
+  run.id = L.saveRun(run);
+
+  const csv = L.csvText(run);
+  assert.match(csv, /^# split not checked: /m);
+  const parsed = PP.parsePayCsv(csv);
+  assert.equal(parsed.ok, true, parsed.ok ? '' : parsed.errors.join('; '));
+  assert.equal(parsed.rows.length, 2, 'the note was parsed as a row, or ate one');
+  assert.equal(PP.totalWei(parsed.rows), run.distributedWei);
+});
+
+test('an undetermined post is not silently a clean one', () => {
+  reset();
+  seat('deployer', 'T1', 1, 1000);
+  const run = L.computeRun({ balanceWei: ETH(10), paidToDateWei: 0n });
+  const post = L.postText(run);
+  assert.match(post, /split not checked: /);
+  assert.doesNotMatch(post, /\bclean\b|\bsafe\b|\blooks good\b/i);
+  assert.doesNotMatch(post, /declaration \d+: /, 'an unresolved check printed as agreement');
+  assert.ok(!post.includes(String.fromCharCode(0x2014)));
+});
+
+// -------------------------- each reason is its own sentence, so they differ
+
+test('before the token exists on chain, the reason names that and nothing else', () => {
+  // The Sunday rehearsal: signed, nothing launched, the ledger run on a typed
+  // balance. This is the only answer the check can give, and it has to be
+  // distinguishable on Monday from a run where the launch IS indexed.
+  reset();
+  const run = L.computeRun({ balanceWei: ETH(10), paidToDateWei: 0n });
+  assert.equal(run.split.state, 'undetermined');
+  assert.equal(
+    run.split.detail,
+    `no launch is indexed for ${process.env.VITALS_TOKEN_ADDRESS}, so there is nothing a declaration could cover yet`,
+  );
+});
+
+test('a launch with no declaration before it reads differently from no launch at all', () => {
+  reset();
+  // A launch, indexed, and nothing signed before its block.
+  db.prepare(
+    `INSERT INTO launches (token, curve, deployer, pair_token, launch_config_id,
+       graduation_threshold, block_number, tx_hash, launched_at)
+     VALUES (?,?,?,?,?,?,?,?,?)`,
+  ).run(process.env.VITALS_TOKEN_ADDRESS.toLowerCase(), W(2), DEPLOYER.toLowerCase(), W(3), 1,
+        '0', 64_623_813, '0x' + 'e'.repeat(64), 1_789_000_000);
+  seat('deployer', 'T1', 1, 1000);
+
+  const run = L.computeRun({ balanceWei: ETH(10), paidToDateWei: 0n });
+  assert.equal(run.split.state, 'undetermined');
+  assert.equal(
+    run.split.detail,
+    `the launch of ${process.env.VITALS_TOKEN_ADDRESS} is indexed at block 64623813 `
+    + 'and no declaration signed before that block covers it',
+  );
+});
+
+test('every reason the check cannot resolve is a different sentence', () => {
+  const seen = new Set();
+
+  // 1. No token configured at all.
+  reset();
+  const token = process.env.VITALS_TOKEN_ADDRESS;
+  delete process.env.VITALS_TOKEN_ADDRESS;
+  seen.add(S.ledgerDeclaration().reason);
+  process.env.VITALS_TOKEN_ADDRESS = token;
+
+  // 2. Configured, nothing on chain.
+  seen.add(S.ledgerDeclaration().reason);
+
+  // 3. On chain, nothing signed before it.
+  db.prepare(
+    `INSERT INTO launches (token, curve, deployer, pair_token, launch_config_id,
+       graduation_threshold, block_number, tx_hash, launched_at)
+     VALUES (?,?,?,?,?,?,?,?,?)`,
+  ).run(token.toLowerCase(), W(2), DEPLOYER.toLowerCase(), W(3), 1, '0', 900,
+        '0x' + 'e'.repeat(64), 1_789_000_000);
+  seen.add(S.ledgerDeclaration().reason);
+
+  // 4. Signed, and the room block states no rule.
+  declare('the room: some people get paid sometimes.');
+  seat('deployer', 'T1', 1, 1000);
+  seen.add(L.computeRun({ balanceWei: ETH(10), paidToDateWei: 0n }).split.detail);
+
+  assert.equal(seen.size, 4, `two reasons print the same sentence: ${[...seen].join(' | ')}`);
+  for (const r of seen) assert.ok(r && r.length > 20, String(r));
+  // And the one that resolves is not one of them.
+  reset();
+  declare(EQUAL_ROOM);
+  assert.equal(S.ledgerDeclaration().reason, null);
 });

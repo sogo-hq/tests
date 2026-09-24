@@ -511,7 +511,11 @@ test('a csv from a hypothetical says so at the top, and a real one says nothing'
   seed(1, 0, 0);
   const real = L.computeRun({ balanceWei: ETH(10), paidToDateWei: 0n, sweptToDateWei: 0n });
   real.id = L.saveRun(real);
-  assert.equal(L.csvText(real).split('\n')[0], 'wallet,amount');
+  // The split line is on every csv, hypothetical or not. The header is the
+  // last comment-free line before the rows.
+  const realLines = L.csvText(real).split('\n');
+  assert.match(realLines[0], /^# (split not checked|declaration \d+):/);
+  assert.equal(realLines[1], 'wallet,amount');
   assert.ok(!L.csvText(real).includes(L.CSV_HYPOTHETICAL_MARK));
 
   const guess = L.computeRun({
@@ -521,7 +525,8 @@ test('a csv from a hypothetical says so at the top, and a real one says nothing'
   const lines = L.csvText(guess).split('\n');
   assert.match(lines[0], new RegExp(`^${L.CSV_HYPOTHETICAL_MARK}: run ${guess.id} was computed against a balance typed`));
   assert.match(lines[1], /never owed/);
-  assert.equal(lines[2], 'wallet,amount');
+  assert.match(lines[2], /^# (split not checked|declaration \d+):/);
+  assert.equal(lines[3], 'wallet,amount');
 });
 
 test('the note at the top of a hypothetical csv is read back as a note, not a row', () => {

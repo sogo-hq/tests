@@ -151,8 +151,10 @@ test('3. the csv the ledger writes, named by id because the balance was typed', 
   // holds the key is not asked to remember.
   assert.match(lines[0], /^# HYPOTHETICAL: run \d+ was computed against a balance typed into \/ledger preview$/);
   assert.match(lines[1], /^# not read from the fee wallet\. these amounts were never owed\.$/);
-  assert.equal(lines[2], 'wallet,amount');
-  assert.equal(lines.length, 23, 'two notes, a header and twenty seats');
+  assert.match(lines[2], /^# declaration \d+: equal split, 20 seats held today$/,
+    'the payer is not told what the split was checked against');
+  assert.equal(lines[3], 'wallet,amount');
+  assert.equal(lines.length, 24, 'three notes, a header and twenty seats');
 });
 
 test('4. the columns the ledger writes are the columns the payer parses', () => {
