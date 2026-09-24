@@ -1,0 +1,282 @@
+[
+  {
+    "pubkey": "3P5BVffvoKngKMBZuki6PtMdGeScFX2N1kpjJW15WMjd",
+    "owner": "LanMV9sAd7wArD4vJFi2qDdfnVhFxYSUg6eADduJ3uj",
+    "len": 944,
+    "disc": "a04e8000f853e6a0",
+    "name": "StonkFun",
+    "site": "https://www.stonkfun.xyz"
+  },
+  {
+    "pubkey": "3qiqsFPZgPFhzUK2vF4QwvWXnh5NTPKYDHYJAxYsvcu8",
+    "owner": "LanMV9sAd7wArD4vJFi2qDdfnVhFxYSUg6eADduJ3uj",
+    "len": 944,
+    "disc": "a04e8000f853e6a0",
+    "name": "StonkFun",
+    "site": "https://www.stonkfun.xyz"
+  },
+  {
+    "pubkey": "3xv3SBLLeWQryvLVeG4BwfLhnhfWYN1tdeSGx3F1QaCe",
+    "owner": "LanMV9sAd7wArD4vJFi2qDdfnVhFxYSUg6eADduJ3uj",
+    "len": 944,
+    "disc": "a04e8000f853e6a0",
+    "name": "StonkFun",
+    "site": "https://www.stonkfun.xyz"
+  },
+  {
+    "pubkey": "4E876qZTE9FJMrBzgVtBrSrzz2TLivB5Y5QXPjB4gZL7",
+    "owner": "LanMV9sAd7wArD4vJFi2qDdfnVhFxYSUg6eADduJ3uj",
+    "len": 944,
+    "disc": "a04e8000f853e6a0",
+    "name": "StonkFun",
+    "site": "https://www.stonkfun.xyz"
+  },
+  {
+    "pubkey": "4jDsqJ8Wn2o2tE7F2HWCgAkTzm8cteBX6nn9Sgaix8aX",
+    "owner": "LanMV9sAd7wArD4vJFi2qDdfnVhFxYSUg6eADduJ3uj",
+    "len": 944,
+    "disc": "a04e8000f853e6a0",
+    "name": "StonkFun",
+    "site": "https://www.stonkfun.xyz"
+  },
+  {
+    "pubkey": "4LkQf3v3ukz4Rm8dpUckn8wKPji2CFmSfuPCLbo1pnHF",
+    "owner": "LanMV9sAd7wArD4vJFi2qDdfnVhFxYSUg6eADduJ3uj",
+    "len": 944,
+    "disc": "a04e8000f853e6a0",
+    "name": "StonkFun",
+    "site": "https://www.stonkfun.xyz"
+  },
+  {
+    "pubkey": "5f3S2roYYEdEGbyLmLhd3aDHoubaNtHtk7trX5Z7M1hh",
+    "owner": "LanMV9sAd7wArD4vJFi2qDdfnVhFxYSUg6eADduJ3uj",
+    "len": 944,
+    "disc": "a04e8000f853e6a0",
+    "name": "StonkFun",
+    "site": "https://www.stonkfun.xyz"
+  },
+  {
+    "pubkey": "5LNpBsmvaPovXErRUfV7ijdCeVkEHaRSpJ2RaQ5nNhX4",
+    "owner": "LanMV9sAd7wArD4vJFi2qDdfnVhFxYSUg6eADduJ3uj",
+    "len": 944,
+    "disc": "a04e8000f853e6a0",
+    "name": "StonkFun",
+    "site": "https://www.stonkfun.xyz"
+  },
+  {
+    "pubkey": "6BwHHDg3u1854jC8PDLXvR4spTcLNaoBxLJNGC4nTESt",
+    "owner": "LanMV9sAd7wArD4vJFi2qDdfnVhFxYSUg6eADduJ3uj",
+    "len": 944,
+    "disc": "a04e8000f853e6a0",
+    "name": "StonkFun",
+    "site": "https://www.stonkfun.xyz"
+  },
+  {
+    "pubkey": "6SzhbA9AACoBmFfTsBGG5Bfj5XQzWR1kEP7ZxF4sqvdn",
+    "owner": "LanMV9sAd7wArD4vJFi2qDdfnVhFxYSUg6eADduJ3uj",
+    "len": 944,
+    "disc": "a04e8000f853e6a0",
+    "name": "StonkFun",
+    "site": "https://www.stonkfun.xyz"
+  },
+  {
+    "pubkey": "7Skv1Zut6JMHgfsBMDGKoTKtDvFivQYHrYnY2PcQzipT",
+    "owner": "LanMV9sAd7wArD4vJFi2qDdfnVhFxYSUg6eADduJ3uj",
+    "len": 944,
+    "disc": "a04e8000f853e6a0",
+    "name": "StonkFun",
+    "site": "https://www.stonkfun.xyz"
+  },
+  {
+    "pubkey": "7uCfLgLrH7RYkmBXiUduudsDGDwutCNdgzrMzuydm5L7",
+    "owner": "LanMV9sAd7wArD4vJFi2qDdfnVhFxYSUg6eADduJ3uj",
+    "len": 944,
+    "disc": "a04e8000f853e6a0",
+    "name": "StonkFun",
+    "site": "https://www.stonkfun.xyz"
+  },
+  {
+    "pubkey": "8DFxvoAqP1AX5ShVLPfhKtqiS5usENj3vzNiiUfBrbEz",
+    "owner": "LanMV9sAd7wArD4vJFi2qDdfnVhFxYSUg6eADduJ3uj",
+    "len": 944,
+    "disc": "a04e8000f853e6a0",
+    "name": "StonkFun",
+    "site": "https://www.stonkfun.xyz"
+  },
+  {
+    "pubkey": "8uzF7UKMxB43x6YDfUwsKqtmJYGMzbDLaUPBiPAXuyhp",
+    "owner": "LanMV9sAd7wArD4vJFi2qDdfnVhFxYSUg6eADduJ3uj",
+    "len": 944,
+    "disc": "a04e8000f853e6a0",
+    "name": "StonkFun",
+    "site": "https://www.stonkfun.xyz"
+  },
+  {
+    "pubkey": "9asa5tjM9Akt6pRCUXHCfvmhEkuGo8XJDipubwPMwYo3",
+    "owner": "LanMV9sAd7wArD4vJFi2qDdfnVhFxYSUg6eADduJ3uj",
+    "len": 944,
+    "disc": "a04e8000f853e6a0",
+    "name": "StonkFun",
+    "site": "https://www.stonkfun.xyz"
+  },
+  {
+    "pubkey": "AbfUdGULpcLmS6eCiSbmwf5h3xctJVqjLTXrkgLzeK9S",
+    "owner": "LanMV9sAd7wArD4vJFi2qDdfnVhFxYSUg6eADduJ3uj",
+    "len": 944,
+    "disc": "a04e8000f853e6a0",
+    "name": "StonkFun",
+    "site": "https://www.stonkfun.xyz"
+  },
+  {
+    "pubkey": "ANytinarxvDziPyKVvGU78TAtKVP4R9QYZPm4c8fWYzT",
+    "owner": "LanMV9sAd7wArD4vJFi2qDdfnVhFxYSUg6eADduJ3uj",
+    "len": 944,
+    "disc": "a04e8000f853e6a0",
+    "name": "StonkFun",
+    "site": "https://www.stonkfun.xyz"
+  },
+  {
+    "pubkey": "apwdwgRxEU3RrRAA4idkwn8sQQwDbKDSMxqMgCd7wEF",
+    "owner": "LanMV9sAd7wArD4vJFi2qDdfnVhFxYSUg6eADduJ3uj",
+    "len": 944,
+    "disc": "a04e8000f853e6a0",
+    "name": "StonkFun",
+    "site": "https://www.stonkfun.xyz"
+  },
+  {
+    "pubkey": "Au4s8A4FWr81sA6BybLcW9wqgLd2Js4AVUEvLpiTFiBV",
+    "owner": "LanMV9sAd7wArD4vJFi2qDdfnVhFxYSUg6eADduJ3uj",
+    "len": 944,
+    "disc": "a04e8000f853e6a0",
+    "name": "StonkFun",
+    "site": "https://www.stonkfun.xyz"
+  },
+  {
+    "pubkey": "BCN7kK9PH7VoDYdKHguG1YjmyMmFuLT9DYoSdqvXgcEQ",
+    "owner": "LanMV9sAd7wArD4vJFi2qDdfnVhFxYSUg6eADduJ3uj",
+    "len": 944,
+    "disc": "a04e8000f853e6a0",
+    "name": "StonkFun",
+    "site": "https://www.stonkfun.xyz"
+  },
+  {
+    "pubkey": "BhFhtURYqjzkK7A1ChgkS2uoSXuYHBo3qfZa5s4MioCU",
+    "owner": "LanMV9sAd7wArD4vJFi2qDdfnVhFxYSUg6eADduJ3uj",
+    "len": 944,
+    "disc": "a04e8000f853e6a0",
+    "name": "StonkFun",
+    "site": "https://www.stonkfun.xyz"
+  },
+  {
+    "pubkey": "ChVSt6yJVxhTn8vKpyYP6adnh3bSXG9FzzFdhizQCB8S",
+    "owner": "LanMV9sAd7wArD4vJFi2qDdfnVhFxYSUg6eADduJ3uj",
+    "len": 944,
+    "disc": "a04e8000f853e6a0",
+    "name": "StonkFun",
+    "site": "https://www.stonkfun.xyz"
+  },
+  {
+    "pubkey": "DAR1V5XCYad4jgzDUx5FaAd42ergBMWoETuYayrk8RaK",
+    "owner": "LanMV9sAd7wArD4vJFi2qDdfnVhFxYSUg6eADduJ3uj",
+    "len": 944,
+    "disc": "a04e8000f853e6a0",
+    "name": "StonkFun",
+    "site": "https://www.stonkfun.xyz"
+  },
+  {
+    "pubkey": "DJuS9KGAbwHVxNbmnX7HCtnDrRqpAD6spWntJnY5JdRZ",
+    "owner": "LanMV9sAd7wArD4vJFi2qDdfnVhFxYSUg6eADduJ3uj",
+    "len": 944,
+    "disc": "a04e8000f853e6a0",
+    "name": "StonkFun",
+    "site": "https://www.stonkfun.xyz"
+  },
+  {
+    "pubkey": "DxvoksLVEaGRGKD9nGc1oizqN9W4ycHxZqLoML1yfmsC",
+    "owner": "LanMV9sAd7wArD4vJFi2qDdfnVhFxYSUg6eADduJ3uj",
+    "len": 944,
+    "disc": "a04e8000f853e6a0",
+    "name": "StonkFun",
+    "site": "https://www.stonkfun.xyz"
+  },
+  {
+    "pubkey": "DZ1h7DdDubcYY5atjskrqcck2rpi37s59UL4c2jboNk5",
+    "owner": "LanMV9sAd7wArD4vJFi2qDdfnVhFxYSUg6eADduJ3uj",
+    "len": 944,
+    "disc": "a04e8000f853e6a0",
+    "name": "StonkFun",
+    "site": "https://www.stonkfun.xyz"
+  },
+  {
+    "pubkey": "EbS77E9fau1cqh1mRCmZJjMAe3gzZQ5wDE86FbgdEe3t",
+    "owner": "LanMV9sAd7wArD4vJFi2qDdfnVhFxYSUg6eADduJ3uj",
+    "len": 944,
+    "disc": "a04e8000f853e6a0",
+    "name": "StonkFun",
+    "site": "https://www.stonkfun.xyz"
+  },
+  {
+    "pubkey": "EFSEG7RUgsQgpyeiSfg3usdeeJEYhJG4h4gEXsXsP5Py",
+    "owner": "LanMV9sAd7wArD4vJFi2qDdfnVhFxYSUg6eADduJ3uj",
+    "len": 944,
+    "disc": "a04e8000f853e6a0",
+    "name": "StonkFun",
+    "site": "https://www.stonkfun.xyz"
+  },
+  {
+    "pubkey": "Etu1AV8ynsTVNQxAPMz9gKgzECDQUeGBgdoYYkzkP69f",
+    "owner": "LanMV9sAd7wArD4vJFi2qDdfnVhFxYSUg6eADduJ3uj",
+    "len": 944,
+    "disc": "a04e8000f853e6a0",
+    "name": "StonkFun",
+    "site": "https://www.stonkfun.xyz"
+  },
+  {
+    "pubkey": "GP8D5pqcQmuH71UpLCc4WvshLDXagDYYjzRK2bXasSNf",
+    "owner": "LanMV9sAd7wArD4vJFi2qDdfnVhFxYSUg6eADduJ3uj",
+    "len": 944,
+    "disc": "a04e8000f853e6a0",
+    "name": "StonkFun",
+    "site": "https://www.stonkfun.xyz"
+  },
+  {
+    "pubkey": "GPeRBoTGcdX5LY153duXkMxa6VW7BEnYcd2qsoTdrQgN",
+    "owner": "LanMV9sAd7wArD4vJFi2qDdfnVhFxYSUg6eADduJ3uj",
+    "len": 944,
+    "disc": "a04e8000f853e6a0",
+    "name": "StonkFun",
+    "site": "https://www.stonkfun.xyz"
+  },
+  {
+    "pubkey": "GTNFRgvNndgKTim9iSYo5oumKXiRcUHjoirwmE1yW38w",
+    "owner": "LanMV9sAd7wArD4vJFi2qDdfnVhFxYSUg6eADduJ3uj",
+    "len": 944,
+    "disc": "a04e8000f853e6a0",
+    "name": "StonkFun",
+    "site": "https://www.stonkfun.xyz"
+  },
+  {
+    "pubkey": "HEjWQtsHcJMv6y1W51GMRo5JX7XEpr9LUpcM8Rrhi2z7",
+    "owner": "LanMV9sAd7wArD4vJFi2qDdfnVhFxYSUg6eADduJ3uj",
+    "len": 944,
+    "disc": "a04e8000f853e6a0",
+    "name": "StonkFun",
+    "site": "https://www.stonkfun.xyz"
+  },
+  {
+    "pubkey": "HTMR9w3ypLLDzwMiah6Px1jqCByoSaG9EDCtU3DLdPZD",
+    "owner": "LanMV9sAd7wArD4vJFi2qDdfnVhFxYSUg6eADduJ3uj",
+    "len": 944,
+    "disc": "a04e8000f853e6a0",
+    "name": "StonkFun",
+    "site": "https://www.stonkfun.xyz"
+  },
+  {
+    "pubkey": "QFWKD4f3e8dgkYHYyhAqWfMtu5s316BP7MP97weXW8E",
+    "owner": "LanMV9sAd7wArD4vJFi2qDdfnVhFxYSUg6eADduJ3uj",
+    "len": 944,
+    "disc": "a04e8000f853e6a0",
+    "name": "StonkFun",
+    "site": "https://www.stonkfun.xyz"
+  }
+]
