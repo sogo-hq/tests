@@ -6,7 +6,7 @@ import type { ScanResult } from './scan.js';
 import { measure, wrap, fitSize, hasGlyph } from './fontmetrics.js';
 import { windowLabel } from './card.js';
 import { BENCHMARK_LADDER_MINUTES } from './metrics/benchmark.js';
-import { shortAge as age } from './text.js';
+import { count, shortAge as age } from './text.js';
 import { sponsorLine } from './sponsor.js';
 import { launchNotice } from './launchnotice.js';
 import { type Declaration } from './declare.js';
@@ -233,15 +233,15 @@ export function heroOf(r: ScanResult): HeroContent {
   // buyers, on an index where half of them had none either.
   if (w && median !== null) {
     const sameLabel = own === rung;
-    const headline = `${w.uniqueBuyers30m.toLocaleString()} buyers in the first ${own}`;
+    const headline = `${count(w.uniqueBuyers30m, 'buyer')} in the first ${own}`;
     const reference = sameLabel
-      ? `index median ${median.toLocaleString()}${r.benchmark.measuredAtAge ? ' at this age' : ''} over ${r.benchmark.n.toLocaleString()} launches`
-      : `index median ${median.toLocaleString()} over the first ${rung}, ${r.benchmark.n.toLocaleString()} launches`;
+      ? `index median ${median.toLocaleString('en-US')}${r.benchmark.measuredAtAge ? ' at this age' : ''} over ${count(r.benchmark.n, 'launch', 'launches')}`
+      : `index median ${median.toLocaleString('en-US')} over the first ${rung}, ${count(r.benchmark.n, 'launch', 'launches')}`;
     return { headline, reference, marked: 'none' };
   }
   if (w) {
     return {
-      headline: `${w.uniqueBuyers30m.toLocaleString()} buyers in the first ${own}`,
+      headline: `${count(w.uniqueBuyers30m, 'buyer')} in the first ${own}`,
       reference: r.benchmark.windowMinutes === 0 ? `index median from ${windowLabel(BENCHMARK_LADDER_MINUTES[0]!)}` : 'no index median yet at this age',
       marked: 'none',
     };
@@ -306,7 +306,7 @@ export function measuresOf(r: ScanResult): Measure[] {
   if (w.uniqueBuyers30m >= MIN_BUYERS_FOR_FLOW) {
     out.push({
       label: 'flow',
-      value: `${w.buyTxCount.toLocaleString()} buys, ${w.sellTxCount.toLocaleString()} sells`,
+      value: `${count(w.buyTxCount, 'buy')}, ${count(w.sellTxCount, 'sell')}`,
       reference: null,
     });
   }
@@ -326,7 +326,13 @@ export interface Cell { label: string; value: string }
 export function marketOf(r: ScanResult): Cell[] {
   const out: Cell[] = [];
   const unit = drawable(r.reads.pairSymbol ?? 'ETH');
-  if (r.reads.mcapInQuote > 0) out.push({ label: 'mcap', value: `${compact(r.reads.mcapInQuote)} ${unit}` });
+  // Undetermined is a cell, not an absent cell. A missing mcap on a graduated
+  // launch looks like an oversight; saying it could not be read is a fact.
+  if (r.reads.mcapSource === null) {
+    out.push({ label: 'mcap', value: 'undetermined' });
+  } else if (r.reads.mcapInQuote > 0) {
+    out.push({ label: 'mcap', value: `${compact(r.reads.mcapInQuote)} ${unit}` });
+  }
 
   const peak = db.prepare('SELECT peak_mcap, peak_at FROM token_peaks WHERE token = ?')
     .get(r.reads.token.toLowerCase()) as { peak_mcap: string; peak_at: number } | undefined;
@@ -580,7 +586,7 @@ export function cardSvg(r: ScanResult, renderedAt = new Date(), size: CardSize =
   const indexed = indexSize();
   p.push(text(PAD, footY + 46,
     indexed > 0
-      ? `${utcStamp(renderedAt)}  ·  ${indexed.toLocaleString()} launches indexed`
+      ? `${utcStamp(renderedAt)}  ·  ${count(indexed, 'launch', 'launches')} indexed`
       : utcStamp(renderedAt),
     { size: 19, fill: DIM }));
   // Dim, like every other line down here, and never REF: green on this card

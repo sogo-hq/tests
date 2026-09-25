@@ -176,3 +176,19 @@ export const SELECTOR = {
   launchTokenFor: '0xd6a0eef5',
   launchAndBuy: '0xf85f8e41',
 } as const;
+
+/**
+ * The v4 pool manager's raw storage reader.
+ *
+ * A graduated launch's price is not on the curve any more: the curve's token
+ * reserve is zero and its marginal price with it. The pool holds the liquidity,
+ * and v4 exposes no getter for a pool's price, only `extsload` over its own
+ * storage. So this is the whole interface needed to price a graduated launch.
+ */
+export const poolManagerAbi = [
+  {
+    type: 'function', name: 'extsload', stateMutability: 'view',
+    inputs: [{ name: 'slot', type: 'bytes32' }],
+    outputs: [{ name: 'value', type: 'bytes32' }],
+  },
+] as const;

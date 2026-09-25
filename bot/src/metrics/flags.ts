@@ -1,7 +1,7 @@
 import { db, normaliseKey } from '../db.js';
 import { collisionKeys, countCollisions, collisionSymbols, MIN_COLLISION_MATCHES } from '../collision.js';
 import { isNativePair } from '../reads.js';
-import { clamp, clampWords, MAX_TICKER, MAX_SAMPLE } from '../text.js';
+import { clamp, clampWords, count, MAX_TICKER, MAX_SAMPLE } from '../text.js';
 import { indexCoverage, coverageReason } from '../coverage.js';
 import {
   concentrationThreshold,
@@ -371,7 +371,7 @@ export function computeFlags(opts: {
       label: 'Snipe-tax exemptions',
       state: 'raised',
       detail:
-        `${exCount} wallets skipped the opening tax, ${others} of them besides the deployer` +
+        `${count(exCount, 'wallet')} skipped the opening tax, ${others} of them besides the deployer` +
         (exShare === null ? '' : `, and took ${exShare.toFixed(1)}% of supply between them in the tax-free window`) +
         (viaBuy ? ', alongside a creator buy in the same transaction' : ''),
       compactDetail:
@@ -381,7 +381,7 @@ export function computeFlags(opts: {
       // Says which wallets, and how much of the token they were able to take
       // before anyone else could bid. The count alone does not separate five
       // wallets that took 0.2% from five that took 40%.
-      plain: `${exCount} wallets tax-free at launch, 1 of them the deployer${shareClause}`,
+      plain: `${count(exCount, 'wallet')} tax-free at launch, 1 of them the deployer${shareClause}`,
       // Where the share comes from, because the obvious place to look for it is
       // the wrong one. Measured on four launches, the launch receipt alone
       // reported 1.0% where the opening window reported 17.4%.
@@ -757,7 +757,7 @@ export function computeFlags(opts: {
        * sentence of that shape invites the reading. The count never included
        * it, but the sentence did.
        */
-      plain: `ticker shared with ${collisionCount} other launch${collisionCount === 1 ? '' : 'es'} of ${cov.indexed.toLocaleString()} indexed`,
+      plain: `ticker shared with ${count(collisionCount, 'other launch', 'other launches')} of ${cov.indexed.toLocaleString('en-US')} indexed`,
       source: SOURCE.collision,
       value: { matches: collisionCount },
       reference: { indexed: cov.indexed, flag_at_or_above: MIN_COLLISION_MATCHES },
@@ -896,7 +896,7 @@ export function computeFlags(opts: {
       label: 'Holder concentration',
       state: 'unknown',
       detail: `${conc.holders} holder${conc.holders === 1 ? '' : 's'}, too few for a top-5 share to mean anything (it is 100% by arithmetic below ${MIN_HOLDERS_FOR_SHARE})`,
-      compactDetail: `${conc.holders} holders, too few to measure concentration`,
+      compactDetail: `${count(conc.holders, 'holder')}, too few to measure concentration`,
       plain: 'too few holders to measure concentration',
       source: SOURCE.holder_concentration,
       value: null,
@@ -911,7 +911,7 @@ export function computeFlags(opts: {
       key: 'holder_concentration',
       label: 'Holder concentration',
       state: 'clean',
-      detail: `top 5 hold ${shareStr} of circulating, largest single wallet ${conc.top1Share.toFixed(1)}% (${conc.holders} holders, ${arithmeticFloor(conc.holders).toFixed(1)}% is the least ${conc.holders} wallets can hold), no threshold yet (n=${n}, need ${MIN_CONCENTRATION_SAMPLES})`,
+      detail: `top 5 hold ${shareStr} of circulating, largest single wallet ${conc.top1Share.toFixed(1)}% (${count(conc.holders, 'holder')}, ${arithmeticFloor(conc.holders).toFixed(1)}% is the least ${count(conc.holders, 'wallet')} can hold), no threshold yet (n=${n}, need ${MIN_CONCENTRATION_SAMPLES})`,
       compactDetail: `top 5 hold ${shareStr}, no threshold yet (n=${n})`,
       plain: `top 5 hold ${shareStr}${conc.top1Share > 0 ? `, largest ${conc.top1Share.toFixed(0)}%` : ''} (no reference yet)`,
       source: SOURCE.holder_concentration,
@@ -926,21 +926,21 @@ export function computeFlags(opts: {
     const over = excess >= thr.threshold;
     const floor = arithmeticFloor(conc.holders);
     const audit =
-      `flagged at ${thr.thresholdShare.toFixed(1)}% for ${conc.holders} holders ` +
-      `(${floor.toFixed(1)}% is the least ${conc.holders} wallets can hold; ` +
-      `${thr.percentile}th percentile of ${thr.n.toLocaleString()} launches)`;
+      `flagged at ${thr.thresholdShare.toFixed(1)}% for ${count(conc.holders, 'holder')} ` +
+      `(${floor.toFixed(1)}% is the least ${count(conc.holders, 'wallet')} can hold; ` +
+      `${thr.percentile}th percentile of ${count(thr.n, 'launch', 'launches')})`;
     flags.push({
       key: 'holder_concentration',
       label: 'Holder concentration',
       state: over ? 'raised' : 'clean',
-      detail: `top 5 hold ${shareStr} of circulating, largest single wallet ${conc.top1Share.toFixed(1)}% (${conc.holders} holders), ${audit}`,
+      detail: `top 5 hold ${shareStr} of circulating, largest single wallet ${conc.top1Share.toFixed(1)}% (${count(conc.holders, 'holder')}), ${audit}`,
       compactDetail: over
         ? `top 5 hold ${shareStr}${conc.top1Share > 0 ? `, largest ${conc.top1Share.toFixed(0)}%` : ''} (over ${thr.thresholdShare.toFixed(1)}%)`
         : `top 5 hold ${shareStr}${conc.top1Share > 0 ? `, largest ${conc.top1Share.toFixed(0)}%` : ''}`,
       // Rounded as the card rounds, and carrying the holder count, because when
       // this is raised it is the only place the reader sees either.
       plain: over
-        ? `top 5 hold ${conc.top5Share.toFixed(0)}% of supply${conc.top1Share > 0 ? `, largest ${conc.top1Share.toFixed(0)}%` : ''} \u00b7 ${conc.holders} holders`
+        ? `top 5 hold ${conc.top5Share.toFixed(0)}% of supply${conc.top1Share > 0 ? `, largest ${conc.top1Share.toFixed(0)}%` : ''} \u00b7 ${count(conc.holders, 'holder')}`
         : `top 5 hold ${conc.top5Share.toFixed(0)}%${conc.top1Share > 0 ? `, largest ${conc.top1Share.toFixed(0)}%` : ''}`,
       source: SOURCE.holder_concentration,
       value: { top5_share: conc.top5Share / 100, largest_share: largestShare, holders: conc.holders },
@@ -969,7 +969,7 @@ export function computeFlags(opts: {
     const others = declaration.exemptCount - 1;
     attach('snipe_exemptions', others === 0
       ? 'declared: the deployer only'
-      : `declared: ${declaration.exemptCount} wallets, ${others} beyond the deployer`);
+      : `declared: ${count(declaration.exemptCount, 'wallet')}, ${others} beyond the deployer`);
     attach('creator_open_buy', `declared: a dev buy of ${declaration.devBuyPct}% of supply`);
     attach('creator_tax', `declared: ${declaration.creatorTaxBps} bps, ${declaration.taxSplit}`);
 

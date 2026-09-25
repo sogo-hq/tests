@@ -177,3 +177,28 @@ export function splitVerbatim(text: string, max = TELEGRAM_MAX_MESSAGE): string[
   if (cur) parts.push(cur);
   return parts.length ? parts : [text];
 }
+
+/**
+ * The plural of a noun for a count, and the count with it.
+ *
+ * "1 buyers in first 30 min" was on a live card. It is small and it is the kind
+ * of small that makes a reader trust the numbers beside it less, because a
+ * number printed without being looked at reads like a number nobody checked.
+ *
+ * English, and only the two cases English has. Irregular plurals are passed in
+ * rather than guessed: appending an s to "es" would give "launchs".
+ */
+export function plural(n: number, one: string, many = `${one}s`): string {
+  return n === 1 ? one : many;
+}
+
+/**
+ * "1 holder", "2 holders", "1,837 launches".
+ *
+ * Grouped with an explicit locale. A bare toLocaleString takes the host's,
+ * which makes the same card render "1,837" on one machine and "1 837" on
+ * another, and the tests would only ever see one of them.
+ */
+export function count(n: number, one: string, many?: string): string {
+  return `${n.toLocaleString('en-US')} ${plural(n, one, many)}`;
+}

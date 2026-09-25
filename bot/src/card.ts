@@ -5,7 +5,7 @@ import { DISCLAIMER, EXPLORER_URL } from './config.js';
 import { sponsorLine } from './sponsor.js';
 import { launchNotice } from './launchnotice.js';
 import { deployerSummary } from './deployerlookup.js';
-import { clamp, clampMessage, MAX_NAME, MAX_TICKER, TELEGRAM_MAX_MESSAGE } from './text.js';
+import { clamp, clampMessage, count, MAX_NAME, MAX_TICKER, TELEGRAM_MAX_MESSAGE } from './text.js';
 import { EARLY_WINDOW_SECONDS } from './config.js';
 import { MIN_HOLDERS_FOR_SHARE } from './metrics/concentration.js';
 import { MIN_BENCHMARK_SAMPLES, BENCHMARK_LADDER_MINUTES } from './metrics/benchmark.js';
@@ -319,7 +319,7 @@ export function renderCard(r: ScanResult): string {
   L.push(
     b.median === null
       ? `  buyer benchmark: not enough data yet (n=${b.n}, need ${MIN_BENCHMARK_SAMPLES})`
-      : `  buyer benchmark: ${b.median}, median over the same first ${windowLabel(b.windowMinutes)}, across ${b.n.toLocaleString()} indexed launches that reached it`,
+      : `  buyer benchmark: ${b.median}, median over the same first ${windowLabel(b.windowMinutes)}, across ${count(b.n, 'indexed launch', 'indexed launches')} that reached it`,
   );
   L.push(`  age band: ${esc(b.bucket.label)}${b.measuredAtAge ? '' : ` (buyers counted over the first ${windowLabel(b.windowMinutes)}, not the full age)`}`);
   L.push(`  buyer growth: ${w.uniqueBuyers10m} at +10 min → ${w.uniqueBuyers30m} at +${num(t.windowMinutes, 0)} min${w.buyerGrowthRatio !== null ? ` (${ratioStr(w.buyerGrowthRatio)}x)` : ''}`);
@@ -346,7 +346,7 @@ export function renderCard(r: ScanResult): string {
       L.push(`  peak progress in window: ${num(w.peakProgressPct, 3)}% (now lower)`);
   }
   if (w.roundTrippers > 0)
-    L.push(`  round-trippers: ${w.roundTrippers} of ${w.uniqueBuyers30m} buyers also sold`);
+    L.push(`  round-trippers: ${w.roundTrippers} of ${count(w.uniqueBuyers30m, 'buyer')} also sold`);
   if (w.forwarderBuys > 0)
     L.push(`  creator opening buy present in the launch transaction`);
   L.push('');
@@ -590,7 +590,30 @@ function formatProgress(pct: number): string {
  * worthless token rather than a finished one.
  */
 export function headerMcap(r: ScanResult): string | null {
+  return mcapLabel(r);
+}
+
+/**
+ * The market cap, the reason there isn't one, or nothing. Never a zero.
+ *
+ * One function, used by the text card, the group card and the picture, because
+ * three renderers each deciding when a market cap is real is three chances for
+ * one of them to print a zero. That is exactly what happened: two guarded on
+ * the figure being positive and the group card did not, so a graduated launch
+ * went out as "0 ETH mc" while other tools priced it in the tens of millions.
+ *
+ * Three answers, because there are three situations:
+ *
+ *   a figure    the curve priced it, or the pool did after it graduated.
+ *   undetermined  it graduated and the pool could not be read. Said out loud,
+ *                 because a graduated launch with no market cap looks like an
+ *                 oversight and this is a statement about our reach.
+ *   nothing     anything else, which is a read that gave no price on a launch
+ *                 still on its curve. Omitted, as it always has been.
+ */
+export function mcapLabel(r: ScanResult): string | null {
   const v = r.reads.mcapInQuote;
+  if (r.reads.mcapSource === null) return 'mc undetermined after graduation';
   if (!Number.isFinite(v) || v <= 0) return null;
   const unit = clamp(r.reads.pairSymbol ?? 'ETH', MAX_TICKER);
   return `${compactAmount(v)} ${unit} mc`;
@@ -828,7 +851,7 @@ export function earlySellLine(r: ScanResult): string | null {
   // "has since sold" is whole-life -- the distinction from sellingLine, which
   // counts only selling inside the window.
   const win = windowLabel(r.traction.windowMinutes);
-  return `${e.sold} of ${e.cohort} buyers from first ${win} has since sold`;
+  return `${e.sold} of ${count(e.cohort, 'buyer')} from first ${win} ${e.sold === 1 ? 'has' : 'have'} since sold`;
 }
 
 export function concentrationLine(r: ScanResult): string | null {
@@ -843,7 +866,7 @@ export function concentrationLine(r: ScanResult): string | null {
   // as "top 5 hold 21%", and they are not the same situation. The largest
   // single share is stated beside it; the full breakdown stays in /full.
   const largest = c.top1Share > 0 ? `, largest ${c.top1Share.toFixed(0)}%` : '';
-  return `top 5 hold ${c.top5Share.toFixed(0)}%${largest} \u00b7 ${c.holders} holders`;
+  return `top 5 hold ${c.top5Share.toFixed(0)}%${largest} \u00b7 ${count(c.holders, 'holder')}`;
 }
 
 /**
@@ -1033,7 +1056,7 @@ export function cardLines(r: ScanResult, botUsername?: string): CardLine[] {
       L.push(...rest);
     }
   } else {
-    push('summary', `no findings \u00b7 ${f.total - f.unknown} of ${f.total} checks ran`);
+    push('summary', `no findings \u00b7 ${f.total - f.unknown} of ${count(f.total, 'check')} ran`);
     const undet = undeterminedNames(f.flags);
     if (undet) {
       L.push({ role: 'extras', text: `${MARK_GLYPH.undetermined} ${undet}`, mark: 'undetermined' });
@@ -1121,7 +1144,7 @@ export function notALaunchLines(token: string): string[] {
   if (!d) return [NOT_A_PONS_LAUNCH];
   const ticker = d.latestSymbol ? `$${plainField(d.latestSymbol, MAX_TICKER).toUpperCase()}` : 'its latest launch';
   return [
-    `that is a deployer, not a token. ${d.launches.toLocaleString()} launch${d.launches === 1 ? '' : 'es'} in the index`,
+    `that is a deployer, not a token. ${count(d.launches, 'launch', 'launches')} in the index`,
     '',
     `most recent: ${ticker}`,
     d.latestToken,

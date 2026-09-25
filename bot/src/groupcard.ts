@@ -1,6 +1,6 @@
 import type { ScanResult } from './scan.js';
-import { clamp, shortAge as age, MAX_NAME, MAX_TICKER } from './text.js';
-import { compactAmount, GROUP_HANDLE, windowLabel } from './card.js';
+import { clamp, count, shortAge as age, MAX_NAME, MAX_TICKER } from './text.js';
+import { compactAmount, GROUP_HANDLE, mcapLabel, windowLabel } from './card.js';
 import { BENCHMARK_LADDER_MINUTES } from './metrics/benchmark.js';
 import { marketSnapshot, type MarketSnapshot } from './metrics/market.js';
 import { holderBreakdown } from './metrics/concentration.js';
@@ -79,7 +79,12 @@ export function renderGroupCard(r: ScanResult, opts: GroupCardOptions = {}): Gro
   const L: string[] = [];
 
   // -- identity ----------------------------------------------------------
-  L.push(`<b>${sym}</b>  ${name}  ·  ${compactAmount(k.mcapInQuote)} ${esc(quote)} mc`);
+  // Through mcapLabel, not from the figure. This line printed the figure
+  // directly and was the one place on any card that rendered a graduated
+  // launch's empty curve as "0 ETH mc". The quote symbol is launch calldata, so
+  // the label is escaped like every other read.
+  const mc = mcapLabel(r);
+  L.push(`<b>${sym}</b>  ${name}${mc ? `  ·  ${esc(mc)}` : ''}`);
   L.push(`Robinhood Chain · pons v2 · ${age(r.ageSeconds)} · ${esc(stateLine(r, quote))}`);
   L.push('');
 
@@ -111,7 +116,7 @@ export function renderGroupCard(r: ScanResult, opts: GroupCardOptions = {}): Gro
   const hb = holderBreakdown(token, k.curve);
   if (hb) {
     const top = hb.top.map((v) => `${v.toFixed(0)}%`).join(' ');
-    L.push(`top5 ${top} · top10 ${hb.top10.toFixed(0)}% · ${hb.holders.toLocaleString()} holders`);
+    L.push(`top5 ${top} · top10 ${hb.top10.toFixed(0)}% · ${count(hb.holders, 'holder')}`);
   }
   const w = r.traction.window;
   if (w) {
@@ -120,7 +125,7 @@ export function renderGroupCard(r: ScanResult, opts: GroupCardOptions = {}): Gro
       // The window the count was taken over, not a fixed thirty: a launch two
       // minutes old has two minutes of buyers, and saying "first 30 min" over
       // them states a measurement that was never made.
-      `${w.uniqueBuyers30m.toLocaleString()} buyers in first ${windowLabel(r.traction.windowMinutes)}`
+      `${count(w.uniqueBuyers30m, 'buyer')} in first ${windowLabel(r.traction.windowMinutes)}`
       + (median === null
         ? r.benchmark.windowMinutes === 0
           ? ` · index median from ${windowLabel(BENCHMARK_LADDER_MINUTES[0]!)}`
@@ -206,7 +211,7 @@ function marketLines(m: MarketSnapshot, quote: string, r: ScanResult): string[] 
     // How much traded, not which way it went. See the note in metrics/market.ts:
     // a quantity is evidence and a direction is a signal.
     `vol 5m ${compactAmount(m.vol5m)} · 1h ${compactAmount(m.vol1h)} ${q}`
-    + ` · ${m.trades.toLocaleString()} trades`
+    + ` · ${count(m.trades, 'trade')}`
     // A window measured over less than it names is still a measurement, and
     // saying so is the difference between a partial hour and an hour.
     + (m.complete ? '' : ' (partial)'),

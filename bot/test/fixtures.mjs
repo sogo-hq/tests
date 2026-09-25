@@ -34,6 +34,9 @@ export function makeScan(over = {}) {
       phaseName: 'NotGraduated',
       progressPct: over.progressPct ?? 0,
       mcapInQuote: 'mcapInQuote' in over ? over.mcapInQuote : 0,
+      // Where the figure came from, as production carries it: 'curve' while on
+      // the curve, 'pool' after graduation, null when neither could be read.
+      mcapSource: 'mcapSource' in over ? over.mcapSource : 'curve',
       phaseName: over.phaseName ?? 'NotGraduated',
       sweptAt: over.sweptAt ?? 0,
       graduationThreshold: over.graduationThreshold ?? 4_200000000000000000n,

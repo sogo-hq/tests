@@ -3,6 +3,7 @@ import { client } from './chain.js';
 import { factoryAbi, curveAbi, erc20Abi, tokenInfoAbi, buybackVaultAbi } from './abi.js';
 import { FACTORY, BUYBACK_VAULT, PHASE } from './config.js';
 import { isRateLimit } from './ratelimit.js';
+import { readPoolPrice } from './pool.js';
 
 export interface TokenReads {
   token: Address;
@@ -57,6 +58,16 @@ export interface TokenReads {
    */
   priceInQuote: number;
   mcapInQuote: number;
+  /**
+   * Where the market cap came from, or null when it could not be read.
+   *
+   * Three states rather than a number that has to carry a fourth meaning. The
+   * curve prices a launch while it is on the curve; the pool prices it after it
+   * graduates; and when neither answers, the figure is undetermined. Before
+   * this existed, "graduated" and "unreadable" and "genuinely worth nothing"
+   * were all the same zero, and the card printed the zero.
+   */
+  mcapSource: 'curve' | 'pool' | null;
 }
 
 export const NATIVE_PAIR = '0x0000000000000000000000000000000000000000';
@@ -182,8 +193,37 @@ export async function readToken(tokenAddr: string): Promise<TokenReads | null> {
     tokenReserve > 0n
       ? (ratio(quoteReserve, tokenReserve) * 10 ** dec) / 10 ** pairDec
       : 0;
+  const wholeSupply = Number(totalSupply) / 10 ** dec;
   // fully-diluted mcap = whole supply * price
-  const mcapInQuote = (Number(totalSupply) / 10 ** dec) * priceInQuote;
+  let price = priceInQuote;
+  let mcapInQuote = wholeSupply * price;
+  let mcapSource: 'curve' | 'pool' | null = 'curve';
+
+  /**
+   * After graduation the curve holds none of the supply, so its marginal price
+   * is zero and so is everything computed from it. The liquidity is in the v4
+   * pool from that moment on, and that is where the price has to come from.
+   *
+   * Read only when the curve has no price to give, so a launch still on the
+   * curve costs exactly the reads it always did. A pool that cannot be read
+   * leaves the source null, which every renderer prints as undetermined: at no
+   * point does an unread price become a zero on a card.
+   */
+  if (price <= 0 && PHASE[Number(info.phase)] !== 'NotGraduated') {
+    const pool = await readPoolPrice({
+      token, pairToken: info.pairToken as Address,
+      poolFee: Number(info.poolFee), tickSpacing: Number(info.tickSpacing),
+      tokenDecimals: dec, quoteDecimals: pairDec,
+    });
+    if (pool) {
+      price = pool.priceInQuote;
+      mcapInQuote = wholeSupply * price;
+      mcapSource = 'pool';
+    } else {
+      mcapInQuote = 0;
+      mcapSource = null;
+    }
+  }
 
   return {
     token,
@@ -230,7 +270,8 @@ export async function readToken(tokenAddr: string): Promise<TokenReads | null> {
     pairSymbol,
 
     progressPct,
-    priceInQuote,
+    priceInQuote: price,
     mcapInQuote,
+    mcapSource,
   };
 }
