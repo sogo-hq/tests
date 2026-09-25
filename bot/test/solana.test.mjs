@@ -26,6 +26,15 @@ const CREATIONS = fixture('creations.json');
 
 const account = (m) => ({ data: m.data, owner: m.owner, lamports: m.lamports, executable: false });
 
+/** A distinct, valid-looking pubkey per index, for paging tests. */
+const B58 = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
+const mintFor = (n) => {
+  let s = '';
+  let v = n + 1;
+  while (s.length < 43) { s += B58[v % 58]; v = Math.floor(v / 58) + 7 + s.length; }
+  return s.slice(0, 43);
+};
+
 // ------------------------------------------------------------ the pinned set
 
 test('the pinned set is 35 stonkfun configs, and every one is in the fixture', () => {
@@ -447,53 +456,171 @@ test('a short getMultipleAccounts page is an error, not a silent shift', async (
 
 // ------------------------------------------------------------ the seed
 
-test('the listing is parsed into rows, and a row with no mint is dropped', () => {
-  const page = S.parseSeedPage({
-    tokens: [
-      { mint: C.PINNED_PLATFORMS[0].pubkey, name: 'A', symbol: 'AAA', symbolAmbiguous: true },
-      { name: 'no mint' },
-      { mint: 'not-a-pubkey', name: 'bad' },
-    ],
-  });
-  assert.equal(page.ok, true);
-  assert.equal(page.tokens.length, 1);
-  assert.equal(page.tokens[0].symbolAmbiguous, true);
-  assert.equal(page.empty, false);
+const API = fixture('stonkfun-api.json');
+
+test('the listing is the endpoint the site itself uses, not /api/tokens', () => {
+  // /api/tokens answers 200 with an empty array and appears nowhere in the
+  // site's own bundle. It was never the listing.
+  assert.match(S.ENDPOINTS.listing, /\/api\/platform-pools$/);
+  assert.match(S.ENDPOINTS.recent, /\/api\/recent-launches$/);
+  assert.equal(S.parsePage(API.tokensVestigial).empty, true);
 });
 
-test('an empty listing is empty, which is not the same as no launches', () => {
-  // Read on 2026-09-24: the endpoint answers 200 with {"tokens": []} for every
-  // shape tried, including a known mint.
-  const page = S.parseSeedPage({ tokens: [] });
+test('a listing page parses into rows, and a row with no mint is dropped', () => {
+  const page = S.parsePage(API.platformPools);
   assert.equal(page.ok, true);
-  assert.equal(page.empty, true);
-  assert.deepEqual(page.tokens, []);
-  // And a response that is not a listing at all is a reason, not an empty page.
-  assert.equal(S.parseSeedPage({}).ok, false);
-  assert.match(S.parseSeedPage('<!doctype html>').reason, /no tokens array/);
+  assert.equal(page.tokens.length, API.platformPools.pools.length);
+  for (const t of page.tokens) {
+    assert.ok(C.isPubkey(t.mint), t.mint);
+    assert.ok(t.quoteMint === null || C.isPubkey(t.quoteMint));
+  }
+  const dropped = S.parsePage({ pools: [{ name: 'no mint' }, { mint: 'not-a-pubkey' }] });
+  assert.deepEqual(dropped.tokens, []);
+  assert.equal(dropped.rows, 2, 'the rows the server sent are still counted');
 });
 
-test('paging stops on a listing that ignores its offset', async () => {
-  // A listing that returns page one forever would otherwise page until it ran
-  // out of whatever it was counting.
+test('a price and a price direction never leave the boundary', () => {
+  // The fixture carries priceUsd and priceChange24h on purpose. A fixture
+  // without them could not prove they are dropped.
+  const raw = API.platformPools.pools[0];
+  assert.ok('priceUsd' in raw, 'the fixture lost the field this test exists for');
+  assert.ok('priceChange24h' in raw, 'the fixture lost the direction field');
+
+  for (const t of S.parsePage(API.platformPools).tokens) {
+    for (const key of Object.keys(t)) {
+      assert.doesNotMatch(key, /price/i, `${key} reached the store`);
+    }
+    for (const refused of S.REFUSED_FIELDS) {
+      assert.ok(!(refused in t), `${refused} reached the store`);
+    }
+  }
+});
+
+test('the quantities that are allowed are kept', () => {
+  const t = S.parsePage(API.platformPools).tokens[0];
+  // Market cap, FDV, volume and the peak are quantities. The distinction from
+  // a price was decided before this was built and is kept here.
+  for (const k of ['marketCapUsd', 'fdvUsd', 'volume24hUsd', 'peakMarketCapUsd']) {
+    assert.ok(typeof t[k] === 'number' || t[k] === null, k);
+  }
+});
+
+test('everything the platform asserts is named as a claim', () => {
+  const t = S.parsePage(API.platformPools).tokens[0];
+  // The quote category, the verification, the launch mode and the transfer tax
+  // are all the platform's to decide, and every one of them is readable or
+  // checkable against chain. Naming them the same as a reading would lose the
+  // ability to notice a disagreement.
+  for (const k of ['claimedQuoteSymbol', 'claimedQuoteCategory', 'claimedQuoteVerification',
+    'claimedRewardLaunch', 'claimedTransferTaxBps']) {
+    assert.ok(k in t, k);
+  }
+  assert.equal(t.claimedQuoteSymbol, API.platformPools.pools[0].quoteSymbol);
+});
+
+test('the platform disagreeing with the mint about the tax is a finding, not a correction', () => {
+  assert.equal(S.taxClaimLine(100, 100), null, 'agreement is not a line');
+  assert.equal(S.taxClaimLine(null, 300), null, 'an unread rate is not a disagreement');
+  assert.equal(S.taxClaimLine(300, null), null);
+  const line = S.taxClaimLine(100, 300);
+  assert.match(line, /the platform lists a transfer tax of 100 bps and the mint carries 300 bps/);
+  // It states both and corrects neither: we do not know which is wrong.
+  assert.doesNotMatch(line, /wrong|incorrect|lying|actually/i);
+});
+
+test('the quote catalogue parses, and its category is a claim too', async () => {
+  const serve = async () => new Response(JSON.stringify(API.quoteTokens), { status: 200 });
+  const r = await S.quoteCatalogue({ fetchImpl: serve });
+  assert.equal(r.ok, true);
+  assert.equal(r.quotes.length, API.quoteTokens.quoteTokens.length);
+  for (const q of r.quotes) {
+    assert.ok(C.isPubkey(q.quoteMint));
+    assert.ok('claimedCategory' in q && 'claimedLaunchLabReady' in q);
+  }
+});
+
+test('the live window is not treated as a page of history', async () => {
+  const serve = async () => new Response(JSON.stringify(API.recentLaunches), { status: 200 });
+  const r = await S.recentLaunches({ fetchImpl: serve });
+  assert.equal(r.ok, true);
+  // It carries a window rather than a cursor, which is what makes it a feed.
+  assert.ok(typeof r.windowMs === 'number' || r.windowMs === null);
+  assert.ok(r.tokens.length > 0);
+});
+
+test('paging asks for page and nothing else, because nothing else does anything', async () => {
+  // limit, offset and cursor are all accepted and all ignored by the listing.
+  const asked = [];
+  const serve = async (url) => {
+    asked.push(url);
+    return new Response(JSON.stringify({ pools: [] }), { status: 200 });
+  };
+  await S.listingPage(7, { fetchImpl: serve });
+  assert.equal(asked.length, 1);
+  assert.match(asked[0], /\/api\/platform-pools\?page=7$/);
+  assert.doesNotMatch(asked[0], /limit|offset|cursor/);
+});
+
+test('paging stops on a listing that ignores its page parameter', async () => {
+  // Observed behaviour if the wrong key is used: page one, forever.
   const same = async () => new Response(JSON.stringify({
-    tokens: Array.from({ length: 100 }, (_, i) => ({ mint: C.PINNED_PLATFORMS[i % 35].pubkey, name: `t${i}` })),
+    pools: Array.from({ length: S.PAGE_SIZE }, (_, i) => ({
+      mint: C.PINNED_PLATFORMS[i % 35].pubkey, name: `t${i}`,
+    })),
   }), { status: 200 });
-  const r = await S.seed({ fetchImpl: same, limit: 100, pages: 20 });
+  const r = await S.seed({ fetchImpl: same, pages: 50 });
   assert.match(r.stopped, /repeated a page/);
   assert.ok(r.pagesRead <= 2, `paged ${r.pagesRead} times against a listing that never moved`);
 });
 
+test('a short page is the last page, which is how the listing ends', async () => {
+  // The last page was observed returning a short page rather than an empty one,
+  // so neither empty nor short alone is a reliable end on its own.
+  let page = 0;
+  const serve = async () => {
+    page++;
+    const n = page < 3 ? S.PAGE_SIZE : 10;
+    return new Response(JSON.stringify({
+      pools: Array.from({ length: n }, (_, i) => ({ mint: mintFor(page * 100 + i) })),
+    }), { status: 200 });
+  };
+  const r = await S.seed({ fetchImpl: serve, pages: 50 });
+  assert.equal(r.pagesRead, 3);
+  assert.match(r.stopped, /short page, which is its last/);
+  assert.equal(r.tokens.length, S.PAGE_SIZE * 2 + 10);
+});
+
 test('a listing that answers with nothing says that, and is not a failure', async () => {
-  const empty = async () => new Response(JSON.stringify({ tokens: [] }), { status: 200 });
+  const empty = async () => new Response(JSON.stringify({ pools: [] }), { status: 200 });
   const r = await S.seed({ fetchImpl: empty });
   assert.deepEqual(r.tokens, []);
   assert.match(r.stopped, /no rows at all/);
 });
 
+test('an http error stops the walk and keeps what it already had', async () => {
+  let n = 0;
+  const flaky = async () => {
+    n++;
+    return n === 1
+      ? new Response(JSON.stringify({
+          pools: Array.from({ length: S.PAGE_SIZE }, (_, i) => ({ mint: mintFor(i) })),
+        }), { status: 200 })
+      : new Response('nope', { status: 503 });
+  };
+  const r = await S.seed({ fetchImpl: flaky, pages: 10 });
+  assert.equal(r.tokens.length, S.PAGE_SIZE);
+  assert.equal(r.pagesRead, 1);
+  assert.match(r.stopped, /http 503/);
+});
+
+test('a response that is not a listing is a reason, not an empty page', () => {
+  assert.equal(S.parsePage({}).ok, false);
+  assert.match(S.parsePage('<!doctype html>').reason, /no pools array/);
+});
+
 test('metadata missing is undetermined, and never a launch that does not exist', () => {
   assert.match(S.metadataLine(null), /not in the platform listing, undetermined/);
-  assert.match(S.metadataLine({ mint: 'x', name: 'Bored Apes', symbol: 'BAYC', symbolAmbiguous: null }),
+  assert.match(S.metadataLine({ mint: 'x', name: 'Bored Apes', symbol: 'BAYC' }),
     /name: Bored Apes \(BAYC\), as the platform lists it/);
 });
 
@@ -508,6 +635,7 @@ test('nothing in this path says clean, safe, or anything like a verdict', () => 
     ...E.quoteLines(MINTS['quote-anthropic'].mint,
       E.decodeMint(MINTS['quote-anthropic'].mint, account(MINTS['quote-anthropic']))).flags,
     S.metadataLine(null),
+    S.taxClaimLine(100, 300),
     C.NO_RPC_REASON,
     C.UNRECOGNISED,
   ];
