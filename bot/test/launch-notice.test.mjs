@@ -14,13 +14,32 @@ import { freshDb } from './tmpdb.mjs';
 process.env.DB_PATH = process.env.DB_PATH || freshDb('launchnotice');
 const N = await import('../dist/launchnotice.js');
 const { resetSponsor } = await import('../dist/sponsor.js');
-const { renderDefaultCard, renderCard, renderCardText } = await import('../dist/card.js');
+const { renderDefaultCard, renderCard, renderCardText, cardLines } = await import('../dist/card.js');
 const { cardSvg, SIZES } = await import('../dist/image.js');
 const { makeScan } = await import('../dist/../test/fixtures.mjs');
 
 const LINE = '$VITALS, the first declared launch on pons: 24 Sep · t.me/vitals_official';
 const LIVE = '$VITALS is live: 0x147Bbaa458Ab7Cd11E1E478B87f08FE5A42A9E67';
-const AT = new Date(Date.UTC(2026, 8, 11, 14, 32));
+
+/**
+ * The expiry, and an instant on each side of it.
+ *
+ * Every render below is given one of these two instants. Nothing here reads the
+ * real clock, which is how this file went red on its own the morning after the
+ * date in UNTIL: the notice expired, the renderers asked Date.now(), and four
+ * tests that had nothing to do with today started failing every day. A suite
+ * that is permanently red is a suite nobody reads, and the day that matters is
+ * the day "green" has to mean something.
+ *
+ * Both sides are pinned on purpose. A test that only checks the line is there
+ * before the date passes cannot tell a working expiry from an expiry that never
+ * fires, and that is the half of this feature nobody would notice was broken.
+ */
+const UNTIL = '2026-09-24';
+const BEFORE = Date.parse('2026-09-24T23:59:59Z');
+const AFTER = Date.parse('2026-09-25T00:00:01Z');
+const AT = new Date(BEFORE);
+const AT_AFTER = new Date(AFTER);
 
 function configure(line, until) {
   if (line === null) delete process.env.LAUNCH_NOTICE;
@@ -44,29 +63,41 @@ const SCAN = () => makeScan({
 
 test('unset means no line anywhere, and no complaint about it', () => {
   configure(null);
-  assert.equal(N.launchNotice(), null);
-  assert.ok(!renderDefaultCard(SCAN(), 'vitalscheck_bot').includes('$VITALS'));
+  assert.equal(N.launchNotice(BEFORE), null);
+  assert.ok(!renderDefaultCard(SCAN(), 'vitalscheck_bot', BEFORE).includes('$VITALS'));
   assert.ok(!cardSvg(SCAN(), AT).includes('t.me/vitals_official'));
 });
 
-test('the line is the last line of both text cards', () => {
-  configure(LINE, '2026-09-24');
+test('the line is the last line of both text cards, and gone the day after', () => {
+  configure(LINE, UNTIL);
   resetSponsor();
   for (const [name, text] of [
-    ['default', renderDefaultCard(SCAN(), 'vitalscheck_bot')],
-    ['full', renderCardText(SCAN())],
+    ['default', renderDefaultCard(SCAN(), 'vitalscheck_bot', BEFORE)],
+    ['full', renderCardText(SCAN(), BEFORE)],
   ]) {
     const lines = text.split('\n').filter((l) => l.trim());
     assert.equal(lines[lines.length - 1], LINE, `${name} card does not end with it`);
     assert.equal(lines.filter((l) => l === LINE).length, 1, `${name} card says it twice`);
   }
+  // The other side of the same boundary, through the same renderers.
+  for (const [name, text] of [
+    ['default', renderDefaultCard(SCAN(), 'vitalscheck_bot', AFTER)],
+    ['full', renderCardText(SCAN(), AFTER)],
+  ]) {
+    assert.ok(!text.includes(LINE), `${name} card carried an expired notice`);
+    const lines = text.split('\n').filter((l) => l.trim());
+    // The two cards word the disclaimer differently, so this asserts that the
+    // footer is still the last line rather than which footer it is.
+    assert.match(lines[lines.length - 1], /not financial advice/i,
+      `${name} card lost its footer when the notice went`);
+  }
 });
 
 test('it is below the paid line, never above it', () => {
-  configure(LINE, '2026-09-24');
+  configure(LINE, UNTIL);
   process.env.SPONSOR_LINE = 'ad, a sponsor line that points at a scan';
   resetSponsor();
-  const lines = renderDefaultCard(SCAN(), 'vitalscheck_bot').split('\n');
+  const lines = renderDefaultCard(SCAN(), 'vitalscheck_bot', BEFORE).split('\n');
   const ad = lines.findIndex((l) => l.startsWith('ad, a sponsor'));
   const notice = lines.indexOf(LINE);
   assert.ok(ad >= 0 && notice >= 0, 'both lines should be on the card');
@@ -76,7 +107,7 @@ test('it is below the paid line, never above it', () => {
 });
 
 test('it is never in the findings block, at either size', () => {
-  configure(LINE, '2026-09-24');
+  configure(LINE, UNTIL);
   resetSponsor();
   // The findings block is everything from the hero down to the market strip.
   // The notice belongs under the footer rule, which is the LAST full-width
@@ -104,7 +135,7 @@ test('it is never in the findings block, at either size', () => {
 });
 
 test('it never uses the reference-point colour', () => {
-  configure(LINE, '2026-09-24');
+  configure(LINE, UNTIL);
   resetSponsor();
   // Green on a card means one thing: the reference point a finding was measured
   // against. A notice about our own launch is not one, and the day it is drawn
@@ -122,19 +153,55 @@ test('it never uses the reference-point colour', () => {
 });
 
 test('the date ends it, with nothing deployed', () => {
-  configure(LINE, '2026-09-24');
+  configure(LINE, UNTIL);
   // The whole of the named day, not the instant it begins.
   assert.equal(N.launchNotice(Date.parse('2026-09-24T00:00:01Z')), LINE);
-  assert.equal(N.launchNotice(Date.parse('2026-09-24T23:59:59Z')), LINE);
-  assert.equal(N.launchNotice(Date.parse('2026-09-25T00:00:01Z')), null);
+  assert.equal(N.launchNotice(BEFORE), LINE);
+  assert.equal(N.launchNotice(AFTER), null);
 
-  // And a date already past takes it off the cards, which read the real clock.
-  configure(LINE, '2020-01-01');
+  // And the same boundary on every surface that draws the line, each given the
+  // instant to render at rather than asking the clock for it.
   resetSponsor();
-  const stale = renderDefaultCard(SCAN(), 'vitalscheck_bot');
-  assert.ok(!stale.includes(LINE), 'an expired notice is still on the card');
-  assert.ok(!renderCardText(SCAN()).includes(LINE));
-  assert.ok(!cardSvg(SCAN(), AT).includes('t.me/vitals_official'));
+  assert.ok(renderDefaultCard(SCAN(), 'vitalscheck_bot', BEFORE).includes(LINE));
+  assert.ok(renderCardText(SCAN(), BEFORE).includes(LINE));
+  assert.ok(cardSvg(SCAN(), AT).includes('t.me/vitals_official'));
+
+  assert.ok(!renderDefaultCard(SCAN(), 'vitalscheck_bot', AFTER).includes(LINE),
+    'an expired notice is still on the default card');
+  assert.ok(!renderCardText(SCAN(), AFTER).includes(LINE),
+    'an expired notice is still on the full card');
+  assert.ok(!cardSvg(SCAN(), AT_AFTER).includes('t.me/vitals_official'),
+    'an expired notice is still on the picture');
+});
+
+test('the picture uses the instant it was given, not the clock', () => {
+  // cardSvg already took a renderedAt and then asked Date.now() for this one
+  // line, so a picture's own timestamp and its notice could disagree about what
+  // day it was. Two renders, same process, same second, different answers.
+  configure(LINE, UNTIL);
+  resetSponsor();
+  assert.ok(cardSvg(SCAN(), AT).includes('t.me/vitals_official'));
+  assert.ok(!cardSvg(SCAN(), AT_AFTER).includes('t.me/vitals_official'));
+});
+
+test('no render path reads the wall clock for the notice', () => {
+  // The whole point. Whatever today is, the line is there before the date and
+  // gone after it, on every surface.
+  configure(LINE, UNTIL);
+  resetSponsor();
+  const surfaces = [
+    ['default', (now) => renderDefaultCard(SCAN(), 'vitalscheck_bot', now)],
+    ['full', (now) => renderCardText(SCAN(), now)],
+    ['lines', (now) => cardLines(SCAN(), 'vitalscheck_bot', now).map((l) => l.text).join('\n')],
+    ['svg', (now) => cardSvg(SCAN(), new Date(now))],
+  ];
+  for (const [name, render] of surfaces) {
+    const on = render(BEFORE);
+    const off = render(AFTER);
+    const needle = name === 'svg' ? 't.me/vitals_official' : LINE;
+    assert.ok(on.includes(needle), `${name}: missing before the date`);
+    assert.ok(!off.includes(needle), `${name}: still there after the date`);
+  }
 });
 
 test('no expiry set means it stays until it is unset', () => {
@@ -146,13 +213,13 @@ test('a date that will not parse takes the line down, loudly', () => {
   // Read as "no expiry", a typo would leave a stale notice on every card for
   // as long as the bot ran, and nothing in a healthy log would say so.
   configure(LINE, 'next tuesday-ish');
-  assert.equal(N.launchNotice(), null);
+  assert.equal(N.launchNotice(BEFORE), null);
 });
 
 test('the same env carries the line after the launch', () => {
   configure(LIVE, null);
-  assert.equal(N.launchNotice(), LIVE);
-  const lines = renderDefaultCard(SCAN(), 'vitalscheck_bot').split('\n').filter((l) => l.trim());
+  assert.equal(N.launchNotice(BEFORE), LIVE);
+  const lines = renderDefaultCard(SCAN(), 'vitalscheck_bot', BEFORE).split('\n').filter((l) => l.trim());
   assert.equal(lines[lines.length - 1], LIVE);
 });
 
@@ -167,21 +234,21 @@ test('our own line obeys the rules the paid line obeys', () => {
     'line one\nline two',
   ]) {
     configure(bad, null);
-    assert.equal(N.launchNotice(), null, `rendered "${bad.slice(0, 40)}"`);
+    assert.equal(N.launchNotice(BEFORE), null, `rendered "${bad.slice(0, 40)}"`);
   }
 });
 
 test('a changed line invalidates the cards rendered under the old one', () => {
   configure(LINE, null);
   const before = N.noticeVersion();
-  N.launchNotice();
+  N.launchNotice(BEFORE);
   configure(LIVE, null);
-  N.launchNotice();
+  N.launchNotice(BEFORE);
   assert.notEqual(N.noticeVersion(), before);
 
   // Expiry counts as a change too, and nothing happens when a date passes:
   // without this every cached card keeps an expired notice until its own TTL.
-  configure(LINE, '2026-09-24');
+  configure(LINE, UNTIL);
   N.launchNotice(Date.parse('2026-09-24T12:00:00Z'));
   const live = N.noticeVersion();
   N.launchNotice(Date.parse('2026-09-25T12:00:00Z'));
@@ -211,7 +278,27 @@ test('the card carries it on every card, independently of that claim', () => {
   N.claimLaunchNotice(user, LINE);
   resetSponsor();
   for (let i = 0; i < 3; i++) {
-    assert.ok(renderDefaultCard(SCAN(), 'vitalscheck_bot').endsWith(LINE));
+    assert.ok(renderDefaultCard(SCAN(), 'vitalscheck_bot', BEFORE).endsWith(LINE));
   }
   configure(null);
+});
+
+test('no renderer asks the clock for the notice, so no test of one can go stale', async () => {
+  // The structural version of everything above. A renderer that reaches for
+  // Date.now() puts the date back into the test, and the test goes red on its
+  // own the morning after. Sweeping the source is the only way to keep that
+  // from coming back one call site at a time.
+  //
+  // bot.ts is deliberately not in this list: withLaunchNotice appends the line
+  // to a live /start or /legend, which has no render time and for which the
+  // clock IS the right answer.
+  const { readFileSync } = await import('node:fs');
+  const offenders = [];
+  for (const file of ['src/card.ts', 'src/image.ts', 'src/groupcard.ts']) {
+    readFileSync(file, 'utf8').split('\n').forEach((line, i) => {
+      if (/\blaunchNotice\(\s*\)/.test(line)) offenders.push(`${file}:${i + 1}: ${line.trim()}`);
+    });
+  }
+  assert.deepEqual(offenders, [],
+    `a renderer reads the wall clock for the launch notice:\n${offenders.join('\n')}`);
 });

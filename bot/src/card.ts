@@ -175,7 +175,7 @@ export function earlyFindings(r: ScanResult): string[] {
  * in it is undefined rather than small, and a reader who sees "TRACTION none"
  * takes it as a finding about the token instead of an absence of data.
  */
-function renderEarlyCard(r: ScanResult): string {
+function renderEarlyCard(r: ScanResult, now = Date.now()): string {
   const { reads: k, flags: f } = r;
   const quote = clamp(k.pairSymbol ?? 'quote', MAX_TICKER);
   const sym = k.symbol ? esc(clamp(k.symbol, MAX_TICKER)) : '?';
@@ -256,7 +256,7 @@ function renderEarlyCard(r: ScanResult): string {
   L.push('');
   L.push(`<a href="${EXPLORER_URL}/address/${k.token}">token</a> · <a href="${EXPLORER_URL}/address/${k.curve}">curve</a> · <a href="${EXPLORER_URL}/address/${k.deployer}">deployer</a>`);
   L.push(`<i>${DISCLAIMER}</i>`);
-  const notice = launchNotice();
+  const notice = launchNotice(now);
   if (notice) L.push(esc(notice));
   return clampMessage(L.join('\n'));
 }
@@ -281,8 +281,22 @@ export function graduatedAtLine(r: ScanResult): string | null {
   return `  graduated at +${age(after)}`;
 }
 
-export function renderCard(r: ScanResult): string {
-  if (r.isEarly) return renderEarlyCard(r);
+/**
+ * The instant a card is rendered at.
+ *
+ * Threaded rather than read, because the launch notice expires on a date and a
+ * renderer that reaches for Date.now() decides that for itself. Two things went
+ * wrong with that. A card rendered from a queue or edited in later carried
+ * whatever the notice said when the render ran rather than when the card was
+ * timed, and the picture already took a renderedAt and then ignored it for this
+ * one line. And every test of the notice on a card was pinned to a wall-clock
+ * date, so the suite went red on its own the morning the date passed, which is
+ * the one thing a suite must not do on a launch day.
+ *
+ * Optional and defaulted, so every existing caller is unchanged.
+ */
+export function renderCard(r: ScanResult, now = Date.now()): string {
+  if (r.isEarly) return renderEarlyCard(r, now);
 
   const { reads: k, traction: t, flags: f } = r;
   const quote = clamp(k.pairSymbol ?? 'quote', MAX_TICKER);
@@ -403,14 +417,14 @@ export function renderCard(r: ScanResult): string {
   L.push('');
   L.push(`<a href="${EXPLORER_URL}/address/${k.token}">token</a> · <a href="${EXPLORER_URL}/address/${k.curve}">curve</a> · <a href="${EXPLORER_URL}/address/${k.deployer}">deployer</a>`);
   L.push(`<i>${DISCLAIMER}</i>`);
-  const notice = launchNotice();
+  const notice = launchNotice(now);
   if (notice) L.push(esc(notice));
   return clampMessage(L.join('\n'));
 }
 
 /** Plain-text card, for CLI output. */
-export function renderCardText(r: ScanResult): string {
-  return renderCard(r)
+export function renderCardText(r: ScanResult, now = Date.now()): string {
+  return renderCard(r, now)
     .replace(/<a href="[^"]*">([^<]*)<\/a>/g, '$1')
     .replace(/<[^>]+>/g, '')
     .replace(/&lt;/g, '<')
@@ -994,7 +1008,7 @@ export function undeterminedNames(flags: { key: string; label: string; state: st
   return `undetermined: ${shown}${rest > 0 ? ` +${rest}` : ''}`;
 }
 
-export function cardLines(r: ScanResult, botUsername?: string): CardLine[] {
+export function cardLines(r: ScanResult, botUsername?: string, now = Date.now()): CardLine[] {
   const f = r.flags;
   const L: CardLine[] = [];
   const push = (role: CardRole, text: string) => L.push({ role, text });
@@ -1106,13 +1120,13 @@ export function cardLines(r: ScanResult, botUsername?: string): CardLine[] {
   // After the footer, and only ever here. It is the one line on a card that is
   // about this tool instead of about the launch being scanned, so a reader who
   // stops at the disclaimer has read the whole card.
-  const notice = launchNotice();
+  const notice = launchNotice(now);
   if (notice) push('launch', notice);
   return L;
 }
 
-export function renderDefaultCard(r: ScanResult, botUsername?: string): string {
-  return cardLines(r, botUsername).map((l) => l.text).join('\n');
+export function renderDefaultCard(r: ScanResult, botUsername?: string, now = Date.now()): string {
+  return cardLines(r, botUsername, now).map((l) => l.text).join('\n');
 }
 
 /** Default card for an address the factory has no record of. */

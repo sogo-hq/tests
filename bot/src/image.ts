@@ -383,7 +383,10 @@ export function cardSvg(r: ScanResult, renderedAt = new Date(), size: CardSize =
   // drawn into whatever happened to be left. Never above the paid line, and
   // never in the body: it is the one line here about this tool rather than
   // about the launch on the card.
-  const notice = launchNotice();
+  // The render time this function was given, not the wall clock. It already
+  // took renderedAt and then asked the clock anyway, so a picture's timestamp
+  // and its notice could disagree about what day it was.
+  const notice = launchNotice(renderedAt.getTime());
   const noticeH = notice ? 26 : 0;
   // Everything below the body, measured once: the gap above the strip, the
   // strip, the sponsor line, the footer rule and its two lines, and the bottom
