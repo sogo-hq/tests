@@ -75,6 +75,20 @@ export function seedBotChatsFromActivity(at = Math.floor(Date.now() / 1000)): nu
   return seen.length;
 }
 
+/**
+ * The last title Telegram reported for a chat, when there is one.
+ *
+ * For telling two groups apart in an admin report. A bare id is not something an
+ * operator can match to a room under any pressure, and -1001234567890 against
+ * -1009876543210 at T-5 is exactly the check that gets skipped.
+ */
+export function chatTitle(chatId: number): string | null {
+  const row = db
+    .prepare('SELECT title FROM bot_chats WHERE chat_id = ?')
+    .get(chatId) as { title: string | null } | undefined;
+  return row?.title ?? null;
+}
+
 /** Whether a Telegram chat type is a group of any kind. */
 export function isGroupType(type: string | undefined): boolean {
   return type !== undefined && GROUP_TYPES.has(type);

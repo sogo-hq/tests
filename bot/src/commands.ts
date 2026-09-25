@@ -75,10 +75,10 @@ export const COMMANDS: CommandSpec[] = [
     what: 'who called what here, by how far it ran afterwards' },
   { name: 'card', usage: '(as a reply to a call)', group: 'In a group', scope: 'all', where: 'group',
     what: 'that call as a picture' },
-  { name: 'ready', usage: '', group: 'In a group', scope: 'all', where: 'any',
-    what: 'the launch totals, and only the totals' },
+  { name: 'ready', usage: '0x… | on | off', group: 'In a group', scope: 'all', where: 'any',
+    what: 'in a DM, register a wallet. in a group, the launch totals, admins only' },
   { name: 'tge', usage: '', group: 'In a group', scope: 'all', where: 'any',
-    what: 'the same, with the countdown once a time is set' },
+    what: 'the same, with the countdown once a time is set. admins only in a group' },
 
   // ------------------------------------------------------------ your access
   { name: 'holder', usage: 'link|unlink', group: 'Your account', scope: 'all', where: 'dm',

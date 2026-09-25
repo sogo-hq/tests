@@ -55,12 +55,65 @@ test('the hour window is 15:00 to 18:00, half open', () => {
   assert.match(at('18:00').reason, /18:00 CEST is outside the window/);
 });
 
-test('past the cutoff is refused, and the weekday rule bites first', () => {
-  // 2026-09-25 is a Friday, so the last slot the rules actually allow is the
-  // Thursday before it. The refusal must say which rule was broken.
+test('the default cutoff is a horizon, so it cannot expire on its own date', () => {
+  // It used to be an absolute date defaulting to 2026-09-25. From the 26th on it
+  // refused every date an admin could type, blamed the input for it, and said
+  // nothing at boot. The horizon is measured from the day the command is run, so
+  // there is no date on which this starts refusing everything.
+  assert.equal(L.parseLaunchTime('2026-09-28 16:00', NOW).ok, true,
+    'the Monday after the old cutoff is bookable');
+  const c = L.launchCutoff(NOW);
+  assert.equal(c.ok, true);
+  assert.match(c.source, /LAUNCH_HORIZON_DAYS/);
+  assert.ok(c.at > NOW, 'and the cutoff is always ahead of the clock it was read at');
+});
+
+test('past the horizon is refused, and the refusal names the setting', () => {
+  // A Monday well beyond fourteen days out.
+  const r = L.parseLaunchTime('2026-11-02 16:00', NOW);
+  assert.equal(r.ok, false);
+  assert.match(r.reason, /past the \d+ day horizon \(LAUNCH_HORIZON_DAYS\)/, r.reason);
+});
+
+test('the weekday rule still bites first, and says which rule was broken', () => {
   assert.match(L.parseLaunchTime('2026-09-25 16:00', NOW).reason, /^Friday is not a launch day/);
-  assert.match(L.parseLaunchTime('2026-09-28 16:00', NOW).reason, /past the 2026-09-25 cutoff/);
-  assert.equal(L.parseLaunchTime('2026-09-24 17:00', NOW).ok, true, 'Thursday the 24th is the real last slot');
+  assert.equal(L.parseLaunchTime('2026-09-24 17:00', NOW).ok, true);
+});
+
+test('an absolute LAUNCH_DEADLINE still bounds the horizon when one is set', async () => {
+  const { execFileSync } = await import('node:child_process');
+  const run = (deadline, input) => JSON.parse(execFileSync(process.execPath, ['--input-type=module', '-e', `
+    const L = await import('${process.cwd()}/dist/launch.js');
+    const r = L.parseLaunchTime(${JSON.stringify(input)}, Date.parse('2026-09-14T09:00:00Z'));
+    console.log(JSON.stringify(r.ok ? 'OK' : r.reason));
+  `], { env: { ...process.env, LAUNCH_DEADLINE: deadline, DB_PATH: '/tmp/dl-abs.db' }, encoding: 'utf8' }));
+
+  assert.equal(run('2026-09-24', '2026-09-24 17:00'), 'OK', 'the deadline day itself is bookable');
+  assert.match(run('2026-09-24', '2026-09-28 16:00'), /past the 2026-09-24 cutoff \(LAUNCH_DEADLINE\)/);
+});
+
+test('a cutoff already in the past refuses by naming the setting, not the input', async () => {
+  // The state the bot was actually in: every date refused, and the refusal
+  // telling an admin to pick an earlier one when no earlier one is bookable.
+  const { execFileSync } = await import('node:child_process');
+  const out = JSON.parse(execFileSync(process.execPath, ['--input-type=module', '-e', `
+    const L = await import('${process.cwd()}/dist/launch.js');
+    const now = Date.parse('2026-09-25T09:00:00Z');
+    const r = L.parseLaunchTime('2026-09-28 16:00', now);
+    console.log(JSON.stringify([r.ok ? 'OK' : r.reason, L.announceLaunchCutoff(now)]));
+  `], { env: { ...process.env, LAUNCH_DEADLINE: '2026-09-20', DB_PATH: '/tmp/dl-past.db' }, encoding: 'utf8' }));
+  assert.match(out[0], /^no launch can be set at all/, out[0]);
+  assert.match(out[0], /LAUNCH_DEADLINE/, 'and it names the setting to move');
+  assert.equal(out[1], 'expired', 'and boot says so rather than looking healthy');
+});
+
+test('the zone may be named, and only the zone the bot actually reads', () => {
+  // Every prompt and every printed stamp names the zone, so it gets copied back.
+  assert.equal(L.parseLaunchTime('2026-09-28 16:00 Europe/Bratislava', NOW).ok, true);
+  assert.equal(L.parseLaunchTime('2026-09-28 16:00 CEST', NOW).ok, true, 'the printed abbreviation too');
+  const r = L.parseLaunchTime('2026-09-28 16:00 America/New_York', NOW);
+  assert.equal(r.ok, false, 'a different zone is never silently read as local');
+  assert.match(r.reason, /times here are read in Europe\/Bratislava/);
 });
 
 test('a time that has already passed is refused', () => {
@@ -183,7 +236,10 @@ test('zero is a real value for a window hour, not a missing one', async () => {
       const L = await import('${process.cwd()}/dist/launch.js');
       console.log(JSON.stringify([L.LAUNCH_WINDOW_START_HOUR, L.LAUNCH_WINDOW_END_HOUR,
         L.parseLaunchTime('2026-09-22 09:00', Date.parse('2026-01-05T09:00:00Z')).ok]));
-    `], { env: { ...process.env, LAUNCH_WINDOW_START: '0', LAUNCH_WINDOW_END: '12', DB_PATH: '/tmp/win-test.db' }, encoding: 'utf8' }));
+    `], { env: { ...process.env, LAUNCH_WINDOW_START: '0', LAUNCH_WINDOW_END: '12',
+      // The date under test is months past the default horizon, and this test is
+      // about the window hours rather than the bound.
+      LAUNCH_HORIZON_DAYS: '400', DB_PATH: '/tmp/win-test.db' }, encoding: 'utf8' }));
   assert.deepEqual(JSON.parse(out), [0, 12, true], '09:00 is inside a 00:00 to 12:00 window');
 });
 

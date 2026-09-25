@@ -37,8 +37,28 @@ export const LAUNCH_WINDOW_END_HOUR = envNumber('LAUNCH_WINDOW_END', 18);
 /** Monday through Thursday. Intl weekdays, where 1 is Monday. */
 export const LAUNCH_DAYS = [1, 2, 3, 4];
 
-/** No launch may be scheduled after the end of this local day. */
-export const LAUNCH_DEADLINE = process.env.LAUNCH_DEADLINE || '2026-09-25';
+/**
+ * The last local day a launch may be scheduled on, when an operator sets one.
+ *
+ * Empty by default, and the empty default is the fix rather than an omission.
+ * This was an absolute date carrying a hardcoded default of 2026-09-25, which
+ * is a cutoff that expires: from the 26th onwards it refused every date an
+ * admin could type, including the launch it was written for. Three things made
+ * that expensive rather than merely wrong. The refusal blamed the input --
+ * "2026-09-28 16:00 is past the 2026-09-25 cutoff" reads as "pick an earlier
+ * date" when no earlier date is bookable either. The weekday rule bit first for
+ * the days before it, so the failure changed shape depending on which date you
+ * tried. And nothing in the boot log said the bot had stopped being able to arm
+ * a launch at all.
+ *
+ * So the default is a horizon measured from the day the command is run, which
+ * cannot go stale, and the absolute form stays for an operator who wants a hard
+ * stop on a named date.
+ */
+export const LAUNCH_DEADLINE = (process.env.LAUNCH_DEADLINE ?? '').trim();
+
+/** How far ahead a launch may be set when no absolute deadline is configured. */
+export const LAUNCH_HORIZON_DAYS = envNumber('LAUNCH_HORIZON_DAYS', 14);
 
 /**
  * How far local time runs ahead of UTC at a given instant, in minutes.
@@ -128,6 +148,89 @@ export function zonedParts(utcMs: number, tz = LAUNCH_TZ): ZonedParts {
   };
 }
 
+export type LaunchCutoff =
+  | { ok: true; at: number; source: string }
+  | { ok: false; reason: string };
+
+/**
+ * The instant no launch may be at or after, and where that instant came from.
+ *
+ * The source is carried rather than reconstructed by the caller, because every
+ * refusal this produces has to name the setting that produced it. A cutoff an
+ * admin cannot trace to a variable is a cutoff they cannot move.
+ */
+export function launchCutoff(now = Date.now(), tz = LAUNCH_TZ): LaunchCutoff {
+  if (LAUNCH_DEADLINE) {
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(LAUNCH_DEADLINE);
+    const bad = { ok: false as const, reason: `LAUNCH_DEADLINE is not a date: ${LAUNCH_DEADLINE}. expected YYYY-MM-DD` };
+    if (!m) return bad;
+    const [dy, dm, dd] = m.slice(1).map(Number) as [number, number, number];
+    // The deadline is a whole local day, so the cutoff is the start of the day
+    // after it: with 2026-09-25 set, 17:00 on the 25th is allowed and the 26th
+    // is not, at any hour. Day 32 of a month normalises rather than throwing.
+    const at = zonedToUtcMs(dy, dm, dd + 1, 0, 0, tz);
+    if (!Number.isFinite(at)) return bad;
+    return { ok: true, at, source: `the ${LAUNCH_DEADLINE} cutoff (LAUNCH_DEADLINE)` };
+  }
+  if (!Number.isInteger(LAUNCH_HORIZON_DAYS) || LAUNCH_HORIZON_DAYS < 1) {
+    return {
+      ok: false,
+      reason: `LAUNCH_HORIZON_DAYS is not a whole number of days: ${LAUNCH_HORIZON_DAYS}`,
+    };
+  }
+  // Measured in local days from today, so the bound moves with the clock and
+  // the end of the horizon is the end of a day rather than this time of day.
+  const t = zonedParts(now, tz);
+  const at = zonedToUtcMs(t.year, t.month, t.day + LAUNCH_HORIZON_DAYS + 1, 0, 0, tz);
+  if (!Number.isFinite(at)) {
+    return { ok: false, reason: `LAUNCH_HORIZON_DAYS does not give a real date: ${LAUNCH_HORIZON_DAYS}` };
+  }
+  return { ok: true, at, source: `the ${LAUNCH_HORIZON_DAYS} day horizon (LAUNCH_HORIZON_DAYS)` };
+}
+
+export type CutoffReport = 'ok' | 'expired' | 'broken';
+
+let cutoffAnnounced: string | null = null;
+
+/**
+ * Say what the cutoff is, once per configuration.
+ *
+ * The same rule the launch notice is held to, and for the same reason: there
+ * must be no configuration of this that produces a bot which cannot arm a
+ * launch and a boot log that does not say so. A cutoff already in the past gets
+ * a warning rather than a line in a list, because from outside the process that
+ * state is indistinguishable from an admin typing the wrong date -- the bot
+ * refuses, the admin tries another date, and it refuses that one too.
+ *
+ * Returns the state so a test can assert on it rather than on a log line.
+ */
+export function announceLaunchCutoff(now = Date.now()): CutoffReport {
+  const c = launchCutoff(now);
+  const key = c.ok ? `${c.at}:${c.source}` : `bad:${c.reason}`;
+  const said = cutoffAnnounced === key;
+  cutoffAnnounced = key;
+
+  if (!c.ok) {
+    if (!said) {
+      console.warn(
+        `[launch] CUTOFF BROKEN: ${c.reason}. /launch set cannot accept any time until this is fixed`,
+      );
+    }
+    return 'broken';
+  }
+  if (c.at <= now) {
+    if (!said) {
+      console.warn(
+        `[launch] CUTOFF PASSED: ${c.source} ended ${zonedStamp(c.at)}, so /launch set refuses every date `
+        + 'there is and no countdown can be armed. move LAUNCH_DEADLINE or unset it for the rolling horizon',
+      );
+    }
+    return 'expired';
+  }
+  if (!said) console.log(`[launch] cutoff: ${zonedStamp(c.at)}, from ${c.source}`);
+  return 'ok';
+}
+
 export type LaunchTimeResult =
   | { ok: true; at: number }
   | { ok: false; reason: string };
@@ -142,9 +245,16 @@ const DAY_NAMES = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Satu
  * that something was.
  */
 export function parseLaunchTime(input: string, now = Date.now(), tz = LAUNCH_TZ): LaunchTimeResult {
-  const m = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{1,2}):(\d{2})$/.exec(input.trim());
-  if (!m) return { ok: false, reason: 'could not read that time. use: /launch set 2026-09-22 16:00' };
-  const [y, mo, d, hh, mm] = m.slice(1).map(Number) as [number, number, number, number, number];
+  // The zone is optional and, when present, must be the zone the bot reads times
+  // in. Every prompt and every printed stamp names the zone, so an admin copying
+  // one back with the zone on it was refused with "could not read that time",
+  // which says nothing about which part was wrong. Silently ignoring a zone is
+  // the one thing this must not do: `16:00 America/New_York` accepted as local
+  // would arm the launch six hours out with a line claiming CEST.
+  const m = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{1,2}):(\d{2})(?:\s+(\S+))?$/.exec(input.trim());
+  if (!m) return { ok: false, reason: `could not read that time. use: /launch set 2026-09-22 16:00 [${tz}]` };
+  const [y, mo, d, hh, mm] = m.slice(1, 6).map(Number) as [number, number, number, number, number];
+  const namedZone = m[6];
   if (mo < 1 || mo > 12 || d < 1 || d > 31 || hh > 23 || mm > 59) {
     return { ok: false, reason: 'that is not a real date or time' };
   }
@@ -162,6 +272,19 @@ export function parseLaunchTime(input: string, now = Date.now(), tz = LAUNCH_TZ)
   if (p.weekday < 1 || p.weekday > 7) {
     return { ok: false, reason: 'could not read the day of the week for that date' };
   }
+  // Checked before "already passed", because a time read in the wrong zone is
+  // not a time this can judge at all. Both the IANA name and whichever
+  // abbreviation the zone is actually in at that instant are accepted: the
+  // printed stamp says CEST, so that is what gets copied back in the winter
+  // half of the year as well, and CET is equally correct for the same zone.
+  if (namedZone && namedZone.toLowerCase() !== tz.toLowerCase()
+    && namedZone.toUpperCase() !== p.abbrev.toUpperCase()) {
+    return {
+      ok: false,
+      reason: `times here are read in ${tz}, so ${namedZone} is not accepted. `
+        + 'drop the zone, or set LAUNCH_TZ if the launch really is in another one',
+    };
+  }
   if (at <= now) return { ok: false, reason: 'that time has already passed' };
 
   if (!LAUNCH_DAYS.includes(p.weekday)) {
@@ -178,23 +301,25 @@ export function parseLaunchTime(input: string, now = Date.now(), tz = LAUNCH_TZ)
     };
   }
 
-  const [dy, dm, dd] = LAUNCH_DEADLINE.split('-').map(Number) as [number, number, number];
-  if (![dy, dm, dd].every(Number.isFinite)) {
-    // The operator's mistake, said out loud rather than thrown into silence.
-    return { ok: false, reason: `LAUNCH_DEADLINE is not a date: ${LAUNCH_DEADLINE}. expected YYYY-MM-DD` };
+  const cutoff = launchCutoff(now, tz);
+  // The operator's mistake, said out loud rather than thrown into silence.
+  if (!cutoff.ok) return { ok: false, reason: cutoff.reason };
+  // A cutoff already in the past refuses every date there is, so the refusal
+  // names the setting instead of the input. "past the 2026-09-25 cutoff" told an
+  // admin to pick an earlier date on a day when no earlier date was bookable
+  // either, and the weekday rule answered differently for the days before it.
+  if (cutoff.at <= now) {
+    return {
+      ok: false,
+      reason: `no launch can be set at all: ${cutoff.source} ended ${zonedStamp(cutoff.at, tz)}. `
+        + 'move LAUNCH_DEADLINE, or unset it to use the rolling horizon',
+    };
   }
-  // The deadline is a whole local day, so the cutoff is the start of the day
-  // after it. 2026-09-25 at 17:00 is allowed; 2026-09-26 at any hour is not.
-  // Note the two rules are independent and the weekday one usually bites first:
-  // 2026-09-25 is a Friday, so the last slot this cutoff actually allows is
-  // Thursday the 24th. The refusal says which rule was broken rather than
-  // implying the cutoff date is bookable.
-  const cutoff = zonedToUtcMs(dy, dm, dd + 1, 0, 0, tz);
-  if (!Number.isFinite(cutoff)) {
-    return { ok: false, reason: `LAUNCH_DEADLINE is not a date: ${LAUNCH_DEADLINE}. expected YYYY-MM-DD` };
-  }
-  if (at >= cutoff) {
-    return { ok: false, reason: `${input.trim()} is past the ${LAUNCH_DEADLINE} cutoff` };
+  // The two rules are independent and the weekday one usually bites first, so
+  // the refusal says which one was broken rather than implying the other date
+  // is bookable.
+  if (at >= cutoff.at) {
+    return { ok: false, reason: `${input.trim()} is past ${cutoff.source}` };
   }
   return { ok: true, at };
 }

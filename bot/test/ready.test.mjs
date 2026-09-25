@@ -396,7 +396,7 @@ test('/ready in a group posts totals only', async () => {
   balances.set(WALLET, eth(0.31));
   await R.registerMember(7, WALLET);
   const { bot, msg, drain } = harness();
-  await bot.handleUpdate(msg('supergroup', '/ready', GROUP, 5001));
+  await bot.handleUpdate(msg('supergroup', '/ready', GROUP, ADMIN));
   const c = drain();
   const sends = c.filter((x) => x.method === 'sendMessage');
   assert.equal(sends.length, 1, `exactly one message, got ${sends.length}`);
@@ -442,13 +442,13 @@ test('a second /ready inside the cache window edits the block instead of posting
   balances.set(WALLET, eth(0.31));
   await R.registerMember(7, WALLET);
   const { bot, msg, drain } = harness();
-  await bot.handleUpdate(msg('supergroup', '/ready', GROUP, 5003));
+  await bot.handleUpdate(msg('supergroup', '/ready', GROUP, ADMIN));
   const first = drain().filter((x) => x.method === 'sendMessage');
   assert.equal(first.length, 1);
 
   balances.set(A(3), eth(9));
   await R.addExternal(A(3), 'later arrival');
-  await bot.handleUpdate(msg('supergroup', '/ready', GROUP, 5004));
+  await bot.handleUpdate(msg('supergroup', '/ready', GROUP, ADMIN));
   const second = drain();
   assert.equal(second.filter((x) => x.method === 'sendMessage').length, 0, 'no second block');
   const edits = second.filter((x) => x.method === 'editMessageText');
@@ -491,7 +491,7 @@ test('a scheduled post is a new message, not an edit of an old block', async () 
   balances.set(WALLET, eth(0.31));
   await R.registerMember(7, WALLET);
   const { bot, msg, drain } = harness();
-  await bot.handleUpdate(msg('supergroup', '/ready', GROUP, 5005));
+  await bot.handleUpdate(msg('supergroup', '/ready', GROUP, ADMIN));
   drain();
   R.setSetting('autopost_day', '2026-06-30');
   const at = Date.parse('2026-07-01T13:00:00Z');
@@ -506,7 +506,7 @@ test('/tge adds the countdown when a launch time is set', async () => {
   reset();
   R.setSetting('launch_at', String(Math.floor(Date.now() / 1000) + 2 * 3600));
   const { bot, msg, drain } = harness();
-  await bot.handleUpdate(msg('supergroup', '/tge', GROUP, 5006));
+  await bot.handleUpdate(msg('supergroup', '/tge', GROUP, ADMIN));
   const c = drain().filter((x) => x.method === 'sendMessage');
   assert.equal(c.length, 1);
   assert.match(c[0].payload.text, /launch in 1h 59m|launch in 2h 0m/);
@@ -631,6 +631,12 @@ test('no wallet, label or user id ever appears in a group message', async () => 
   for (const cmd of inGroup) {
     await bot.handleUpdate(msg('supergroup', cmd, GROUP, 5100));
   }
+  // The same two again from an admin, because the group surface is admin-only
+  // now and a member hears nothing. Without these the assertion below would be
+  // checking that silence contains no wallets, which it trivially does.
+  for (const cmd of ['/ready', '/tge']) {
+    await bot.handleUpdate(msg('supergroup', cmd, GROUP, ADMIN));
+  }
   // And the scheduled post, which nobody typed.
   await readyAutoPostTick(bot.api, { now: Date.parse('2026-07-01T13:00:00Z'), botUsername: 'vitalscheck_bot' });
 
@@ -736,7 +742,7 @@ test('GATE HIT is announced in the group and cannot be burned in a DM', async ()
   assert.equal(c.filter((x) => x.payload?.text === 'GATE HIT').length, 0, 'not in a DM');
   assert.ok(!R.getSetting('gate_announced'), 'and the flag is not burned');
 
-  await bot.handleUpdate(msg('supergroup', '/ready', GROUP, 5204));
+  await bot.handleUpdate(msg('supergroup', '/ready', GROUP, ADMIN));
   c = drain();
   const hit = c.filter((x) => x.payload?.text === 'GATE HIT');
   assert.equal(hit.length, 1, 'the group gets it');
@@ -748,12 +754,12 @@ test('two chats do not defeat the ten-minute cache', async () => {
   balances.set(WALLET, eth(0.31));
   await R.registerMember(7, WALLET);
   const { bot, msg, drain } = harness();
-  await bot.handleUpdate(msg('supergroup', '/ready', GROUP, 5205));
+  await bot.handleUpdate(msg('supergroup', '/ready', GROUP, ADMIN));
   drain();
   // A DM in between must not evict the group's cached block.
   await bot.handleUpdate(msg('private', '/tge', 5206, 5206));
   drain();
-  await bot.handleUpdate(msg('supergroup', '/ready', GROUP, 5207));
+  await bot.handleUpdate(msg('supergroup', '/ready', GROUP, ADMIN));
   const c = drain();
   assert.equal(c.filter((x) => x.method === 'sendMessage' && x.payload.chat_id === GROUP).length, 0);
   assert.equal(c.filter((x) => x.method === 'editMessageText').length, 1, 'still an edit, as promised');
@@ -763,9 +769,9 @@ test('a /ready inside the window does not strip the countdown /tge posted', asyn
   reset();
   R.setSetting('launch_at', String(Math.floor(Date.now() / 1000) + 7200));
   const { bot, msg, drain } = harness();
-  await bot.handleUpdate(msg('supergroup', '/tge', GROUP, 5208));
+  await bot.handleUpdate(msg('supergroup', '/tge', GROUP, ADMIN));
   assert.match(drain().find((x) => x.method === 'sendMessage').payload.text, /launch in /);
-  await bot.handleUpdate(msg('supergroup', '/ready', GROUP, 5209));
+  await bot.handleUpdate(msg('supergroup', '/ready', GROUP, ADMIN));
   const edit = drain().find((x) => x.method === 'editMessageText');
   assert.match(edit.payload.text, /launch in /, 'the countdown belongs to the launch, not to the command');
 });

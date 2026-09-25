@@ -29,6 +29,34 @@ Everything on it has to read `ok` before Thursday. `tools/launch.config.json`
 is gitignored: the salt decides the token address, so it never enters the
 repository.
 
+### The launch time can only be set inside the cutoff
+
+`/launch set` refuses a time past a cutoff. By default that is a rolling horizon
+of `LAUNCH_HORIZON_DAYS` days from today, which cannot expire. Setting
+`LAUNCH_DEADLINE` to a date replaces it with a hard stop at the end of that day.
+
+A cutoff in the past refuses **every** date there is, so the bot says which it
+is using at boot:
+
+```
+[launch] cutoff: 2026-10-10 00:00 CEST, from the 14 day horizon (LAUNCH_HORIZON_DAYS)
+```
+
+and warns instead if it has passed or will not parse. `/launch status` prints
+the same line. If `/launch set` refuses a date that looks fine, read that line
+first: an absolute `LAUNCH_DEADLINE` left over on the dashboard is the reason.
+
+The time may be given with the zone on it, as the bot prints it back:
+
+```
+/launch set 2026-09-28 16:00 Europe/Bratislava
+/launch set 2026-09-28 16:00 CEST
+/launch set 2026-09-28 16:00
+```
+
+all mean the same instant. A **different** zone is refused rather than read as
+local.
+
 ---
 
 ## Thursday: the rehearsal
@@ -150,6 +178,28 @@ Times are from T+0, the moment the launch transaction is mined.
 /tge
 ```
 
+Run `/tge` **in BLOCK ZERO, from a named admin account**, and read both halves
+of that.
+
+*In BLOCK ZERO*, because that one command is what sets `ready_chat`, and
+`ready_chat` is where the countdown posts, the fake-CA guard, the self-scan
+cards at T+15 and T+4h, and the cancel notice all go. Run it in the wrong room
+and the guard is watching the wrong room: a fake address posted in BLOCK ZERO at
+T+3s is not deleted and its poster is not muted.
+
+*From a named admin*, because an anonymous admin is attributed to
+GroupAnonymousBot, which is in no `ADMIN_IDS` list. Posting anonymously is the
+default for admins in most crypto groups. The bot answers and says so rather
+than doing nothing, but turn off "send as group" before running it.
+
+`/ready` and `/tge` in a group are admin-only. A member gets silence, and cannot
+move `ready_chat` out of the launch room.
+
+If a room should stay quiet between now and launch, `/ready off` in that room
+turns the READY block off there and nothing else: the CA, the pin and the guard
+are untouched. It is refused while a launch is armed, because the countdown post
+carries the same block, so do it before `/launch set`.
+
 Then, **in each chat that should get the CA**, with that chat's own delay in
 seconds:
 
@@ -166,8 +216,10 @@ room's screenshot and nobody there is waiting.
 /launch status
 ```
 
-lists every watching chat, its delay, and whether it has the CA yet. Run it
-before T-5 and count the rooms: a chat that never ran `/launch watch` gets
+lists every watching chat, its delay, and whether it has the CA yet. It also
+prints the chat the launch posts go to, by id and title, whether that chat's
+READY block is on, and the date the launch time may still be set inside. Run it
+before T-5 and check all four: a chat that never ran `/launch watch` gets
 nothing, silently, and the first anyone notices is that the room is empty at
 T+3s. `/launch unwatch` in a chat takes it back out.
 

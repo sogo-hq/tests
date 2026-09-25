@@ -54,8 +54,11 @@ import {
 } from './tge.js';
 import {
   parseLaunchTime, launchTimeLine, getLaunchPlan, clearLaunchPlan, resetCountdownMarks,
-  retireLandedLaunch,
+  retireLandedLaunch, launchCutoff, announceLaunchCutoff, zonedStamp,
 } from './launch.js';
+import {
+  readyBlockMuted, setReadyBlockMuted, readyBlockSetting, canMute, muteLine,
+} from './readyblock.js';
 import {
   launchChat, preflight, preflightLine, startLaunchLoop, retirePin,
   guardVerdict, guardActive, pinnedCa, offencesOf, recordOffence,
@@ -82,7 +85,7 @@ import {
   autoscanEnabled, setAutoscan, autoscanSetting, addressesIn, claimAutoReply,
   everAnswered, AUTOSCAN_DEDUPE_MS,
 } from './autoscan.js';
-import { recordBotChat, seedBotChatsFromActivity, type BotChatStatus } from './chats.js';
+import { recordBotChat, seedBotChatsFromActivity, chatTitle, type BotChatStatus } from './chats.js';
 import {
   addSeat, setTier, removeSeat, liveSeats, seatTableForAdmin, publicRoster,
   totalShares, seatHistory, TIER_SHARES,
@@ -908,6 +911,17 @@ export interface PostTotalsOpts {
    * scrolled past it.
    */
   force?: boolean;
+  /**
+   * Make this chat the one the scheduled and launch posts go to.
+   *
+   * Off unless asked for, and that is the fix rather than a default. It used to
+   * ride on `isGroup`, so every group block captured `ready_chat` -- and since
+   * /tge had no admin gate at all, any member of any group the bot sits in could
+   * move the countdown, the fake-CA guard, the self-scan cards and the cancel
+   * notice out of the launch room by typing five characters. Now only an admin
+   * asking for it moves it, and a muted chat cannot take it at all.
+   */
+  capture?: boolean;
 }
 
 /**
@@ -920,7 +934,10 @@ export async function postTotals(
   api: Api,
   chatId: number,
   opts: PostTotalsOpts = {},
-): Promise<'posted' | 'edited'> {
+): Promise<'posted' | 'edited' | 'muted'> {
+  // Before the balance refresh, not after: a muted group must not cost a full
+  // re-read of the register to produce nothing.
+  if (readyBlockMuted(chatId)) return 'muted';
   const now = opts.now ?? Date.now();
   const cached = blocks.get(chatId);
   const fresh = opts.force || !cached || now - cached.readAt >= BLOCK_TTL_MS;
@@ -960,8 +977,9 @@ export async function postTotals(
   // Remember where the block lives so the daily and threshold posts have a
   // group to go to without an admin configuring a chat id by hand. Only a real
   // group: a channel post carries no sender and would otherwise redirect every
-  // scheduled post into the channel.
-  if (opts.isGroup) setSetting('ready_chat', String(chatId));
+  // scheduled post into the channel. And only when the caller asked, which is
+  // only ever an admin: see `capture` above for what a member could move.
+  if (opts.isGroup && opts.capture) setSetting('ready_chat', String(chatId));
 
   // The gate is announced in the group and nowhere else. Announced from any
   // chat, one member's DM /tge burned the global flag and the group never heard
@@ -985,6 +1003,10 @@ export async function postTotals(
 export async function readyAutoPostTick(api: Api, opts: { now?: number; botUsername?: string } = {}): Promise<boolean> {
   const chat = getSetting('ready_chat');
   if (!chat) return false;
+  // Checked before dailyDue, which adopts today's date as a side effect on its
+  // first run: asking it whether a post is due in a chat that cannot receive one
+  // would burn the mark and swallow the first real post after an unmute.
+  if (readyBlockMuted(Number(chat))) return false;
   const now = opts.now ?? Date.now();
 
   // Decide what can be decided for free FIRST. Refreshing every registered
@@ -1378,6 +1400,11 @@ export function createBot(token = TELEGRAM_BOT_TOKEN): Bot {
            : set.byDefault ? ', on because this group is licensed, never set here'
            : ', never changed')
         + '. an admin changes it with /autoscan on or /autoscan off.';
+      // Only when it is off. A group that is not muted learns nothing from being
+      // told so, and /help is already split across two messages for an admin.
+      if (readyBlockMuted(ctx.chat.id)) {
+        text += '\nthe READY block is off here. /ready on turns it back on.';
+      }
     }
 
     // Clamped rather than trusted to fit: the list is generated from the
@@ -2265,18 +2292,73 @@ export function createBot(token = TELEGRAM_BOT_TOKEN): Bot {
     }
 
     if (inGroup) {
+      // An anonymous admin is the one case that gets an answer rather than
+      // silence, and it is not a courtesy. Telegram attributes an anonymous
+      // admin's message to GroupAnonymousBot, which is in no ADMIN_IDS list, so
+      // the gate below cannot see who sent it -- and posting anonymously is the
+      // default for admins in most crypto groups. Silent, the operator runs
+      // /ready in the launch room on Saturday, nothing happens, `ready_chat` is
+      // never set, and that is found out at T-0.
+      if (anonAdmin) {
+        await ctx.reply(
+          'an anonymous admin cannot be identified, so this does nothing. '
+          + 'turn off "send as group" for this message, or run it from your own account',
+        );
+        return;
+      }
       // Minutes-old accounts are ignored in silence HERE, where answering makes
       // the group a place where saying /ready gets a reaction. In a DM it only
       // made the bot look dead to somebody who joined from a campaign link and
       // registered straight away.
-      if (joinedTooRecently(userId) || anonAdmin) return;
-      await postTotals(ctx.api, ctx.chat!.id, { botUsername: usernameOf(ctx), isGroup: true });
+      if (joinedTooRecently(userId)) return;
+      // The group surface is ADMIN_IDS only. A member's /ready posted a block and
+      // captured `ready_chat` with it, which on launch day means a member could
+      // move the countdown, the fake-CA guard and the self-scan cards out of the
+      // room the CA lands in. Silent for everybody else, for the same reason the
+      // line above is silent: answering makes the group a place where saying
+      // /ready gets a reaction.
+      //
+      // Group admins are deliberately NOT the gate here, unlike /autoscan. That
+      // setting is about one group's own conversation; this one decides where our
+      // launch posts go, and an admin of some third group does not get a say in
+      // it.
+      if (!isAdmin(userId)) return;
+
+      const chatId = ctx.chat!.id;
+      const sub = raw.toLowerCase();
+      if (sub === 'on' || sub === 'off') {
+        const plan = getLaunchPlan();
+        const allowed = sub === 'off'
+          ? canMute(plan ? zonedStamp(plan.at) : null)
+          : { ok: true as const };
+        if (!allowed.ok) { await ctx.reply(allowed.reason); return; }
+        setReadyBlockMuted(chatId, sub === 'off', userId);
+        await ctx.reply(muteLine(sub === 'off'));
+        return;
+      }
+
+      // Silence in a muted group would read as the bot being broken to the one
+      // person who can unmute it.
+      if (readyBlockMuted(chatId)) {
+        await ctx.reply('the READY block is off in this group. /ready on turns it back on');
+        return;
+      }
+      await postTotals(ctx.api, chatId, {
+        botUsername: usernameOf(ctx), isGroup: true, capture: true,
+      });
       return;
     }
 
     // ---- DM ----
     const parts = raw.split(/\s+/).filter(Boolean);
     const sub = parts[0]?.toLowerCase();
+
+    // Otherwise this falls through to registration and answers "that is not an
+    // address", which is true and tells an admin nothing about what they typed.
+    if (sub === 'on' || sub === 'off') {
+      await ctx.reply('the READY block is a group setting. run /ready off in the group itself.');
+      return;
+    }
 
     if (sub === 'add' || sub === 'remove' || sub === 'list' || sub === 'open') {
       if (!isAdmin(userId)) return;
@@ -2400,12 +2482,35 @@ export function createBot(token = TELEGRAM_BOT_TOKEN): Bot {
   bot.command('tge', async (ctx) => {
     // A channel post carries no sender at all. Acted on, it would write the
     // channel's id into ready_chat and redirect every scheduled post there.
-    if (!ctx.from || ctx.from.is_bot) return;
+    if (!ctx.from) return;
     if (ctx.chat?.type === 'channel') return;
+    // GroupAnonymousBot carries is_bot, so the check below already dropped an
+    // anonymous admin in silence. Said out loud for the same reason /ready says
+    // it: posting anonymously is the default for admins in most crypto groups,
+    // and this is the command that names where the launch posts go.
+    if (ctx.from.id === GROUP_ANONYMOUS_BOT_ID && ctx.chat?.type !== 'private') {
+      await ctx.reply(
+        'an anonymous admin cannot be identified, so this does nothing. '
+        + 'turn off "send as group" for this message, or run it from your own account',
+      );
+      return;
+    }
+    if (ctx.from.is_bot) return;
+    const inGroup = ctx.chat?.type !== 'private';
+    // In a group this is the same surface as /ready and it had no gate at all:
+    // five characters from any member of any group the bot sits in captured
+    // `ready_chat`. In a DM it captures nothing and costs nothing, so it stays
+    // open -- members are told to DM the bot, and the totals are public by design.
+    if (inGroup && !isAdmin(ctx.from.id)) return;
+    if (inGroup && readyBlockMuted(ctx.chat!.id)) {
+      await ctx.reply('the READY block is off in this group. /ready on turns it back on');
+      return;
+    }
     await postTotals(ctx.api, ctx.chat!.id, {
       withCountdown: true,
       botUsername: usernameOf(ctx),
-      isGroup: ctx.chat?.type !== 'private',
+      isGroup: inGroup,
+      capture: inGroup,
     });
   });
 
@@ -2517,6 +2622,55 @@ export function createBot(token = TELEGRAM_BOT_TOKEN): Bot {
       }
       lines.push('');
       lines.push(...watchersText());
+      await ctx.reply(clamp(lines.join('\n'), TELEGRAM_MAX_MESSAGE));
+      return;
+    }
+
+    /**
+     * Where everything is pointed, before it matters.
+     *
+     * /launch status was in the usage list and had no branch, so it printed the
+     * usage list back. The one thing it most needed to say was the one thing
+     * nothing said anywhere: which chat `ready_chat` holds. That single setting
+     * carries the countdown, the fake-CA guard, the self-scan cards and the
+     * cancel notice, and until now the only way to find out where it pointed was
+     * to wait and see where a post came out.
+     */
+    if (sub === 'status') {
+      const plan = getLaunchPlan();
+      const lines = [
+        plan ? launchTimeLine(plan.at) : 'no launch set',
+        plan?.name ? `name: ${plan.name}` : '',
+        plan?.deployer ? `watching: ${plan.deployer.slice(0, 10)}…` : '',
+      ].filter(Boolean);
+
+      const cut = launchCutoff();
+      lines.push(cut.ok
+        ? (cut.at <= Date.now()
+          // The state that refuses every date there is. Never a quiet line.
+          ? `CUTOFF PASSED: ${cut.source} ended ${zonedStamp(cut.at)}. no launch can be set until it moves`
+          : `bookable until ${zonedStamp(cut.at)}, from ${cut.source}`)
+        : `CUTOFF BROKEN: ${cut.reason}`);
+
+      lines.push('');
+      const chat = launchChat();
+      if (chat === null) {
+        lines.push('launch posts: nowhere yet. run /ready in the group they belong in.');
+      } else {
+        const title = chatTitle(chat);
+        lines.push(`launch posts: ${chat}${title ? ` (${title})` : ''}`);
+        lines.push('  countdown, fake-CA guard, self-scan cards and the cancel notice all go here');
+        const block = readyBlockSetting(chat);
+        lines.push(`  READY block: ${block.muted ? 'off' : 'on'}${block.byDefault ? ' (default)' : ''}`);
+        lines.push(`  ${preflightLine(await preflight(ctx.api, chat, ctx.me.id))}`);
+      }
+
+      lines.push('');
+      lines.push(...watchersText());
+      if (!getSetting('launch_deployer')) {
+        lines.push('');
+        lines.push('no deployer watched yet: /launch watch 0xDEPLOYER so the CA can be posted automatically.');
+      }
       await ctx.reply(clamp(lines.join('\n'), TELEGRAM_MAX_MESSAGE));
       return;
     }
@@ -3744,6 +3898,12 @@ export async function startBot(existing?: Bot): Promise<void> {
   // The notice is configured by environment variable and rendered on every
   // card, so the one thing it must not do is be off without saying so.
   announceLaunchNotice();
+
+  // Same rule, same reason. A cutoff in the past refuses every date /launch set
+  // can be given, which from outside the process is indistinguishable from an
+  // admin mistyping one. It said nothing at boot and the default expired on its
+  // own date.
+  announceLaunchCutoff();
 
   startCacheReporter();
   startQuotaSweeper();

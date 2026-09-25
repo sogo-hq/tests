@@ -265,7 +265,9 @@ test('the guard passes ordinary messages through to the commands behind it', asy
   const h = harness();
   // /tge is registered after the guard; an earlier version of this handler
   // swallowed the middleware chain and silently disabled every command below it.
-  await h.bot.handleUpdate(h.msg('/tge', 6008));
+  // From an admin: the group surface of /tge is admin-only, and what this test
+  // is about is the middleware chain, not who may run the command.
+  await h.bot.handleUpdate(h.msg('/tge', ADMIN));
   const sends = h.drain().filter((x) => x.method === 'sendMessage' && x.payload.chat_id === GROUP);
   assert.equal(sends.length, 1, 'the command behind the guard still runs');
   assert.match(sends[0].payload.text, /READY FOR LAUNCH/);
@@ -407,8 +409,10 @@ test('every other command still works while a launch is armed', async () => {
     ['/tge', /READY FOR LAUNCH/],
     ['/ready', /READY FOR LAUNCH/],
   ];
+  // As an admin, so that the two admin-only group commands in the list are
+  // actually exercised rather than passing because silence has no reply either.
   for (const [cmd, want] of cases) {
-    await h.bot.handleUpdate(h.msg(cmd, 6200));
+    await h.bot.handleUpdate(h.msg(cmd, ADMIN));
     // Inside the ten-minute window the totals block answers with an edit rather
     // than a new message, so both count as "the command ran".
     const sent = h.drain().filter((x) => x.method === 'sendMessage' || x.method === 'editMessageText');

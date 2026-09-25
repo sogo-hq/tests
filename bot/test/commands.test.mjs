@@ -205,7 +205,13 @@ test('every part of /help is a sendable message, and nothing is cut', async () =
     assert.ok(!p.endsWith('…'), 'a part was clamped, so something was cut');
   }
   const whole = parts.join('\n\n');
-  assert.ok(whole.includes('24 Sep'), 'the notice is in the measurement');
+  // Against everything sent, not against the parts carrying a group heading.
+  // The notice is appended to the LAST part, and which part that is moves
+  // whenever a command's line gets longer: lengthening /ready's usage string
+  // was enough to push the split one block earlier and land the notice in a
+  // part this filter drops. The test then failed for a reason that had nothing
+  // to do with what it is for.
+  assert.ok(lastSent.join('\n\n').includes('24 Sep'), 'the notice is in the measurement');
   // The reason it is split rather than clamped: every command in the table
   // still arrives. A generated list that drops its own tail reads as those
   // commands not existing.
