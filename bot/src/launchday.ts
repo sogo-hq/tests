@@ -10,6 +10,7 @@ import {
 } from './launchwatch.js';
 import { db } from './db.js';
 import { totalsBlock } from './tge.js';
+import { readyBlockMuted } from './readyblock.js';
 
 /**
  * Launch day, from the countdown through the pinned CA.
@@ -118,13 +119,24 @@ export async function countdownTick(api: Api, opts: TickOpts = {}): Promise<stri
   // countdowns arriving at once would say three things that are no longer true.
   for (const stale of found.skipped) markPosted(stale.key, now);
 
-  await refreshBalances(now);
-  const block = totalsBlock({
-    members: await memberCount(api, chatId),
-    now,
-    name: plan.name,
-    botUsername: opts.botUsername,
-  }, totals());
+  // The mute has to be honoured HERE as well as in postTotals, and this is the
+  // place it was missed. A countdown post embeds the same block and is sent
+  // straight from this function, so a room with the block turned off still got
+  // one: arming three days out makes T-3d due within the minute, and the first
+  // thing that room saw was "members 7, wallets 0, eth 0.0" under a heading it
+  // had asked not to see. Balances are not refreshed for it either, for the same
+  // reason postTotals does not: no chain read to produce nothing.
+  const muted = readyBlockMuted(chatId);
+  let block: string | null = null;
+  if (!muted) {
+    await refreshBalances(now);
+    block = totalsBlock({
+      members: await memberCount(api, chatId),
+      now,
+      name: plan.name,
+      botUsername: opts.botUsername,
+    }, totals());
+  }
 
   const sent = await api.sendMessage(chatId, countdownPost(block, plan.at), {
     link_preview_options: { is_disabled: true },

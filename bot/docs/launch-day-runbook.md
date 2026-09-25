@@ -196,9 +196,18 @@ than doing nothing, but turn off "send as group" before running it.
 move `ready_chat` out of the launch room.
 
 If a room should stay quiet between now and launch, `/ready off` in that room
-turns the READY block off there and nothing else: the CA, the pin and the guard
-are untouched. It is refused while a launch is armed, because the countdown post
-carries the same block, so do it before `/launch set`.
+turns the READY block off there and nothing else. The CA, the pin and the guard
+are untouched, and the countdown still posts there, pinned, carrying the two
+lines that are about the launch rather than about registration:
+
+```
+launch: 2026-09-28 16:00 CEST
+CA lands here 3 s after launch. anything before that is fake.
+```
+
+Do it **before** `/launch set`. It is refused while a launch is armed, because a
+countdown already pinned in that room carries the block it was posted with and
+muting does not reach backwards. Cancelling and re-setting retires that pin.
 
 Then, **in each chat that should get the CA**, with that chat's own delay in
 seconds:

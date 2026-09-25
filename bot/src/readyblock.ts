@@ -60,21 +60,29 @@ export type MuteRequest = { ok: true } | { ok: false; reason: string };
 /**
  * May the block be muted here right now?
  *
- * Refused while a launch is armed, and the reason is not caution. A countdown
- * post embeds the same totals block and goes to `ready_chat` on its own
- * schedule, pinned. Muting mid-countdown therefore produces a group with no
- * daily block and a pinned block at the top of the chat, which is a state nobody
- * asked for and which reads as the switch not working.
+ * Refused while a launch is armed, and the reason has moved once already, so it
+ * is worth being exact about what it is now.
  *
- * Unmuting is always allowed: it only ever adds posts, so it cannot create that
- * half-quiet state.
+ * It was: a countdown post embeds this same block, so muting mid-countdown left
+ * a room with no daily block and a pinned one. Countdown posts now honour the
+ * mute themselves and carry only the time and the fake-CA warning, so that is no
+ * longer true of the posts still to come.
+ *
+ * It is: the countdown ALREADY pinned in that room carries the block it was
+ * posted with, and muting does not reach backwards. So muting mid-countdown
+ * leaves a stale block pinned at the top of a room that has asked not to see
+ * one, which is the same wrong state arrived at from the other end. Cancelling
+ * and re-setting retires that pin, which is why that is the instruction.
+ *
+ * Unmuting is always allowed: it only ever adds posts, so it cannot produce a
+ * room whose pin disagrees with its setting.
  */
 export function canMute(armedLaunch: string | null): MuteRequest {
   if (!armedLaunch) return { ok: true };
   return {
     ok: false,
-    reason: `a launch is armed for ${armedLaunch}, and the countdown posts carry this same block. `
-      + 'muting now would leave the group a pinned countdown and no daily block. '
+    reason: `a launch is armed for ${armedLaunch}, and the countdown already pinned here carries `
+      + 'the block it was posted with. muting does not reach back into it. '
       + 'cancel the launch, mute, then set it again',
   };
 }

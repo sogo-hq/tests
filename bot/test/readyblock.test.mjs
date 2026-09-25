@@ -235,9 +235,11 @@ test('a member cannot mute or unmute', async () => {
 // ------------------------------------------------------- the armed edge
 
 test('muting is refused while a launch is armed, and says why', () => {
+  // The reason is the pin, not the posts still to come: those now honour the
+  // mute themselves. Muting does not reach back into a countdown already pinned.
   const refused = B.canMute('2026-09-28 16:00 CEST');
   assert.equal(refused.ok, false);
-  assert.match(refused.reason, /countdown posts carry this same block/);
+  assert.match(refused.reason, /countdown already pinned here carries the block it was posted with/);
   assert.match(refused.reason, /cancel the launch, mute, then set it again/);
   assert.equal(B.canMute(null).ok, true);
 });
@@ -423,4 +425,120 @@ test('/help in a muted group says the block is off here', async () => {
   B.setReadyBlockMuted(GROUP, true, ADMIN);
   await bot.handleUpdate(msg('supergroup', '/help', GROUP, MEMBER));
   assert.match(sentTo(drain(), GROUP).join('\n'), /READY block is off here/);
+});
+
+// ------------------------------------------------- arm and countdown posts
+
+const L = await import('../dist/launch.js');
+
+const LAUNCH = Date.parse('2026-09-28T14:00:00Z');
+// Three days out is what arming on the Friday looks like, and it is why the
+// defect showed up as an "arm post": T-3d is due the minute the plan is set.
+const ARMED_AT = LAUNCH - 2.5 * 86_400_000;
+
+function stubApi() {
+  const calls = [];
+  let id = 400;
+  return {
+    calls,
+    drain: () => { const c = [...calls]; calls.length = 0; return c; },
+    api: {
+      async sendMessage(chat_id, text, extra) {
+        const message_id = ++id;
+        calls.push({ method: 'sendMessage', chat_id, text, extra, message_id });
+        return { message_id, chat: { id: chat_id }, text };
+      },
+      async pinChatMessage(chat_id, message_id) { calls.push({ method: 'pin', chat_id, message_id }); return true; },
+      async unpinChatMessage(chat_id, message_id) { calls.push({ method: 'unpin', chat_id, message_id }); return true; },
+      async getChatMemberCount(chat_id) { calls.push({ method: 'getChatMemberCount', chat_id }); return 7; },
+    },
+  };
+}
+
+const armed = async () => {
+  await registered();
+  R.setSetting('ready_chat', String(GROUP));
+  R.setSetting('launch_at', String(Math.floor(LAUNCH / 1000)));
+  R.setSetting('launch_name', '$VITALS');
+};
+
+test('countdownPost with no block is the time line and the warning, nothing else', () => {
+  const only = L.countdownPost(null, LAUNCH);
+  assert.equal(only, `launch: 2026-09-28 16:00 CEST\n${L.CA_NOTICE}`);
+  assert.ok(!only.includes('READY FOR LAUNCH'));
+  assert.ok(!only.includes('wallets ready'));
+  assert.ok(!only.includes('declared launches so far'),
+    'off in a room means off, not one tally instead of four');
+});
+
+test('countdownPost with a block is unchanged', () => {
+  const withBlock = L.countdownPost('READY FOR LAUNCH\nwallets ready     3', LAUNCH);
+  assert.match(withBlock, /^READY FOR LAUNCH\nwallets ready {5}3\nlaunch: 2026-09-28 16:00 CEST\n/);
+  assert.ok(withBlock.includes(L.CA_NOTICE));
+});
+
+test('the countdown in a muted room drops the block and keeps the two lines', async () => {
+  // The defect as reported: armed from a chat with /ready off, and the post that
+  // followed carried "members 7, wallets 0, eth 0.0".
+  reset();
+  await armed();
+  B.setReadyBlockMuted(GROUP, true, ADMIN);
+  const h = stubApi();
+
+  assert.equal(await D.countdownTick(h.api, { now: ARMED_AT, botUsername: 'vitalscheck_bot' }), 'T-3d');
+  const c = h.drain();
+  const sent = c.filter((x) => x.method === 'sendMessage');
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].text, `launch: 2026-09-28 16:00 CEST\n${L.CA_NOTICE}`);
+  assert.ok(!/READY FOR LAUNCH|wallets ready|eth ready|members/.test(sent[0].text),
+    `the block reached a muted room:\n${sent[0].text}`);
+  assert.equal(c.filter((x) => x.method === 'pin').length, 1,
+    'and it is still pinned: the time and the fake-CA warning are why it is pinned at all');
+  assert.equal(c.filter((x) => x.method === 'getChatMemberCount').length, 0,
+    'and no member count is read to build a block that is not sent');
+});
+
+test('the countdown in an ordinary room still carries the block', async () => {
+  reset();
+  await armed();
+  const h = stubApi();
+  assert.equal(await D.countdownTick(h.api, { now: ARMED_AT, botUsername: 'vitalscheck_bot' }), 'T-3d');
+  const sent = h.drain().filter((x) => x.method === 'sendMessage');
+  assert.equal(sent.length, 1);
+  assert.match(sent[0].text, /^READY FOR LAUNCH: \$VITALS/);
+  assert.match(sent[0].text, /wallets ready/);
+  assert.match(sent[0].text, /launch: 2026-09-28 16:00 CEST/);
+  assert.ok(sent[0].text.includes(L.CA_NOTICE));
+});
+
+test('every countdown offset in a muted room stays clean, not just the first', async () => {
+  // The offsets are separate posts on separate marks. One of them honouring the
+  // mute is not the promise; T-10min is the one that matters most.
+  reset();
+  await armed();
+  B.setReadyBlockMuted(GROUP, true, ADMIN);
+  const h = stubApi();
+  for (const [key, at] of [
+    ['T-3d', LAUNCH - 2.5 * 86_400_000],
+    ['T-24h', LAUNCH - 20 * 3_600_000],
+    ['T-1h', LAUNCH - 50 * 60_000],
+    ['T-10min', LAUNCH - 9 * 60_000],
+  ]) {
+    assert.equal(await D.countdownTick(h.api, { now: at }), key);
+    const sent = h.drain().filter((x) => x.method === 'sendMessage');
+    assert.equal(sent.length, 1, key);
+    assert.equal(sent[0].text, `launch: 2026-09-28 16:00 CEST\n${L.CA_NOTICE}`, key);
+  }
+});
+
+test('unmuting mid-countdown brings the block back to the next post', async () => {
+  reset();
+  await armed();
+  B.setReadyBlockMuted(GROUP, true, ADMIN);
+  const h = stubApi();
+  await D.countdownTick(h.api, { now: LAUNCH - 2.5 * 86_400_000 });
+  h.drain();
+  B.setReadyBlockMuted(GROUP, false, ADMIN);
+  await D.countdownTick(h.api, { now: LAUNCH - 20 * 3_600_000 });
+  assert.match(h.drain().find((x) => x.method === 'sendMessage').text, /READY FOR LAUNCH/);
 });

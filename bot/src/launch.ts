@@ -401,9 +401,19 @@ export function dueCountdown(
  * Exactly the two fixed lines the spec names, plus the declared count when
  * there is one. No "T-2d" label: the absolute time is on the line above it, and
  * a relative label is one more thing that has to be right.
+ *
+ * A null block is a chat with the READY block turned off, and it strips this
+ * post back to the two lines that are about the launch rather than about
+ * registration: the time, and the warning that anything claiming to be the CA
+ * before T+3s is fake. Those two are the reason the post is pinned, and they
+ * are not the operator's business to suppress. Everything else goes, the
+ * declared count with it: "off" was asked for in a room, so a post arriving
+ * there with one tally instead of four has not honoured it.
  */
-export function countdownPost(block: string, at: number, tz = LAUNCH_TZ): string {
-  const lines = [block, launchTimeLine(at, tz), CA_NOTICE];
+export function countdownPost(block: string | null, at: number, tz = LAUNCH_TZ): string {
+  const fixed = [launchTimeLine(at, tz), CA_NOTICE];
+  if (block === null) return fixed.join('\n');
+  const lines = [block, ...fixed];
   const declared = declaredCount();
   if (declared !== null) lines.push(`declared launches so far: ${declared.toLocaleString()}`);
   return lines.join('\n');
