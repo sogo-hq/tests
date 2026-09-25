@@ -26,6 +26,15 @@ export interface EarlySells {
   cohort: number;
   /** How many of them have sent tokens back to the curve or the pool since. */
   sold: number;
+  /**
+   * The block of the FIRST disposal by anyone in the cohort, or null.
+   *
+   * The walk already sees it; it was simply not kept. "one of them has sold" and
+   * "one of them sold twenty-one seconds in" are different facts about a launch,
+   * and the second is the one a reader can act on. Null when none has sold, and
+   * the caller must not read that as zero.
+   */
+  firstSoldBlock: number | null;
 }
 
 const ZERO = '0x0000000000000000000000000000000000000000';
@@ -59,11 +68,18 @@ export function earlySellsFrom(
 
   const sinks = new Set([curve.toLowerCase(), POOL_MANAGER.toLowerCase()]);
   const sold = new Set<string>();
+  let firstSoldBlock: number | null = null;
   for (const l of logs) {
     const from = String(l.args.from).toLowerCase();
     if (from === ZERO || !cohort.has(from)) continue;
-    if (sinks.has(String(l.args.to).toLowerCase())) sold.add(from);
+    if (!sinks.has(String(l.args.to).toLowerCase())) continue;
+    sold.add(from);
+    // The earliest, not the first encountered: the walk is not guaranteed to
+    // hand logs over in block order, and taking the first one seen would report
+    // whichever disposal happened to be at the top of the page.
+    const at = Number(l.blockNumber);
+    if (Number.isFinite(at) && (firstSoldBlock === null || at < firstSoldBlock)) firstSoldBlock = at;
   }
 
-  return { cohort: cohort.size, sold: sold.size };
+  return { cohort: cohort.size, sold: sold.size, firstSoldBlock };
 }

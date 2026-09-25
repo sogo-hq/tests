@@ -72,6 +72,34 @@ export function openapiDocument(publicUrl = process.env.API_PUBLIC_URL || 'https
           },
         },
       },
+      '/line/{address}': {
+        get: {
+          summary: 'One line, for embedding in another tool\'s output',
+          description:
+            'A single string under 110 characters whose shape does not change: '
+            + '`vitals \u00b7 <who> \u00b7 <what they did> \u00b7 <cost>`, plus '
+            + '` \u00b7 declared #NNN` when a declaration signed before the launch '
+            + 'block exists. No part is ever omitted: a part that could not be '
+            + 'measured reads `undetermined`. When the whole line cannot be built '
+            + 'the answer is 503 and never a partial line. `version` is the shape '
+            + 'version and is also returned as the x-vitals-line-version header; '
+            + 'it changes only when a part is added, removed or reordered.',
+          parameters: [{
+            name: 'address', in: 'path', required: true,
+            schema: { type: 'string', pattern: '^0x[a-fA-F0-9]{40}$' },
+          }],
+          responses: {
+            200: { description: 'the line', content: { 'application/json': { schema: ref('Line') } } },
+            400: { description: 'not an address', content: { 'application/json': { schema: ref('Error') } } },
+            404: { description: 'the factory has no record of this token', content: { 'application/json': { schema: ref('Error') } } },
+            429: { description: 'rate limited. See Retry-After.', content: { 'application/json': { schema: ref('Error') } } },
+            503: {
+              description: `the index is more than ${MAX_LAG_BLOCKS} blocks behind, the chain could not be read, or the line could not be built in full`,
+              content: { 'application/json': { schema: ref('Error') } },
+            },
+          },
+        },
+      },
       '/launches': {
         post: {
           summary: `Up to ${MAX_BATCH} launches at once, with per-item errors`,
@@ -222,6 +250,20 @@ export function openapiDocument(publicUrl = process.env.API_PUBLIC_URL || 'https
             ok: { type: 'boolean' },
             launch: ref('Launch'),
             error: ref('Error'),
+          },
+        },
+        Line: {
+          type: 'object',
+          required: ['version', 'line'],
+          properties: {
+            version: {
+              type: 'integer',
+              description: 'the shape version. Pin this: it changes only when a part is added, removed or reordered.',
+            },
+            line: {
+              type: 'string', maxLength: 110,
+              description: 'the whole line, ready to embed. Never truncated and never partial.',
+            },
           },
         },
         Error: {

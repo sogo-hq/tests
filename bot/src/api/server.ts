@@ -2,7 +2,7 @@ import { createServer, type IncomingMessage, type ServerResponse, type Server } 
 import { callerOf, consume, RATES } from './auth.js';
 import { openapiDocument } from './openapi.js';
 import {
-  getLaunch, postLaunches, getStats, getHealth, lagRefusal,
+  getLaunch, getLine, postLaunches, getStats, getHealth, lagRefusal,
   validateAddress, validateBatch, getRevenue,
 } from './handlers.js';
 import { API_VERSION } from './types.js';
@@ -172,6 +172,24 @@ export async function handle(req: IncomingMessage, res: ServerResponse): Promise
         return;
       }
       const out = await getLaunch(address);
+      send(res, out.status, out.body, { ...rateHeaders, ...out.headers });
+      return;
+    }
+
+    const lineMatch = /^\/line\/([^/]+)$/.exec(route);
+    if (lineMatch && req.method === 'GET') {
+      const address = decodeURIComponent(lineMatch[1]!);
+      const invalid = validateAddress(address);
+      if (invalid) {
+        send(res, invalid.status, invalid.body, rateHeaders);
+        return;
+      }
+      const lagging = await lagRefusal();
+      if (lagging) {
+        send(res, lagging.status, lagging.body, { ...rateHeaders, ...lagging.headers });
+        return;
+      }
+      const out = await getLine(address);
       send(res, out.status, out.body, { ...rateHeaders, ...out.headers });
       return;
     }

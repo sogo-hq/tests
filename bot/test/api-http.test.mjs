@@ -182,3 +182,35 @@ test('the server never returns an internal message to a caller', async () => {
     }
   }
 });
+
+// ------------------------------------------------ the embeddable line
+
+test('/v1/line/<ca> is wired up, refuses a non-address, and is open to a browser', async () => {
+  // A route that is not wired is exactly what a handler test cannot see.
+  const bad = await call('/v1/line/not-an-address');
+  assert.equal(bad.status, 400);
+  assert.equal(bad.body.error, 'invalid_address');
+
+  // A real address that is not a launch reaches the handler rather than a 404
+  // about the route, which is the difference between "no such token" and "no
+  // such endpoint" and is what a partner debugs against.
+  const miss = await call(`/v1/line/0x${'1'.repeat(40)}`);
+  assert.notEqual(miss.status, 404, 'the route itself answered');
+  assert.ok([200, 404, 429, 503].includes(miss.status), `unexpected ${miss.status}`);
+  if (miss.status === 404) assert.equal(miss.body.error, 'not_a_pons_v2_launch');
+
+  // And it is readable from a page, like every other GET here.
+  assert.equal(miss.headers.get('access-control-allow-origin'), '*');
+});
+
+test('the line route is in the openapi document, with its version pinned', async () => {
+  const r = await call('/v1/openapi.json');
+  const path = r.body.paths['/line/{address}'];
+  assert.ok(path?.get, 'the line route is not documented');
+  assert.ok(r.body.components.schemas.Line, 'the Line schema is missing');
+  assert.equal(r.body.components.schemas.Line.properties.line.maxLength, 110);
+  assert.deepEqual(r.body.components.schemas.Line.required, ['version', 'line']);
+  // The description states the two properties an embedder relies on.
+  assert.match(path.get.description, /shape does not change/);
+  assert.match(path.get.description, /never a partial line/);
+});

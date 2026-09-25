@@ -111,6 +111,7 @@ import {
   declarationLink, declarationOutcome, shortWallet, byId,
 } from './declare.js';
 import { renderDeclarationPng } from './image.js';
+import { buildLine } from './line.js';
 import { indexCoverage } from './coverage.js';
 import { TELEGRAM_BOT_TOKEN, DISCLAIMER } from './config.js';
 
@@ -2787,6 +2788,42 @@ export function createBot(token = TELEGRAM_BOT_TOKEN): Bot {
     }
 
     await ctx.reply('/decode start | status | stop');
+  });
+
+  /**
+   * One line, for somebody else's bot.
+   *
+   * Plain text and nothing else: no markup, no link preview, no footer. The
+   * whole value of it is that it can be copied into another tool's output
+   * without editing, and anything wrapped around it here would have to be
+   * stripped there.
+   *
+   * A line that cannot be built sends the reason rather than a shortened line.
+   * A partial line in an embedder's output is a claim nobody wrote.
+   */
+  bot.command('line', async (ctx) => {
+    const raw = (ctx.match ?? '').toString().trim();
+    const token = normaliseToken(raw);
+    if (!token) {
+      await ctx.reply('/line <ca>');
+      return;
+    }
+    const outcome = await performScan({ token, source: ctx.chat?.type === 'private' ? 'dm' : 'group' });
+    if (outcome.kind === 'not_found') {
+      await ctx.reply('not a pons v2 launch');
+      return;
+    }
+    if (outcome.kind !== 'ok' || !outcome.result) {
+      await ctx.reply('the chain could not be read well enough to build the line. try again');
+      return;
+    }
+    const built = buildLine(outcome.result);
+    if (!built) {
+      // Said, not shortened. The rule is the whole line or nothing.
+      await ctx.reply('the line could not be built in full, so there is no line');
+      return;
+    }
+    await ctx.reply(built.line, { link_preview_options: { is_disabled: true } });
   });
 
   bot.command('position', async (ctx) => {

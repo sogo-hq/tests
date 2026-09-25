@@ -8,6 +8,7 @@ import { performScan, normaliseToken } from '../service.js';
 import { api as atApiPriority } from '../ratelimit.js';
 import { MIN_BENCHMARK_SAMPLES } from '../metrics/benchmark.js';
 import { toApiLaunch } from './map.js';
+import { buildLine, LINE_VERSION } from '../line.js';
 import {
   MAX_BATCH, MAX_LAG_BLOCKS,
   type ApiBatchItem, type ApiError, type ApiHealth, type ApiLaunch, type ApiStats,
@@ -143,6 +144,50 @@ export async function getLaunch(address: string, now = Date.now()): Promise<Outc
  * refuse the other forty-nine, and an integration that fans out has no way to
  * know in advance which of its addresses are launches.
  */
+/**
+ * The embeddable line.
+ *
+ * Its own route rather than a field on /launch, because its consumer is a
+ * different thing: a bot that wants one string and should not have to parse a
+ * launch object to find it, nor break when that object grows a field.
+ *
+ * A line that cannot be built is a 503 and not an empty 200. An embedder given
+ * {"line": null} prints the word null; one given a 503 prints nothing, which is
+ * the outcome the rule asks for.
+ */
+export async function getLine(address: string, now = Date.now()): Promise<Outcome> {
+  const bad = validateAddress(address);
+  if (bad) return bad;
+  const token = normaliseToken(address)!;
+
+  const outcome = await atApiPriority(() => performScan({ token, source: 'api' }));
+  if (outcome.kind === 'not_found') {
+    return { status: 404, body: { error: NOT_A_LAUNCH, resolved_as: null } satisfies ApiError };
+  }
+  if (outcome.kind === 'rate_limited') {
+    return {
+      status: 429,
+      body: { error: 'upstream_rate_limited', resolved_as: null } satisfies ApiError,
+      headers: { 'retry-after': String(Math.max(1, outcome.retryAfterSec)) },
+    };
+  }
+  if (outcome.kind !== 'ok' || !outcome.result) {
+    return { status: 503, body: { error: 'scan_unavailable', resolved_as: null } satisfies ApiError };
+  }
+
+  const built = buildLine(outcome.result);
+  if (!built) {
+    return { status: 503, body: { error: 'line_unavailable', resolved_as: null } satisfies ApiError };
+  }
+  return {
+    status: 200,
+    body: { version: built.version, line: built.line },
+    // On the response as well as in it, so a consumer can pin the shape without
+    // reading the body.
+    headers: { 'x-vitals-line-version': String(LINE_VERSION) },
+  };
+}
+
 export async function postLaunches(body: unknown, now = Date.now()): Promise<Outcome> {
   const bad = validateBatch(body);
   if (bad) return bad;

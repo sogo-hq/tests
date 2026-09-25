@@ -205,7 +205,15 @@ test('every part of /help is a sendable message, and nothing is cut', async () =
     assert.ok(!p.endsWith('…'), 'a part was clamped, so something was cut');
   }
   const whole = parts.join('\n\n');
-  assert.ok(whole.includes('24 Sep'), 'the notice is in the measurement');
+  // The notice is checked against everything that was sent, not against the
+  // parts that carry a group heading. It is appended to the LAST part, and
+  // which part that is moves whenever a command is added: this asserted that
+  // the notice shared a message with a heading, which was never the claim.
+  assert.ok(lastSent.join('\n\n').includes('24 Sep'), 'the notice is in the measurement');
+  // And every part that went out is sendable, the legend included.
+  for (const p of lastSent) {
+    assert.ok(p.length <= TELEGRAM_MAX_MESSAGE, `a sent message is ${p.length} of ${TELEGRAM_MAX_MESSAGE}`);
+  }
   // The reason it is split rather than clamped: every command in the table
   // still arrives. A generated list that drops its own tail reads as those
   // commands not existing.

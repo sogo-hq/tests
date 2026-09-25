@@ -46,6 +46,8 @@ export const COMMANDS: CommandSpec[] = [
     what: 'the card as a picture, for sharing outside Telegram' },
   { name: 'position', usage: '<wallet> <token address>', group: 'Scanning', scope: 'all', where: 'any',
     what: 'where one wallet stood in one launch: what number buyer, who was exempt ahead of it' },
+  { name: 'line', usage: '<token address>', group: 'Scanning', scope: 'all', where: 'any',
+    what: 'one line another bot can embed, under 110 characters, shape fixed' },
   { name: 'legend', usage: '', group: 'Scanning', scope: 'all', where: 'any',
     what: 'what the markers on a card mean, and what a missing one does not mean' },
   { name: 'stats', usage: '', group: 'Scanning', scope: 'all', where: 'any',
