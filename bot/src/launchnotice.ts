@@ -39,6 +39,16 @@ let state: State | null = null;
 let version = 0;
 
 /**
+ * Whether the current configuration has been reported yet.
+ *
+ * Reset when the configuration is, so a change is announced again rather than
+ * once per process. Keyed on the pair, because "the line is unset" and "the
+ * line is unset and a date is set" are different situations and only the second
+ * one is somebody having configured half of this.
+ */
+let announced: string | null = null;
+
+/**
  * The line the last call actually returned, and the version that tracks it.
  *
  * Bumped on what a card WOULD render, not on what is configured, because those
@@ -89,7 +99,12 @@ export function launchNotice(now = Date.now()): string | null {
   const raw = configured();
   const until = configuredUntil();
   if (!raw) {
-    // Unset is not a rejection and must not log like one.
+    // Unset is not a rejection and must not log like one. It is still said
+    // once, because this branch being silent is what made an unset line and a
+    // working line indistinguishable from outside the process: no notice on any
+    // card, nothing in the log, and LAUNCH_NOTICE_UNTIL set on the dashboard
+    // making it look configured. Two days went into that.
+    announceOff(until);
     state = null;
     return rendered(null);
   }
@@ -123,10 +138,77 @@ export function launchNotice(now = Date.now()): string | null {
   return rendered(state.line);
 }
 
+/**
+ * Said once per configuration, never per card.
+ *
+ * launchNotice() is on the scan path, so a plain console call here would put a
+ * line in the log for every card the bot renders.
+ */
+function announceOff(until: string): void {
+  const key = `off:${until}`;
+  if (announced === key) return;
+  announced = key;
+  console.warn(
+    '[notice] OFF: LAUNCH_NOTICE is not set, so no card carries a launch notice. '
+    + (until
+      // The exact shape of the failure this exists to name. A date on its own
+      // configures nothing, and it is the half an operator sees on a dashboard.
+      ? `LAUNCH_NOTICE_UNTIL is ${JSON.stringify(until)}, which does nothing by itself: `
+        + 'the line is what turns the notice on and the date only ends it.'
+      : 'LAUNCH_NOTICE_UNTIL is not set either.'),
+  );
+}
+
+export type NoticeReport = 'on' | 'off' | 'rejected' | 'expired';
+
+/**
+ * Report what the notice is doing, for the startup log.
+ *
+ * Every state says something, including the two that used to say nothing:
+ *
+ *   off       LAUNCH_NOTICE is unset. No card carries a notice.
+ *   expired   the line is set and valid and its date has already passed, so it
+ *             is accepted and renders nowhere. "accepted" alone in a boot log
+ *             above a bot that shows no notice is the second silence here.
+ *   rejected  the line failed the content check. Already loud.
+ *   on        it is rendering, with the date it stops.
+ *
+ * Returns the state so a caller can assert on it rather than on a log line.
+ */
+export function announceLaunchNotice(now = Date.now()): NoticeReport {
+  const raw = configured();
+  const until = configuredUntil();
+  // Resolves the configuration, which logs accepted or REJECTED on a change and
+  // OFF when the line is unset.
+  const line = launchNotice(now);
+  if (!raw) return 'off';
+  if (state?.kind !== 'approved') return 'rejected';
+  if (line === null) {
+    const key = `expired:${raw}:${until}`;
+    if (announced !== key) {
+      announced = key;
+      console.warn(
+        `[notice] EXPIRED: the line is set and valid and LAUNCH_NOTICE_UNTIL ${JSON.stringify(until)} `
+        + 'has already passed, so no card carries it. move the date or unset the line.',
+      );
+    }
+    return 'expired';
+  }
+  const key = `on:${raw}:${until}`;
+  if (announced !== key) {
+    announced = key;
+    console.log(
+      `[notice] ON${until ? `, until ${until}` : ', with no expiry set'}: ${line.slice(0, 140)}`,
+    );
+  }
+  return 'on';
+}
+
 /** For tests, and for an env change to take effect immediately. */
 export function resetLaunchNotice(): void {
   state = null;
   lastRendered = null;
+  announced = null;
   version++;
 }
 

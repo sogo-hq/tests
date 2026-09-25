@@ -13,7 +13,7 @@ import {
 } from './watch.js';
 import { isFilterKey, filterDef, filterRates, rateLine } from './filters.js';
 import { LEGEND, claimLegend } from './legend.js';
-import { launchNotice, claimLaunchNotice } from './launchnotice.js';
+import { launchNotice, claimLaunchNotice, announceLaunchNotice } from './launchnotice.js';
 import { age } from './card.js';
 import { buildPosition, positionText } from './position.js';
 import {
@@ -3739,6 +3739,11 @@ export async function startBot(existing?: Bot): Promise<void> {
   } else {
     console.warn('[bot] WARNING: inline mode is disabled. BotFather -> /setinline to enable');
   }
+
+  // Said at boot, in the block that reports what this process actually has.
+  // The notice is configured by environment variable and rendered on every
+  // card, so the one thing it must not do is be off without saying so.
+  announceLaunchNotice();
 
   startCacheReporter();
   startQuotaSweeper();

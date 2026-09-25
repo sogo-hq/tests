@@ -302,3 +302,127 @@ test('no renderer asks the clock for the notice, so no test of one can go stale'
   assert.deepEqual(offenders, [],
     `a renderer reads the wall clock for the launch notice:\n${offenders.join('\n')}`);
 });
+
+// ------------------------------------------------- what the boot log says
+
+/**
+ * Capture what the module logs, because the log IS the feature here.
+ *
+ * An unset notice used to return null in silence. From outside the process that
+ * is indistinguishable from a working one: no line on any card, nothing in the
+ * log, and LAUNCH_NOTICE_UNTIL sitting on the dashboard making it look
+ * configured. Asserting the state without asserting the line would leave the
+ * silence exactly where it was.
+ */
+function capturing(fn) {
+  const said = [];
+  const log = console.log;
+  const warn = console.warn;
+  console.log = (...a) => said.push(a.join(' '));
+  console.warn = (...a) => said.push(a.join(' '));
+  try {
+    return { value: fn(), said };
+  } finally {
+    console.log = log;
+    console.warn = warn;
+  }
+}
+
+test('an unset line says so once, and names the date that is doing nothing', () => {
+  // The failure exactly as it happened: UNTIL set on Railway, the line not.
+  configure(null, '2026-09-28');
+  const { value, said } = capturing(() => N.announceLaunchNotice(BEFORE));
+  assert.equal(value, 'off');
+  const off = said.filter((l) => l.includes('[notice] OFF'));
+  assert.equal(off.length, 1, `said ${off.length} times:\n${said.join('\n')}`);
+  assert.match(off[0], /LAUNCH_NOTICE is not set, so no card carries a launch notice/);
+  assert.match(off[0], /LAUNCH_NOTICE_UNTIL is "2026-09-28", which does nothing by itself/);
+  assert.ok(!off[0].includes(String.fromCharCode(0x2014)));
+});
+
+test('neither set says neither, rather than naming a date that is not there', () => {
+  configure(null, null);
+  const { value, said } = capturing(() => N.announceLaunchNotice(BEFORE));
+  assert.equal(value, 'off');
+  assert.match(said.join('\n'), /LAUNCH_NOTICE_UNTIL is not set either/);
+});
+
+test('the off line is said once per configuration, not once per card', () => {
+  // launchNotice is on the scan path. A plain console call here would put a
+  // line in the log for every card the bot renders.
+  configure(null, '2026-09-28');
+  const { said } = capturing(() => {
+    for (let i = 0; i < 50; i++) N.launchNotice(BEFORE);
+  });
+  assert.equal(said.filter((l) => l.includes('[notice] OFF')).length, 1,
+    `50 renders produced ${said.length} lines`);
+});
+
+test('a configuration change is announced again, not swallowed by the first', () => {
+  configure(null, '2026-09-28');
+  capturing(() => N.announceLaunchNotice(BEFORE));
+  // Same process, a different half configured.
+  configure(null, null);
+  const { said } = capturing(() => N.announceLaunchNotice(BEFORE));
+  assert.equal(said.filter((l) => l.includes('[notice] OFF')).length, 1,
+    'a changed configuration was not re-announced');
+});
+
+test('a line whose date has already passed is accepted and says it renders nowhere', () => {
+  // The second silence. "accepted, until 2026-09-24" in a boot log above a bot
+  // that shows no notice reads as working.
+  configure(LINE, UNTIL);
+  const { value, said } = capturing(() => N.announceLaunchNotice(AFTER));
+  assert.equal(value, 'expired');
+  const expired = said.filter((l) => l.includes('[notice] EXPIRED'));
+  assert.equal(expired.length, 1, said.join('\n'));
+  assert.match(expired[0], /has already passed, so no card carries it/);
+  assert.match(expired[0], /move the date or unset the line/);
+  // And it really does render nowhere, which is what the line claims.
+  assert.equal(N.launchNotice(AFTER), null);
+});
+
+test('a live line reports on, with the date it stops', () => {
+  configure(LINE, UNTIL);
+  const { value, said } = capturing(() => N.announceLaunchNotice(BEFORE));
+  assert.equal(value, 'on');
+  assert.match(said.join('\n'), new RegExp(`\\[notice\\] ON, until ${UNTIL}`));
+  assert.match(said.join('\n'), /the first declared launch on pons/);
+});
+
+test('a line with no expiry reports on, and says there is no expiry', () => {
+  configure(LINE, null);
+  const { value, said } = capturing(() => N.announceLaunchNotice(BEFORE));
+  assert.equal(value, 'on');
+  assert.match(said.join('\n'), /\[notice\] ON, with no expiry set/);
+});
+
+test('a rejected line reports rejected, and the reason is already loud', () => {
+  configure('buy $VITALS now', null);
+  const { value, said } = capturing(() => N.announceLaunchNotice(BEFORE));
+  assert.equal(value, 'rejected');
+  assert.match(said.join('\n'), /\[notice\] REJECTED/);
+  assert.equal(N.launchNotice(BEFORE), null);
+});
+
+test('every state the notice can be in says something', () => {
+  // The whole point: there is no configuration of these two variables that
+  // produces no card line and no log line.
+  const cases = [
+    [null, null, 'off'],
+    [null, '2026-09-28', 'off'],
+    [LINE, UNTIL, 'on'],
+    [LINE, null, 'on'],
+    ['buy $VITALS now', null, 'rejected'],
+    [LINE, '2020-01-01', 'expired'],
+    [LINE, 'next tuesday-ish', 'rejected'],
+  ];
+  for (const [line, until, want] of cases) {
+    configure(line, until);
+    const { value, said } = capturing(() => N.announceLaunchNotice(BEFORE));
+    assert.equal(value, want, `${JSON.stringify([line, until])} reported ${value}`);
+    assert.ok(said.some((l) => l.startsWith('[notice]')),
+      `${JSON.stringify([line, until])} said nothing at all`);
+  }
+  configure(null, null);
+});
