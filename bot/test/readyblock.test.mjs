@@ -542,3 +542,100 @@ test('unmuting mid-countdown brings the block back to the next post', async () =
   await D.countdownTick(h.api, { now: LAUNCH - 20 * 3_600_000 });
   assert.match(h.drain().find((x) => x.method === 'sendMessage').text, /READY FOR LAUNCH/);
 });
+
+
+// --------------------------------- the pinned countdown deleted by hand
+
+/**
+ * Make an existing stub behave as if these message ids no longer exist.
+ *
+ * Patched onto the SAME stub the earlier posts went through, because one bot in
+ * one chat does not restart its message ids between two countdown offsets. Two
+ * stubs here would hand the new post the id of the deleted one, repin would see
+ * `id === messageId`, skip the unpin as a self-unpin, and the test would pass
+ * without ever exercising the thing it is named after.
+ *
+ * Telegram's answer to unpinning a message that no longer exists is not this
+ * repository's to decide, so both answers are driven: an error, and a no-op.
+ * The promise under test is the same either way.
+ */
+function markGone(h, gone, { unpinThrows = true } = {}) {
+  const inner = h.api.unpinChatMessage;
+  h.api.unpinChatMessage = async (chat_id, message_id) => {
+    if (gone.has(message_id) && unpinThrows) {
+      h.calls.push({ method: 'unpin-attempted', chat_id, message_id });
+      throw new Error('Bad Request: message to unpin not found');
+    }
+    return inner(chat_id, message_id);
+  };
+}
+
+const capturingWarn = async (fn) => {
+  const warn = console.warn;
+  const said = [];
+  console.warn = (...a) => said.push(a.join(' '));
+  try { return { value: await fn(), said }; } finally { console.warn = warn; }
+};
+
+for (const unpinThrows of [true, false]) {
+  test(`T-2d posts and pins after the T-3d pin was deleted by hand (unpin ${unpinThrows ? 'errors' : 'no-ops'})`, async () => {
+    reset();
+    await armed();
+    B.setReadyBlockMuted(GROUP, true, ADMIN);
+    const h = stubApi();
+
+    // T-3d: the post that carried the block before the fix.
+    assert.equal(await D.countdownTick(h.api, { now: LAUNCH - 2.5 * 86_400_000 }), 'T-3d');
+    const stale = h.drain().find((x) => x.method === 'sendMessage').message_id;
+    assert.equal(R.getSetting('countdown_pinned'), String(stale));
+
+    // The operator unpins and deletes it in Telegram. Nothing tells the bot.
+    markGone(h, new Set([stale]), { unpinThrows });
+
+    const { value, said } = await capturingWarn(
+      () => D.countdownTick(h.api, { now: LAUNCH - 1.5 * 86_400_000 }),
+    );
+    assert.equal(value, 'T-2d', 'the next offset still fires');
+
+    const c = h.drain();
+    const sent = c.filter((x) => x.method === 'sendMessage');
+    assert.equal(sent.length, 1, 'posted once');
+    assert.notEqual(sent[0].message_id, stale, 'a genuinely different message');
+    assert.equal(sent[0].text, `launch: 2026-09-28 16:00 CEST\n${L.CA_NOTICE}`,
+      'and still without the block, because the room is still muted');
+
+    const pins = c.filter((x) => x.method === 'pin');
+    assert.equal(pins.length, 1, 'and pinned');
+    assert.equal(pins[0].message_id, sent[0].message_id, 'the message it just posted');
+    assert.equal(R.getSetting('countdown_pinned'), String(sent[0].message_id),
+      'and the stored pin is the new one, not the deleted one');
+
+    // The unpin of the deleted message really was attempted, whatever it answered.
+    assert.ok(c.some((x) => (x.method === 'unpin' || x.method === 'unpin-attempted') && x.message_id === stale),
+      'the deleted id was passed to unpin, so this test exercised the case');
+
+    if (unpinThrows) {
+      assert.equal(said.filter((l) => l.includes('unpin failed')).length, 1,
+        'the dead unpin is logged, never thrown');
+      assert.equal(R.getSetting('countdown_pinned_stale'), String(stale),
+        'and parked for a later retry, which is the only residue');
+    } else {
+      assert.ok(!R.getSetting('countdown_pinned_stale'), 'nothing parked');
+    }
+
+    // And the residue does not compound: the offset after it is clean too.
+    const third = await capturingWarn(
+      () => D.countdownTick(h.api, { now: LAUNCH - 20 * 3_600_000 }),
+    );
+    assert.equal(third.value, 'T-24h');
+    const c3 = h.drain();
+    const sent3 = c3.filter((x) => x.method === 'sendMessage');
+    assert.equal(sent3.length, 1);
+    assert.equal(sent3[0].text, `launch: 2026-09-28 16:00 CEST\n${L.CA_NOTICE}`);
+    assert.equal(c3.filter((x) => x.method === 'pin').length, 1);
+    assert.equal(R.getSetting('countdown_pinned'), String(sent3[0].message_id));
+    // The T-2d pin, which does exist, came down.
+    assert.ok(c3.some((x) => x.method === 'unpin' && x.message_id === sent[0].message_id),
+      'the previous pin is retired, so the room never shows two launch times');
+  });
+}
