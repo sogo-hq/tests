@@ -133,25 +133,54 @@ test('the impossible case cuts at a word, never mid-word', () => {
   assert.ok(body.split(' ').every((w) => w === 'alpha'), body.slice(-40));
 });
 
-test('the deployer-only launch is not a finding, and says nothing about a share', () => {
+test('the deployer-only launch is not a finding, and states its share anyway', () => {
   // What VITALS prints on Monday if its deployer is the only exempt wallet. One
-  // exempt wallet is the floor every pons launch has, so it is not raised and
-  // does not reach the concerns block at all.
-  //
-  // It also carries no share: the exCount === 1 branch has no share clause, so a
-  // deployer that took 5.0% of supply in the tax-free window states that nowhere
-  // on this card. That is current behaviour, asserted so a decision to change it
-  // shows up as a change.
+  // exempt wallet is the floor every pons launch that exempts anyone has, so it
+  // is not raised and takes no marker -- and it still has to say how much of the
+  // supply that one wallet took before anyone else could bid. The count is the
+  // floor; the share is not.
   const token = '0x37b7534fc61274694638866b73bb68b7add306c8';
   put(token, 1, 5.0);
   const fl = exemptionFlag(token);
   assert.equal(fl.state, 'clean');
-  assert.equal(fl.plain, 'tax-free at launch: the deployer only (the wallet that launched it)');
-  assert.ok(!/5\.0|% of supply/.test(fl.plain), 'the share is not in the sentence');
-  // But it is not lost: the API and /full read it off the value.
+  assert.equal(fl.plain,
+    'tax-free at launch: the deployer only (the wallet that launched it), 5.0% of supply');
+  assert.equal(fl.detail, 'the deployer only, 5.0% of supply, and no other wallet');
+  assert.equal(fl.compactDetail, 'the deployer only, 5.0% of supply');
   assert.equal(fl.value.supply_share, 0.05);
   assert.equal(fl.value.wallets, 1);
   assert.equal(fl.value.beyond_deployer, 0);
 
-  assert.equal(findingLines(cardFor([fl])).length, 0, 'no 🚩 line');
+  const card = cardFor([fl]);
+  assert.equal(findingLines(card).length, 0, 'no 🚩: the floor is not a concern');
+  const line = card.split('\n').find((l) => l.startsWith('tax-free at launch:'));
+  assert.equal(line, 'tax-free at launch: the deployer only, 5.0% of supply',
+    'and it is on the default card, not only in /full');
+});
+
+test('an unmeasured window says undetermined rather than going quiet', () => {
+  const token = '0x' + 'ab'.repeat(20);
+  // exempt_open_pct left NULL: the opening window was never read.
+  db.prepare('UPDATE launches SET exempt_open_pct = NULL WHERE token = ?').run(
+    (put(token, 1, 0), token),
+  );
+  const fl = exemptionFlag(token);
+  assert.equal(fl.state, 'clean');
+  assert.match(fl.plain, /share of supply undetermined$/);
+  assert.equal(fl.value.supply_share, null);
+  const card = cardFor([fl]);
+  assert.ok(card.includes('tax-free at launch: the deployer only, share of supply undetermined'), card);
+});
+
+test('a raised exemptions check is not restated in the measurements', () => {
+  // The concerns block already carries it with its share. Twice on one card, at
+  // two roundings, is the defect concentrationLine already guards against.
+  const token = '0x' + 'cd'.repeat(20);
+  put(token, 3, 7.5);
+  const fl = exemptionFlag(token);
+  assert.equal(fl.state, 'raised');
+  const card = cardFor([fl]);
+  assert.equal(findingLines(card).length, 1);
+  assert.ok(!card.split('\n').some((l) => l.startsWith('tax-free at launch:')),
+    `stated twice:\n${card}`);
 });

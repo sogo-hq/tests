@@ -278,3 +278,35 @@ test('holder math leaves out the protocol, the curve and the token', async () =>
   assert.equal(hb.top5, 100);
   assert.equal(hb.top10, 100);
 });
+
+// ------------------------------------------- the deployer-only tax-free set
+
+test('a deployer-only launch states its share here too, unmarked', () => {
+  // The findings block lists findings, and one exempt wallet is the floor rather
+  // than a finding, so this block said nothing at all about the tax-free set.
+  // The count is the floor; the share that wallet took before anyone else could
+  // bid is not, and it must not be hidden on the surface a group reads.
+  const clean = f(
+    'snipe_exemptions',
+    'tax-free at launch: the deployer only (the wallet that launched it), 5.0% of supply',
+    0, 'clean',
+  );
+  clean.compactDetail = 'the deployer only, 5.0% of supply';
+  const lines = card({ flags: [clean, FINDINGS[2]] }).text.split('\n');
+
+  const line = lines.find((l) => l.startsWith('tax-free at launch:'));
+  assert.equal(line, 'tax-free at launch: the deployer only, 5.0% of supply');
+  assert.ok(!line.includes('\u{1F6A9}'), 'the floor is not a concern and takes no marker');
+  // Still below the findings, like everything else that is not one.
+  const firstFinding = lines.findIndex((l) => l.includes('\u{1F6A9}'));
+  assert.ok(firstFinding >= 0 && lines.indexOf(line) > firstFinding,
+    'a measurement must not sit above the findings');
+});
+
+test('a raised tax-free set is not restated below the findings', () => {
+  const lines = card().text.split('\n');
+  assert.ok(!lines.some((l) => l.startsWith('tax-free at launch:')),
+    `stated twice:\n${lines.join('\n')}`);
+  assert.ok(lines.some((l) => l.includes('\u{1F6A9}') && l.includes('22.3% of supply')),
+    'the raised one carries its share in the findings block, as before');
+});

@@ -48,7 +48,11 @@ const flagFor = (count, source) => {
 test('the deployer alone is named for what it is', () => {
   const f = flagFor(1, 'logs');
   assert.equal(f.state, 'clean');
-  assert.equal(f.plain, 'tax-free at launch: the deployer only (the wallet that launched it)');
+  // This fixture never measured the opening window, so the share is undetermined
+  // and says so. Silence there would be indistinguishable from a share of
+  // nothing, and a deployer-only launch must not hide its share either way.
+  assert.equal(f.plain,
+    'tax-free at launch: the deployer only (the wallet that launched it), share of supply undetermined');
   // Measured 116 of 116: when a launch exempts anyone, the deployer is among
   // them. NOT that every launch exempts its deployer, which is false: 33% of
   // 420 sampled launches exempted nobody at all.

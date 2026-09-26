@@ -1,6 +1,6 @@
 import type { ScanResult } from './scan.js';
 import { clamp, count, shortAge as age, MAX_NAME, MAX_TICKER } from './text.js';
-import { compactAmount, GROUP_HANDLE, mcapLabel, windowLabel } from './card.js';
+import { compactAmount, exemptShareLine, GROUP_HANDLE, mcapLabel, windowLabel } from './card.js';
 import { BENCHMARK_LADDER_MINUTES } from './metrics/benchmark.js';
 import { marketSnapshot, type MarketSnapshot } from './metrics/market.js';
 import { holderBreakdown } from './metrics/concentration.js';
@@ -113,6 +113,13 @@ export function renderGroupCard(r: ScanResult, opts: GroupCardOptions = {}): Gro
   if (market) L.push(...marketLines(market, quote, r));
 
   // -- holders and buyers ------------------------------------------------
+  // The tax-free set when it is only the deployer, which the findings block
+  // above does not carry because it is not a finding. Same reason it is on the
+  // default card: one exempt wallet is the floor, the share it took is not, and
+  // a block that lists only findings was leaving the share unstated on the
+  // surface a group reads. Not marked, because the floor is not a concern.
+  const exempt = exemptShareLine(r);
+  if (exempt) L.push(esc(exempt));
   const hb = holderBreakdown(token, k.curve);
   if (hb) {
     const top = hb.top.map((v) => `${v.toFixed(0)}%`).join(' ');

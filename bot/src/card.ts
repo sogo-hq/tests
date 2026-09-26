@@ -910,6 +910,33 @@ export function concentrationLine(r: ScanResult): string | null {
 }
 
 /**
+ * The tax-free set, when it is only the deployer.
+ *
+ * A clean check is counted on the default card and never printed, which for this
+ * one check meant the share was invisible on the surface most people read: at
+ * two wallets it is the headline, and at one wallet -- the floor every pons
+ * launch that exempts anyone has -- the card said nothing at all, including
+ * nothing about how much of the supply that one wallet took before anyone else
+ * could bid.
+ *
+ * So it joins the measurements rather than the concerns. It is not a finding and
+ * carries no marker: one exempt wallet is the floor and calling it a concern
+ * would make the floor look like a problem. It is a number with its subject
+ * named, which is what the rest of this block is.
+ *
+ * Only when the check is clean. Raised, the concerns block above states it with
+ * its share; undetermined, the undetermined line names it. Both would otherwise
+ * put the same fact on the card twice.
+ */
+export function exemptShareLine(r: ScanResult): string | null {
+  const f = r.flags.flags.find((x) => x.key === 'snipe_exemptions');
+  if (!f || f.state !== 'clean') return null;
+  // Derived from the flag rather than rebuilt here, so the card and /full cannot
+  // drift into stating the same measurement two ways.
+  return `tax-free at launch: ${f.compactDetail}`;
+}
+
+/**
  * Buyer growth, only once there is a second point in time to compare against.
  *
  * Below ten minutes there is no +10min reading to grow from, so the line is
@@ -1109,6 +1136,10 @@ export function cardLines(r: ScanResult, botUsername?: string, now = Date.now())
   push('spacer', '');
   push('measure', buyerLine(r));
   for (const line of [
+    // First of the dim lines: who was allowed in before the market was. It is
+    // the fact this product exists for, and on a deployer-only launch it is the
+    // only place on this card that states it.
+    exemptShareLine(r),
     concentrationLine(r),
     sellingLine(r),
     growthLine(r),

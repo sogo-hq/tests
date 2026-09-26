@@ -351,13 +351,27 @@ export function computeFlags(opts: {
     // 116 of 116 at exactly one and 81 of 81 above one, with no counterexample.
     // It is NOT true that every launch exempts its deployer, so the line says
     // what this wallet is rather than what the protocol always does.
+    //
+    // The share is stated here as well as in the raised case, and it did not
+    // used to be. One exempt wallet is the floor, so this branch is not a
+    // finding -- but "not a finding" was being read as "nothing to state", and
+    // a deployer that took 5% of supply in the tax-free window before anyone
+    // else could bid said so nowhere on either card. The count and the share
+    // are separate facts and only the count was the floor.
+    //
+    // An unmeasured window says so rather than being left off. Silence there is
+    // indistinguishable from a share of nothing, which is the one reading this
+    // must not allow.
+    const oneShare = exShare === null
+      ? 'share of supply undetermined'
+      : `${exShare.toFixed(1)}% of supply`;
     flags.push({
       key: 'snipe_exemptions',
       label: 'Snipe-tax exemptions',
       state: 'clean',
-      detail: 'the deployer only, and no other wallet',
-      compactDetail: 'the deployer only',
-      plain: 'tax-free at launch: the deployer only (the wallet that launched it)',
+      detail: `the deployer only, ${oneShare}, and no other wallet`,
+      compactDetail: `the deployer only, ${oneShare}`,
+      plain: `tax-free at launch: the deployer only (the wallet that launched it), ${oneShare}`,
       source: SOURCE.snipe_exemptions_logs,
       value: { wallets: 1, beyond_deployer: 0, supply_share: exShare === null ? null : exShare / 100, slots: EXEMPT_SLOTS },
       reference: null,
