@@ -5,7 +5,7 @@ import { DISCLAIMER, EXPLORER_URL } from './config.js';
 import { sponsorLine } from './sponsor.js';
 import { launchNotice } from './launchnotice.js';
 import { deployerSummary } from './deployerlookup.js';
-import { clamp, clampMessage, count, MAX_NAME, MAX_TICKER, TELEGRAM_MAX_MESSAGE } from './text.js';
+import { clamp, clampWords, clampMessage, count, MAX_NAME, MAX_TICKER, TELEGRAM_MAX_MESSAGE } from './text.js';
 import { EARLY_WINDOW_SECONDS } from './config.js';
 import { MIN_HOLDERS_FOR_SHARE } from './metrics/concentration.js';
 import { MIN_BENCHMARK_SAMPLES, BENCHMARK_LADDER_MINUTES } from './metrics/benchmark.js';
@@ -569,6 +569,32 @@ export function imageFooterLine(botUsername?: string): string {
  * A newline inside a token symbol would add lines to a card specified to stay
  * under twelve.
  */
+/**
+ * A finding, as the card prints it. The one field on a card that never cuts.
+ *
+ * It used to go through plainField at 70 characters, which is a hard truncation
+ * of the sentence the whole product is for. Live, in a group:
+ *
+ *   🚩 2 wallets tax-free at launch, 1 of them the deployer, together 2.8% o…
+ *
+ * The share is the size of the claim, and it was the part that got cut. 70 was
+ * doing no work either: this card is plain text in a Telegram message, and the
+ * client soft-wraps at whatever width the reader's screen actually is. Hard
+ * wrapping it here would be worse than both, because a break chosen at 70 is
+ * wrong on a desktop and breaks twice on a phone.
+ *
+ * So the bound goes up to somewhere no real sentence reaches, and it becomes a
+ * word-boundary clamp rather than a mid-word one: if a generator ever does emit
+ * something pathological the card says a cut happened at a word rather than
+ * stopping in the middle of "of". The whole message is still bounded by
+ * clampMessage, which drops whole lines and keeps the disclaimer.
+ */
+export const CONCERN_MAX = 300;
+
+function concernField(s: string): string {
+  return clampWords(String(s).replace(STRIP_RE, ' ').replace(/[<>]/g, ''), CONCERN_MAX);
+}
+
 function plainField(s: string, max: number): string {
   // Angle brackets go too. Nothing here is parsed as markup, so they are not a
   // security problem -- but a ticker literally called "<b>" would render as what
@@ -1030,7 +1056,7 @@ export function cardLines(r: ScanResult, botUsername?: string, now = Date.now())
     // and the room around it -- position, not a different symbol.
     L.push({
       role: 'concern-top',
-      text: `${MARK_GLYPH.finding} ${plainField(raised[0]!.plain, 70)}`,
+      text: `${MARK_GLYPH.finding} ${concernField(raised[0]!.plain)}`,
       mark: 'finding',
     });
 
@@ -1038,7 +1064,7 @@ export function cardLines(r: ScanResult, botUsername?: string, now = Date.now())
       .slice(1, MAX_DEFAULT_FLAGS)
       .map((fl) => ({
         role: 'concern' as CardRole,
-        text: `${MARK_GLYPH.finding} ${plainField(fl.plain, 70)}`,
+        text: `${MARK_GLYPH.finding} ${concernField(fl.plain)}`,
         mark: 'finding' as CardMark,
       }));
 

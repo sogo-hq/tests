@@ -381,6 +381,15 @@ export function computeFlags(opts: {
       // Says which wallets, and how much of the token they were able to take
       // before anyone else could bid. The count alone does not separate five
       // wallets that took 0.2% from five that took 40%.
+      // Not shortened, and the attempt is worth recording. This sentence is 77
+      // characters at two wallets and it was the one truncated in a live group,
+      // so the obvious fix was to cut words out of it. Both candidates cost
+      // meaning: "1 of them the deployer" -> "1 the deployer" drops the
+      // denominator that tells a reader how much of the count is NOT the floor
+      // every launch has, which flag-reference-points asserts by name; and
+      // dropping "together" from the share leaves "2.8% of supply" sitting
+      // directly after "the deployer", where it reads as the deployer's own
+      // share rather than the set's. The renderer stopped truncating instead.
       plain: `${count(exCount, 'wallet')} tax-free at launch, 1 of them the deployer${shareClause}`,
       // Where the share comes from, because the obvious place to look for it is
       // the wrong one. Measured on four launches, the launch receipt alone
