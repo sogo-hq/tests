@@ -3096,10 +3096,17 @@ export function createBot(token = TELEGRAM_BOT_TOKEN): Bot {
       const typed = parts[1];
       let balance: bigint | null = null;
       let hypothetical = false;
+      // Read alongside the balance, because gross is the two of them plus what
+      // has left: revenue is credited in the escrow and the wallet does not move
+      // until it is claimed.
+      let escrow: bigint | null = null;
       if (typed !== undefined) {
         if (!/^\d+(\.\d+)?$/.test(typed)) { await ctx.reply('/ledger preview [balance in ETH]'); return; }
         balance = toWeiEth(typed);
         hypothetical = true;
+        // A typed balance is the whole hypothesis. Adding a live escrow figure to
+        // it would produce a gross that is half invented and half measured.
+        escrow = 0n;
       } else {
         balance = await Ledger.feeWalletBalance();
         if (balance === null) {
@@ -3108,6 +3115,7 @@ export function createBot(token = TELEGRAM_BOT_TOKEN): Bot {
             : 'FEE_WALLET is not set. /ledger preview <eth> checks the table against a figure you give');
           return;
         }
+        escrow = await Ledger.feeEscrowUnclaimedWei();
       }
       // The receipts say what the payouts cost, and the cost left the wallet
       // with them, so gross income cannot be reconstructed without reading
@@ -3116,7 +3124,7 @@ export function createBot(token = TELEGRAM_BOT_TOKEN): Bot {
       const warnings = Ledger.unrecordedRuns().map((r) =>
         `run ${r.id} was previewed and has ${r.payments} payment${r.payments === 1 ? '' : 's'} with no transaction hash. `
         + `if it was paid, record it with /ledger tx ${r.id} <seat>:<hash> ... before the next run, or this one distributes it again.`);
-      const run = Ledger.computeRun({ balanceWei: balance, seats, hypothetical });
+      const run = Ledger.computeRun({ balanceWei: balance, escrowWei: escrow, seats, hypothetical });
       // A refused run is not saved: there is no table to pay, and a stored run
       // with no payable rows is something a later /ledger send would offer.
       if (!run.refusal) run.id = Ledger.saveRun(run);

@@ -1,5 +1,7 @@
 import { db } from './db.js';
 import { client } from './chain.js';
+import { FACTORY } from './config.js';
+import { factoryAbi, feeEscrowAbi } from './abi.js';
 import { api as atApiPriority } from './ratelimit.js';
 import { liveSeats, type Seat, type Tier } from './roster.js';
 import {
@@ -63,6 +65,66 @@ export async function feeWalletBalance(): Promise<bigint | null> {
     return await atApiPriority(() => client.getBalance({ address: w as `0x${string}` }));
   } catch (err) {
     console.warn('[ledger] fee wallet balance unreadable:', String((err as Error)?.message ?? err).slice(0, 120));
+    return null;
+  }
+}
+
+/**
+ * The escrow's address, from the factory rather than from a constant here.
+ *
+ * Asked of the factory because the factory is the thing this whole index already
+ * trusts, and an address pasted into a source file is an address that drifts
+ * silently when the protocol redeploys one. Cached for the process: it is
+ * immutable in practice and this is on the ledger path.
+ */
+let escrowAddress: `0x${string}` | null = null;
+
+export async function feeEscrowAddress(): Promise<`0x${string}` | null> {
+  if (escrowAddress) return escrowAddress;
+  try {
+    const a = await atApiPriority(() => client.readContract({
+      address: FACTORY, abi: factoryAbi, functionName: 'feeEscrow',
+    })) as `0x${string}`;
+    if (!/^0x[0-9a-fA-F]{40}$/.test(a) || /^0x0{40}$/.test(a)) return null;
+    escrowAddress = a;
+    console.log(`[ledger] fee escrow: ${a}`);
+    return a;
+  } catch (err) {
+    console.warn('[ledger] feeEscrow unreadable:', String((err as Error)?.message ?? err).slice(0, 120));
+    return null;
+  }
+}
+
+/** For tests, and so a process that read a stale address can be made to re-read. */
+export function resetFeeEscrowCache(): void {
+  escrowAddress = null;
+}
+
+/**
+ * Fee revenue credited to the fee wallet and not yet claimed.
+ *
+ * This is the hole this function exists to close. Curve and hook revenue does
+ * not arrive as a transfer: both credit PonsV2FeeEscrow, which keeps a per
+ * recipient ledger, and the wallet's balance does not move until somebody calls
+ * claim(). So `getBalance(feeWallet)` is what has been CLAIMED, not what has
+ * been EARNED, and a gross computed from it alone understates every figure
+ * derived from it, the room's tenth included. Measured on a live launch: a fee
+ * wallet holding 0.0000 ETH with 0.3919 ETH sitting credited to it.
+ *
+ * Null means the figure could not be read, which is not zero and must not be
+ * added as zero. Every caller has to say undetermined instead.
+ */
+export async function feeEscrowUnclaimedWei(): Promise<bigint | null> {
+  const w = feeWallet();
+  if (!w) return null;
+  const escrow = await feeEscrowAddress();
+  if (!escrow) return null;
+  try {
+    return await atApiPriority(() => client.readContract({
+      address: escrow, abi: feeEscrowAbi, functionName: 'balanceOf', args: [w as `0x${string}`],
+    })) as bigint;
+  } catch (err) {
+    console.warn('[ledger] escrow balance unreadable:', String((err as Error)?.message ?? err).slice(0, 120));
     return null;
   }
 }
@@ -222,6 +284,8 @@ export interface PayoutRow {
 export interface LedgerRun {
   id: number | null;
   balanceWei: bigint;
+  /** Credited in the escrow, unclaimed. Null when it could not be read. */
+  escrowWei: bigint | null;
   /** Payout values and their gas, over every run whose hashes are in. */
   paidToDateWei: bigint;
   /** Manual transfers out of the fee wallet, value and gas. */
@@ -253,6 +317,14 @@ export interface LedgerRun {
  */
 export function computeRun(opts: {
   balanceWei: bigint;
+  /**
+   * Credited to the fee wallet in the escrow and not yet claimed.
+   *
+   * Required, and nullable on purpose. Omitting it is the same as failing to
+   * read it, because a run that quietly leaves the term out is the defect this
+   * argument exists to fix.
+   */
+  escrowWei: bigint | null;
   seats?: Seat[];
   paidToDateWei?: bigint;
   sweptToDateWei?: bigint;
@@ -264,24 +336,47 @@ export function computeRun(opts: {
   const seats = opts.seats ?? liveSeats();
   const paidToDate = opts.paidToDateWei ?? paidOutWei();
   const swept = opts.sweptToDateWei ?? sweptWei();
-  // Everything the wallet has ever taken in: what is in it, plus everything
-  // that has ever left it. Fees and payouts share the wallet, so this is the
-  // only figure that separates new income from a remainder already accounted
-  // for.
-  const gross = opts.balanceWei + paidToDate + swept;
+  const escrow = opts.escrowWei;
+  // Everything the wallet has ever EARNED: what is in it, what is credited to
+  // it and not yet claimed, plus everything that has ever left it. Fees and
+  // payouts share the wallet, so the last two are what separate new income from
+  // a remainder already accounted for -- and the escrow is what separates
+  // earned from claimed. Revenue does not arrive as a transfer: the curve and
+  // the hook credit PonsV2FeeEscrow and the wallet does not move until somebody
+  // calls claim(), so a gross without it understates the room's tenth by
+  // whatever has not been claimed yet.
+  const gross = opts.balanceWei + (escrow ?? 0n) + paidToDate + swept;
   const target = (gross * BigInt(LEDGER_SHARE_PCT)) / 100n;
   // What the room is owed in total, less what it has had. Negative would mean
   // it has had more than its share, which is not a debt anyone collects back.
   const raw = target - paidToDate;
   const pool = raw > 0n ? raw : 0n;
-  // The pool is paid out of the wallet, so it cannot exceed what is in it.
-  // Reaching here means income has been moved out that the room was owed a
-  // share of, and the fix is a transfer back rather than a smaller table.
-  const refusal = pool > opts.balanceWei
-    ? `the pool is ${eth(pool)} ETH and the fee wallet holds ${eth(opts.balanceWei)} ETH. `
-      + `${eth(pool - opts.balanceWei)} ETH more is owed than is there, because income was moved out `
-      + 'before the room was paid its share of it. move it back, or record what it was spent on.'
+
+  // An escrow that could not be read is not an escrow holding nothing. Counted
+  // as zero it would produce a smaller gross, a smaller pool and a table that
+  // underpays the room, with nothing on the screen saying a figure was missing.
+  const undetermined = escrow === null || escrow === undefined
+    ? 'what is credited to the fee wallet in the fee escrow could not be read, so gross income '
+      + 'is undetermined and a tenth of it cannot be computed. nothing is payable on a figure '
+      + 'that is missing a term.'
     : null;
+
+  // The pool is paid out of the WALLET, so it cannot exceed what is in the
+  // wallet however much has been earned. Two different reasons it can happen,
+  // and they need two different instructions: money still sitting in the escrow
+  // is claimed, money that left the wallet is moved back.
+  const shortfall = pool - opts.balanceWei;
+  const short = pool > opts.balanceWei
+    ? (escrow !== null && escrow !== undefined && escrow > 0n
+      ? `the pool is ${eth(pool)} ETH and the fee wallet holds ${eth(opts.balanceWei)} ETH. `
+        + `${eth(escrow)} ETH is credited to it in the fee escrow and not yet claimed, which is `
+        + `${shortfall <= escrow ? 'enough to cover the difference' : 'not enough on its own'}. `
+        + 'claim it, then run this again.'
+      : `the pool is ${eth(pool)} ETH and the fee wallet holds ${eth(opts.balanceWei)} ETH. `
+        + `${eth(shortfall)} ETH more is owed than is there, because income was moved out `
+        + 'before the room was paid its share of it. move it back, or record what it was spent on.')
+    : null;
+  const refusal = undetermined ?? short;
   // One seat, one share.
   //
   // The seat rows still carry a tier and the shares that tier was worth, and
@@ -311,6 +406,7 @@ export function computeRun(opts: {
   return {
     id: null,
     balanceWei: opts.balanceWei,
+    escrowWei: escrow ?? null,
     paidToDateWei: paidToDate,
     sweptToDateWei: swept,
     grossIncomeWei: gross,
@@ -338,8 +434,9 @@ export function saveRun(run: LedgerRun): number {
     ).run(r.createdAt, String(r.balanceWei), String(r.paidToDateWei), String(r.balanceWei),
       String(r.poolWei), r.totalShares, String(r.perShareWei), String(r.distributedWei),
       String(r.dustWei), r.hypothetical ? 1 : 0);
-    db.prepare('UPDATE ledger_runs SET gross_income_wei = ?, swept_to_date_wei = ? WHERE id = last_insert_rowid()')
-      .run(String(r.grossIncomeWei), String(r.sweptToDateWei));
+    db.prepare('UPDATE ledger_runs SET gross_income_wei = ?, swept_to_date_wei = ?, escrow_wei = ? WHERE id = last_insert_rowid()')
+      .run(String(r.grossIncomeWei), String(r.sweptToDateWei),
+        r.escrowWei === null ? null : String(r.escrowWei));
     const id = Number(res.lastInsertRowid);
     const p = db.prepare(
       `INSERT INTO ledger_payments (run_id, seat, handle, wallet, tier, shares, amount_wei)
@@ -363,7 +460,11 @@ export function loadRun(id: number): LedgerRun | null {
   // would be a check that passed once.
   const split = checkAgainstDeclaration(rows, LEDGER_SHARE_PCT);
   return {
-    id, balanceWei: BigInt(r.balance_wei), paidToDateWei: BigInt(r.paid_before_wei),
+    id, balanceWei: BigInt(r.balance_wei),
+    // Null for a run computed before the escrow was a term, which is what it
+    // was: unread, not zero.
+    escrowWei: r.escrow_wei === null || r.escrow_wei === undefined ? null : BigInt(r.escrow_wei),
+    paidToDateWei: BigInt(r.paid_before_wei),
     sweptToDateWei: BigInt(r.swept_to_date_wei ?? '0'),
     grossIncomeWei: BigInt(r.gross_income_wei ?? r.balance_wei),
     poolTargetWei: BigInt(r.pool_wei) + BigInt(r.paid_before_wei),
@@ -512,10 +613,15 @@ export function seatChangeNote(run: LedgerRun): string | null {
 export function previewText(run: LedgerRun, opts: { warnings?: string[] } = {}): string {
   const L: string[] = [];
   if (run.hypothetical) L.push('HYPOTHETICAL: the balance below was typed in, not read from the fee wallet');
-  L.push(`fee wallet balance   ${eth(run.balanceWei)} ETH`);
+  L.push(`fee wallet balance   ${eth(run.balanceWei)} ETH, claimed and sitting there`);
+  // Its own line, never folded into the balance. It is the term that was missing
+  // and the one an operator can act on: unclaimed money is a claim() away.
+  L.push(run.escrowWei === null
+    ? 'unclaimed in escrow + undetermined, the escrow could not be read'
+    : `unclaimed in escrow + ${eth(run.escrowWei)} ETH, credited to it and not yet claimed`);
   L.push(`paid out to date   + ${eth(run.paidToDateWei)} ETH, payout values and their gas`);
   L.push(`swept to date      + ${eth(run.sweptToDateWei)} ETH, moved out by hand and recorded`);
-  L.push(`gross income       = ${eth(run.grossIncomeWei)} ETH, everything this wallet has ever taken in`);
+  L.push(`gross income       = ${eth(run.grossIncomeWei)} ETH, everything this wallet has ever earned`);
   L.push(`the room's ${LEDGER_SHARE_PCT}%        ${eth(run.poolTargetWei)} ETH of it, in total, ever`);
   L.push(`less what it has had - ${eth(run.paidToDateWei)} ETH`);
   L.push(`pool now           = ${eth(run.poolWei)} ETH`);
@@ -617,7 +723,15 @@ export function postText(run: LedgerRun): string {
   const L: string[] = [];
   L.push(`ledger, ${day(run.createdAt)}`);
   L.push('');
-  L.push(`gross income      ${eth(run.grossIncomeWei)} ETH, everything the fee wallet has taken in`);
+  // The room is owed a tenth of what was EARNED, not of what happens to have
+  // been claimed, so the public post states the unclaimed part rather than
+  // letting a reader reconcile gross against a wallet balance and come up short.
+  L.push(`gross income      ${eth(run.grossIncomeWei)} ETH, everything the fee wallet has earned`);
+  if (run.escrowWei === null) {
+    L.push('  of which unclaimed in the fee escrow: undetermined, it could not be read');
+  } else if (run.escrowWei > 0n) {
+    L.push(`  of which ${eth(run.escrowWei)} ETH is credited in the fee escrow and not yet claimed`);
+  }
   L.push(`the room's ${LEDGER_SHARE_PCT}%       ${eth(run.poolTargetWei)} ETH of it, in total`);
   L.push(`already paid      ${eth(run.paidToDateWei)} ETH`);
   L.push(`this run          ${eth(run.poolWei)} ETH`);

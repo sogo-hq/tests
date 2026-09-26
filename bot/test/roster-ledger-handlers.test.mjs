@@ -75,7 +75,7 @@ test('the payout table against a balance of 10 ETH', async () => {
   // Every term of the reconstruction, so the pool can be derived by anyone.
   assert.match(out, /paid out to date\s+\+ 0\.0000 ETH, payout values and their gas/);
   assert.match(out, /swept to date\s+\+ 0\.0000 ETH, moved out by hand and recorded/);
-  assert.match(out, /gross income\s+= 10\.0000 ETH, everything this wallet has ever taken in/);
+  assert.match(out, /gross income\s+= 10\.0000 ETH, everything this wallet has ever earned/);
   assert.match(out, /the room's 10%\s+1\.0000 ETH of it, in total, ever/);
   assert.match(out, /pool now\s+= 1\.0000 ETH/);
   assert.doesNotMatch(out, /unpaid remainder/);
@@ -92,7 +92,7 @@ test('the payout table against a balance of 10 ETH', async () => {
 });
 
 test('the run adds up, in wei, not just on screen', () => {
-  const run = L.computeRun({ balanceWei: 10n * 10n ** 18n, paidToDateWei: 0n, sweptToDateWei: 0n });
+  const run = L.computeRun({ escrowWei: 0n, balanceWei: 10n * 10n ** 18n, paidToDateWei: 0n, sweptToDateWei: 0n });
   assert.equal(run.poolWei, 10n ** 18n);
   assert.equal(run.perShareWei, 5n * 10n ** 16n);
   assert.equal(run.rows.reduce((a, r) => a + r.amountWei, 0n), run.distributedWei);

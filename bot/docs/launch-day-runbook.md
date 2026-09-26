@@ -305,10 +305,29 @@ In DM, in this order, reading each one before running the next:
 /ledger csv
 ```
 
-`preview` prints every term: gross income, the room's share of it, what has
+`preview` prints every term: the wallet balance, **what is credited in the fee
+escrow and not yet claimed**, gross income, the room's share of it, what has
 already been paid, what this run pays, total shares, and the dust that stays
-for next time. If it refuses, it says why, and the refusal is right: the pool
-cannot exceed what is in the wallet.
+for next time.
+
+Expect the escrow line to carry almost all of it, and expect the first run to
+refuse because of it. v2 revenue is not transferred: the curve and the hook
+credit `PonsV2FeeEscrow` per recipient, and the fee wallet does not move until
+somebody calls `claim()`. Measured on a live launch: a fee wallet holding
+0.0157 ETH that had earned 0.5240 ETH.
+
+So the order at T+4h is **claim, then preview**:
+
+```
+claim the fee wallet's escrow balance      (escrow 0xd3AFEB2a57f70eF218Aa82451c51B2fb0416Ac9e, claim())
+/ledger preview
+```
+
+If it refuses, it says why, and the refusal is right: the pool cannot exceed
+what is in the wallet. It now distinguishes the two reasons. Money still in the
+escrow says "claim it, then run this again". Money that left the wallet says so
+instead. An escrow it could not read at all refuses everything, because a gross
+missing a term is not a number to pay a tenth of.
 
 Then, on the Mac, with the key in the shell and nowhere else:
 

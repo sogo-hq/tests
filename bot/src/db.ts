@@ -817,6 +817,12 @@ for (const [table, column, decl] of [
   // that is merely one short and showing "undetermined" for a day would be a
   // worse answer than the one it replaces.
   ['launches', 'exemption_source', 'TEXT'],
+  // What was credited to the fee wallet in the fee escrow and unclaimed at the
+  // moment the run was computed. NULL on every run stored before this column
+  // existed, and NULL is the correct reading for them: those runs computed a
+  // gross that did not include the term at all, and a zero here would claim
+  // they had read it and found nothing.
+  ['ledger_runs', 'escrow_wei', 'TEXT'],
   // The two optional declaration blocks, and the hash of the page the docs
   // line names. All three are absent on every declaration made before they
   // existed, and absent is the correct reading: those declarations said

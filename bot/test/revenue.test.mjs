@@ -50,7 +50,7 @@ const sweep = (hash, valueWei, at) =>
 
 test('before anything has come in it is empty, and says so in one field', () => {
   reset();
-  const d = R.buildRevenue({ balanceWei: 0n, headBlock: null, now: NOW });
+  const d = R.buildRevenue({ escrowWei: 0n, balanceWei: 0n, headBlock: null, now: NOW });
   assert.equal(d.as_of.empty, true);
   assert.equal(d.claimed_eth, '0.0000');
   assert.deepEqual(d.claims, []);
@@ -66,7 +66,7 @@ test('before anything has come in it is empty, and says so in one field', () => 
 test('a balance that could not be read does not empty the page of what is known', () => {
   reset();
   payout(1, 1, ETH(0.5), { hash: HASH(1), at: 1_700_000_000 });
-  const d = R.buildRevenue({ balanceWei: null, headBlock: null, now: NOW });
+  const d = R.buildRevenue({ escrowWei: 0n, balanceWei: null, headBlock: null, now: NOW });
   assert.equal(d.as_of.empty, false, 'a payout that went out is revenue that came in');
   assert.equal(d.block_zero.payouts.length, 1);
   assert.equal(d.as_of.block, null, 'the block is the field that says it is not known');
@@ -76,7 +76,7 @@ test('a balance that could not be read does not empty the page of what is known'
 
 test('one claim: gross is the balance, and the split is computed from it', () => {
   reset();
-  const d = R.buildRevenue({ balanceWei: ETH(10), headBlock: 64_000_000, now: NOW });
+  const d = R.buildRevenue({ escrowWei: 0n, balanceWei: ETH(10), headBlock: 64_000_000, now: NOW });
   assert.equal(d.as_of.empty, false);
   assert.equal(d.claimed_eth, '10.0000');
   assert.equal(d.split.block_zero_eth, '1.0000');
@@ -90,7 +90,7 @@ test('one claim: gross is the balance, and the split is computed from it', () =>
 test('the split is exact in wei, and the printed shares can round short of the total', () => {
   reset();
   const gross = ETH(7.7777);
-  const d = R.buildRevenue({ balanceWei: gross, headBlock: 1, now: NOW });
+  const d = R.buildRevenue({ escrowWei: 0n, balanceWei: gross, headBlock: 1, now: NOW });
   // Exact where it counts: the three shares are the whole, to the wei.
   const wei = (pct) => (gross * BigInt(pct)) / 100n;
   assert.equal(wei(10) + wei(10) + wei(80), gross);
@@ -115,7 +115,7 @@ test('claims plus payouts: every payout with a hash is listed, oldest first', ()
   // A row with no hash has not left the wallet and is not a payout yet.
   payout(1, 3, ETH(0.3));
 
-  const d = R.buildRevenue({ balanceWei: ETH(9.3), headBlock: 64_000_000, now: NOW });
+  const d = R.buildRevenue({ escrowWei: 0n, balanceWei: ETH(9.3), headBlock: 64_000_000, now: NOW });
   assert.equal(d.block_zero.payouts.length, 2, 'an unsent row was listed as paid');
   assert.deepEqual(d.block_zero.payouts.map((p) => p.txHash), [HASH(1), HASH(2)]);
   assert.deepEqual(d.block_zero.payouts.map((p) => p.eth), ['0.3000', '0.4000']);
@@ -129,7 +129,7 @@ test('claims plus payouts: every payout with a hash is listed, oldest first', ()
 test('a sweep counts toward gross, because it left the wallet too', () => {
   reset();
   sweep(HASH(9), ETH(4), 1_700_000_000);
-  const d = R.buildRevenue({ balanceWei: ETH(6), headBlock: 1, now: NOW });
+  const d = R.buildRevenue({ escrowWei: 0n, balanceWei: ETH(6), headBlock: 1, now: NOW });
   assert.equal(d.claimed_eth, '10.0000');
   assert.equal(d.block_zero.owed_eth, '1.0000');
   // A sweep is money moving out, not a payout to the room.
@@ -175,8 +175,8 @@ test('owed is computeRun to the wei, at every state of the ledger', () => {
   for (const s of states) {
     reset();
     s.setup();
-    const run = L.computeRun({ balanceWei: s.balance, now: NOW });
-    const d = R.buildRevenue({ balanceWei: s.balance, headBlock: 1, now: NOW });
+    const run = L.computeRun({ escrowWei: 0n, balanceWei: s.balance, now: NOW });
+    const d = R.buildRevenue({ escrowWei: 0n, balanceWei: s.balance, headBlock: 1, now: NOW });
     // The string the page prints, against the string /ledger prints, off the
     // same wei. Not a recomputation: the same function, called twice.
     assert.equal(d.block_zero.owed_eth, L.eth(run.poolWei), `${s.name}: owed`);
@@ -189,7 +189,7 @@ test('owed is computeRun to the wei, at every state of the ledger', () => {
 test('owed never goes negative when more has been paid than the share', () => {
   reset();
   payout(1, 1, ETH(9), { hash: HASH(1), at: 1_700_000_000 });
-  const d = R.buildRevenue({ balanceWei: ETH(1), headBlock: 1, now: NOW });
+  const d = R.buildRevenue({ escrowWei: 0n, balanceWei: ETH(1), headBlock: 1, now: NOW });
   assert.equal(d.block_zero.owed_eth, '0.0000');
   assert.ok(!d.block_zero.owed_eth.startsWith('-'));
 });
@@ -199,7 +199,7 @@ test('owed never goes negative when more has been paid than the share', () => {
 test('no price, no USD, no projection, and no seat named anywhere', () => {
   reset();
   payout(1, 1, ETH(0.7), { hash: HASH(1), at: 1_700_000_000 });
-  const json = JSON.stringify(R.buildRevenue({ balanceWei: ETH(9.3), headBlock: 1, now: NOW }));
+  const json = JSON.stringify(R.buildRevenue({ escrowWei: 0n, balanceWei: ETH(9.3), headBlock: 1, now: NOW }));
   assert.doesNotMatch(json, /usd|\$[0-9]|price|market ?cap|projection|estimate|apy|yield/i);
   // The seat's wallet is in ledger_payments and must not reach a public page.
   assert.ok(!json.includes(W(1)), 'a payout wallet reached the public page');
@@ -207,17 +207,32 @@ test('no price, no USD, no projection, and no seat named anywhere', () => {
   assert.ok(!json.includes(String.fromCharCode(0x2014)), 'em dash');
 });
 
-test('unclaimed is undetermined rather than zero, and says why', () => {
+test('an unreadable escrow is undetermined rather than zero, and says why', () => {
+  // The rule has outlived the reason. It used to be null because this build had
+  // no ABI for the escrow; now it is null only when the read fails, and the
+  // page has to say that the total is missing a term rather than print a
+  // smaller number as though it were complete.
   reset();
-  const d = R.buildRevenue({ balanceWei: ETH(10), headBlock: 1, now: NOW });
+  const d = R.buildRevenue({ escrowWei: null, balanceWei: ETH(10), headBlock: 1, now: NOW });
   assert.equal(d.unclaimed_eth, null);
-  assert.match(d.unclaimed_note, /feeEscrow/);
   assert.match(d.unclaimed_note, /undetermined rather than zero/);
+  assert.match(d.unclaimed_note, /claimed_eth is missing that term/);
+});
+
+test('a readable escrow is stated, and is inside the gross the page publishes', () => {
+  reset();
+  const d = R.buildRevenue({ escrowWei: ETH(2), balanceWei: ETH(10), headBlock: 1, now: NOW });
+  assert.equal(d.unclaimed_eth, '2.0000');
+  assert.match(d.unclaimed_note, /PonsV2FeeEscrow/);
+  assert.match(d.unclaimed_note, /does not move until claim\(\) is called/);
+  // 12 ETH earned, not the 10 the wallet happens to hold.
+  assert.equal(d.claimed_eth, '12.0000');
+  assert.equal(d.block_zero.owed_eth, '1.2000', "the room's tenth is a tenth of what was earned");
 });
 
 test('claims are empty with a reason, which is not the same as none', () => {
   reset();
-  const d = R.buildRevenue({ balanceWei: ETH(10), headBlock: 1, now: NOW });
+  const d = R.buildRevenue({ escrowWei: 0n, balanceWei: ETH(10), headBlock: 1, now: NOW });
   assert.deepEqual(d.claims, []);
   assert.match(d.claims_note, /emit no log/);
   assert.match(d.claims_note, /the total is exact/);

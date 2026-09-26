@@ -1,5 +1,5 @@
 import { buildRevenue, type Revenue } from '../revenue.js';
-import { feeWalletBalance } from '../ledger.js';
+import { feeWalletBalance, feeEscrowUnclaimedWei } from '../ledger.js';
 import { db, getCursor } from '../db.js';
 import { client } from '../chain.js';
 import { indexCoverage } from '../coverage.js';
@@ -260,11 +260,14 @@ export async function getRevenue(now = Date.now()): Promise<Outcome> {
   if (revenueHit && now - revenueHit.at < REVENUE_CACHE_MS) {
     return { status: 200, body: revenueHit.body, headers: { 'x-cache': 'hit', 'cache-control': 'public, max-age=60' } };
   }
-  const [balanceWei, head] = await Promise.all([
+  const [balanceWei, escrowWei, head] = await Promise.all([
     feeWalletBalance().catch(() => null),
+    // Unclaimed escrow credit is part of what the wallet has earned, so the
+    // public figure is wrong without it. Null stays null: undetermined, not zero.
+    feeEscrowUnclaimedWei().catch(() => null),
     lagBlocks().then((l) => l.head).catch(() => null),
   ]);
-  const body = buildRevenue({ balanceWei, headBlock: head, now });
+  const body = buildRevenue({ balanceWei, escrowWei, headBlock: head, now });
   revenueHit = { at: now, body };
   return { status: 200, body, headers: { 'x-cache': 'miss', 'cache-control': 'public, max-age=60' } };
 }

@@ -108,6 +108,8 @@ export function blockZeroPayouts(): RevenuePayout[] {
  */
 export function buildRevenue(opts: {
   balanceWei: bigint | null;
+  /** Credited in the escrow and unclaimed, or null when it could not be read. */
+  escrowWei: bigint | null;
   headBlock: number | null;
   now?: number;
   run?: LedgerRun;
@@ -116,7 +118,7 @@ export function buildRevenue(opts: {
   // A balance that could not be read is treated as zero for the arithmetic and
   // said to be undetermined by the block field, rather than failing the whole
   // page: the payouts and the split are still true.
-  const run = opts.run ?? computeRun({ balanceWei: opts.balanceWei ?? 0n, now });
+  const run = opts.run ?? computeRun({ balanceWei: opts.balanceWei ?? 0n, escrowWei: opts.escrowWei, now });
 
   const gross = run.grossIncomeWei;
   const payouts = blockZeroPayouts();
@@ -130,10 +132,13 @@ export function buildRevenue(opts: {
       'creator fees arrive as plain ETH transfers, which emit no log, so the individual '
       + 'claims cannot be listed from the chain without a block scan. the total is exact: '
       + 'it is what the wallet holds plus everything that has ever left it.',
-    unclaimed_eth: null,
-    unclaimed_note:
-      'the factory names a feeEscrow and this build has no ABI for it, so what is accrued '
-      + 'and unclaimed cannot be read. undetermined rather than zero.',
+    unclaimed_eth: run.escrowWei === null ? null : eth(run.escrowWei),
+    unclaimed_note: run.escrowWei === null
+      ? 'the escrow balance could not be read, so what is accrued and unclaimed is '
+        + 'undetermined rather than zero, and claimed_eth is missing that term.'
+      : 'read from PonsV2FeeEscrow, which the factory names: curve and hook revenue is '
+        + 'credited there per recipient and the wallet does not move until claim() is called. '
+        + 'claimed_eth includes it, because the room is owed a tenth of what was earned.',
     split: {
       block_zero_pct: SPLIT.blockZero,
       ecosystem_pct: SPLIT.ecosystem,

@@ -62,6 +62,32 @@ export const curveAbi = parseAbi([
   'function deployer() view returns (address)',
 ]);
 
+/**
+ * PonsV2FeeEscrow, the contract every v2 fee actually lands in.
+ *
+ * Curve and hook revenue is not transferred to its recipient: both call
+ * `credit`, and the escrow keeps a per recipient ledger that only moves on
+ * `claim`. So a recipient's wallet balance is what it has CLAIMED and this is
+ * what it has EARNED.
+ *
+ * Confirmed against the deployed bytecode at the address the factory's
+ * feeEscrow() returns: all eight of the contract's external selectors are in
+ * its dispatch table, and two invented ones (setProtocolFee, sweepTo) are not.
+ * `balanceOf(address)` is the accessor; `balances(address)` does not exist.
+ *
+ * Credited is indexed on both recipient and depositor, which is what makes the
+ * split readable from logs without the curve's source: filtering on depositor
+ * gives every recipient one curve ever paid, and nothing else.
+ */
+export const feeEscrowAbi = parseAbi([
+  'function balanceOf(address recipient) view returns (uint256)',
+  'function balanceOfToken(address recipient,address token) view returns (uint256)',
+]);
+
+export const FeeEscrowCredited = parseAbiItem(
+  'event Credited(address indexed recipient,address indexed depositor,uint256 amount)',
+);
+
 export const buybackVaultAbi = parseAbi([
   'function totalLocked(address token) view returns (uint256)',
   'function vestedAmount(address token) view returns (uint256)',

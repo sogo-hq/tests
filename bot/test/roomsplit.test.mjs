@@ -89,7 +89,7 @@ test('three seats are paid the same amount, to the wei', () => {
   seat('crew_one', 'T2', 2, 1000);
   seat('crew_two', 'T3', 3, 1000);
 
-  const run = L.computeRun({ balanceWei: ETH(10), paidToDateWei: 0n, sweptToDateWei: 0n });
+  const run = L.computeRun({ escrowWei: 0n, balanceWei: ETH(10), paidToDateWei: 0n, sweptToDateWei: 0n });
   assert.equal(run.refusal, null, run.refusal ?? '');
   assert.equal(L.eth(run.poolWei), '1.0000');
   // 1 ETH over three seats, floored to the printed precision.
@@ -115,10 +115,10 @@ test('the tier a seat carries changes nothing about what it is paid', () => {
   seat('seat_a', 'T3', 1, 1000);
   seat('seat_b', 'T3', 2, 1000);
   seat('seat_c', 'T3', 3, 1000);
-  const flat = L.computeRun({ balanceWei: ETH(10), paidToDateWei: 0n });
+  const flat = L.computeRun({ escrowWei: 0n, balanceWei: ETH(10), paidToDateWei: 0n });
 
   assert.equal(R.setTier('seat_a', 'T1').ok, true);
-  const promoted = L.computeRun({ balanceWei: ETH(10), paidToDateWei: 0n });
+  const promoted = L.computeRun({ escrowWei: 0n, balanceWei: ETH(10), paidToDateWei: 0n });
   assert.deepEqual(
     promoted.rows.map((r) => String(r.amountWei)),
     flat.rows.map((r) => String(r.amountWei)),
@@ -143,7 +143,7 @@ test('a seat added on day 9 recomputes from day 9 forward and not before', () =>
   const stored = [];
   for (let d = 1; d <= 8; d++) {
     balance += ETH(3); // the day's fees
-    const run = L.computeRun({ balanceWei: balance, paidToDateWei: paid, sweptToDateWei: 0n, now: 1000 + d * DAY });
+    const run = L.computeRun({ escrowWei: 0n, balanceWei: balance, paidToDateWei: paid, sweptToDateWei: 0n, now: 1000 + d * DAY });
     assert.equal(run.rows.length, 3, `day ${d} divided between the wrong number of seats`);
     const id = L.saveRun(run);
     stored.push({ id, day: d, each: run.rows[0].amountWei, seats: run.rows.length });
@@ -158,7 +158,7 @@ test('a seat added on day 9 recomputes from day 9 forward and not before', () =>
   // Day 9: a fourth seat, given for what somebody actually did.
   seat('crew_three', 'T2', 4, 1000 + 9 * DAY);
   balance += ETH(3);
-  const nine = L.computeRun({ balanceWei: balance, paidToDateWei: paid, sweptToDateWei: 0n, now: 1000 + 9 * DAY });
+  const nine = L.computeRun({ escrowWei: 0n, balanceWei: balance, paidToDateWei: paid, sweptToDateWei: 0n, now: 1000 + 9 * DAY });
   assert.equal(nine.refusal, null, nine.refusal ?? '');
   assert.equal(nine.rows.length, 4, 'the new seat is not in the day it was given');
   assert.equal(new Set(nine.rows.map((r) => String(r.amountWei))).size, 1);
@@ -197,7 +197,7 @@ test('a seat given up is reused and both occupants stay in the history', () => {
   seat('crew_one', 'T1', 2, 1000);
   seat('crew_two', 'T1', 3, 1000);
 
-  const before = L.computeRun({ balanceWei: ETH(10), paidToDateWei: 0n });
+  const before = L.computeRun({ escrowWei: 0n, balanceWei: ETH(10), paidToDateWei: 0n });
   const beforeId = L.saveRun(before);
   assert.equal(before.rows.length, 3);
 
@@ -219,7 +219,7 @@ test('a seat given up is reused and both occupants stay in the history', () => {
   assert.equal(paidRun.rows.find((r) => r.seat === 3).handle, 'crew_two');
 
   // And the next run pays three seats again, equally, with the newcomer in it.
-  const after = L.computeRun({ balanceWei: ETH(10), paidToDateWei: 0n });
+  const after = L.computeRun({ escrowWei: 0n, balanceWei: ETH(10), paidToDateWei: 0n });
   assert.equal(after.rows.length, 3);
   assert.equal(after.rows.find((r) => r.seat === 3).handle, 'crew_three');
   assert.equal(new Set(after.rows.map((r) => String(r.amountWei))).size, 1);
@@ -236,7 +236,7 @@ test('a run whose split is not the one signed is refused, and says both sides', 
   seat('deployer', 'T1', 1, 1000);
   seat('crew_one', 'T2', 2, 1000);
 
-  const run = L.computeRun({ balanceWei: ETH(10), paidToDateWei: 0n });
+  const run = L.computeRun({ escrowWei: 0n, balanceWei: ETH(10), paidToDateWei: 0n });
   assert.equal(run.split.state, 'differs');
   assert.ok(run.refusal, 'a run that contradicts the signed declaration was payable');
   assert.match(run.refusal, new RegExp(`declaration ${id}`));
@@ -257,7 +257,7 @@ test('a declared share of gross that is not the one being paid is refused', () =
   reset();
   const id = declare(EQUAL_ROOM.replace('owed 10% of', 'owed 15% of'), { pct: 15 });
   seat('deployer', 'T1', 1, 1000);
-  const run = L.computeRun({ balanceWei: ETH(10), paidToDateWei: 0n });
+  const run = L.computeRun({ escrowWei: 0n, balanceWei: ETH(10), paidToDateWei: 0n });
   assert.equal(run.split.state, 'differs');
   assert.match(run.refusal, new RegExp(`declaration ${id} says the room is owed 15% of gross and this run pays 10%`));
 });
@@ -266,7 +266,7 @@ test('a refused run is not payable through any of the three ways a table leaves'
   reset();
   declare(TIERED_ROOM);
   seat('deployer', 'T1', 1, 1000);
-  const run = L.computeRun({ balanceWei: ETH(10), paidToDateWei: 0n });
+  const run = L.computeRun({ escrowWei: 0n, balanceWei: ETH(10), paidToDateWei: 0n });
   // A refused run is not saved by the preview handler, but one stored before
   // the declaration moved still has to refuse when it is loaded again.
   const id = L.saveRun({ ...run, refusal: null, rows: run.rows, perShareWei: 0n });
@@ -280,7 +280,7 @@ test('the check passes when the roster and the signed text agree, and says so by
   const id = declare(EQUAL_ROOM);
   seat('deployer', 'T1', 1, 1000);
   seat('crew_one', 'T2', 2, 1000);
-  const run = L.computeRun({ balanceWei: ETH(10), paidToDateWei: 0n });
+  const run = L.computeRun({ escrowWei: 0n, balanceWei: ETH(10), paidToDateWei: 0n });
   assert.equal(run.refusal, null);
   assert.equal(run.split.state, 'match');
   assert.equal(run.split.declarationId, id);
@@ -292,7 +292,7 @@ test('the check passes when the roster and the signed text agree, and says so by
 test('no declaration is undetermined, which is neither a match nor a contradiction', () => {
   reset();
   seat('deployer', 'T1', 1, 1000);
-  const run = L.computeRun({ balanceWei: ETH(10), paidToDateWei: 0n });
+  const run = L.computeRun({ escrowWei: 0n, balanceWei: ETH(10), paidToDateWei: 0n });
   assert.equal(run.split.state, 'undetermined');
   assert.equal(run.refusal, null, 'an absent lookup blocked a payout');
   const text = L.previewText(run);
@@ -305,7 +305,7 @@ test('a room block that does not state a rule is undetermined, and says which on
   reset();
   const id = declare('the room: some people get paid sometimes.');
   seat('deployer', 'T1', 1, 1000);
-  const run = L.computeRun({ balanceWei: ETH(10), paidToDateWei: 0n });
+  const run = L.computeRun({ escrowWei: 0n, balanceWei: ETH(10), paidToDateWei: 0n });
   assert.equal(run.split.state, 'undetermined');
   assert.match(L.previewText(run), new RegExp(`split not checked: declaration ${id} was found and the room block does not state how the share is divided`));
 });
@@ -328,7 +328,7 @@ test('the reader recognises the two rules this project has signed, and nothing e
 test('no seats is not a contradiction of anything', () => {
   reset();
   declare(EQUAL_ROOM);
-  const run = L.computeRun({ balanceWei: ETH(10), paidToDateWei: 0n });
+  const run = L.computeRun({ escrowWei: 0n, balanceWei: ETH(10), paidToDateWei: 0n });
   assert.equal(run.rows.length, 0);
   assert.equal(run.refusal, null);
   assert.equal(run.split.state, 'match');
@@ -373,7 +373,7 @@ test('the preview, the public post and the csv carry the same split line', () =>
     if (room) declare(room);
     seat('deployer', 'T1', 1, 1000);
     seat('crew_one', 'T1', 2, 1000);
-    const run = L.computeRun({ balanceWei: ETH(10), paidToDateWei: 0n });
+    const run = L.computeRun({ escrowWei: 0n, balanceWei: ETH(10), paidToDateWei: 0n });
     run.id = L.saveRun(run);
 
     const line = splitLineOf(L.previewText(run));
@@ -389,7 +389,7 @@ test('the csv carries it as a comment, so the payer reads it and the parser does
   reset();
   seat('deployer', 'T1', 1, 1000);
   seat('crew_one', 'T1', 2, 1000);
-  const run = L.computeRun({ balanceWei: ETH(10), paidToDateWei: 0n });
+  const run = L.computeRun({ escrowWei: 0n, balanceWei: ETH(10), paidToDateWei: 0n });
   run.id = L.saveRun(run);
 
   const csv = L.csvText(run);
@@ -403,7 +403,7 @@ test('the csv carries it as a comment, so the payer reads it and the parser does
 test('an undetermined post is not silently a clean one', () => {
   reset();
   seat('deployer', 'T1', 1, 1000);
-  const run = L.computeRun({ balanceWei: ETH(10), paidToDateWei: 0n });
+  const run = L.computeRun({ escrowWei: 0n, balanceWei: ETH(10), paidToDateWei: 0n });
   const post = L.postText(run);
   assert.match(post, /split not checked: /);
   assert.doesNotMatch(post, /\bclean\b|\bsafe\b|\blooks good\b/i);
@@ -418,7 +418,7 @@ test('before the token exists on chain, the reason names that and nothing else',
   // balance. This is the only answer the check can give, and it has to be
   // distinguishable on Monday from a run where the launch IS indexed.
   reset();
-  const run = L.computeRun({ balanceWei: ETH(10), paidToDateWei: 0n });
+  const run = L.computeRun({ escrowWei: 0n, balanceWei: ETH(10), paidToDateWei: 0n });
   assert.equal(run.split.state, 'undetermined');
   assert.equal(
     run.split.detail,
@@ -437,7 +437,7 @@ test('a launch with no declaration before it reads differently from no launch at
         '0', 64_623_813, '0x' + 'e'.repeat(64), 1_789_000_000);
   seat('deployer', 'T1', 1, 1000);
 
-  const run = L.computeRun({ balanceWei: ETH(10), paidToDateWei: 0n });
+  const run = L.computeRun({ escrowWei: 0n, balanceWei: ETH(10), paidToDateWei: 0n });
   assert.equal(run.split.state, 'undetermined');
   assert.equal(
     run.split.detail,
@@ -471,7 +471,7 @@ test('every reason the check cannot resolve is a different sentence', () => {
   // 4. Signed, and the room block states no rule.
   declare('the room: some people get paid sometimes.');
   seat('deployer', 'T1', 1, 1000);
-  seen.add(L.computeRun({ balanceWei: ETH(10), paidToDateWei: 0n }).split.detail);
+  seen.add(L.computeRun({ escrowWei: 0n, balanceWei: ETH(10), paidToDateWei: 0n }).split.detail);
 
   assert.equal(seen.size, 4, `two reasons print the same sentence: ${[...seen].join(' | ')}`);
   for (const r of seen) assert.ok(r && r.length > 20, String(r));

@@ -38,7 +38,7 @@ test('a mixed roster is paid equally, whatever its tiers are worth on the roster
   assert.equal(R.totalShares(), 42);
   assert.deepEqual(R.TIER_SHARES, { T1: 5, T2: 2, T3: 1 });
 
-  const run = L.computeRun({ balanceWei: ETH(10.01), paidToDateWei: 0n });
+  const run = L.computeRun({ escrowWei: 0n, balanceWei: ETH(10.01), paidToDateWei: 0n });
   assert.equal(run.totalShares, 20, 'the payout weight is one per seat, not the tier total');
   assert.equal(L.eth(run.poolWei), '1.0010');
   assert.equal(L.eth(run.perShareWei), '0.0500');
@@ -57,7 +57,7 @@ test('a mixed roster is paid equally, whatever its tiers are worth on the roster
 
 test('a tier is a label: changing one moves nobody money, then or now', () => {
   seed(1, 1, 0);
-  const before = L.computeRun({ balanceWei: ETH(10), paidToDateWei: 0n });
+  const before = L.computeRun({ escrowWei: 0n, balanceWei: ETH(10), paidToDateWei: 0n });
   const id = L.saveRun(before);
   assert.equal(before.totalShares, 2, 'two seats, one share each');
   const [a, b] = before.rows;
@@ -67,7 +67,7 @@ test('a tier is a label: changing one moves nobody money, then or now', () => {
   const r = R.setTier('t2_1', 'T1', { at: 2000 });
   assert.equal(r.ok, true);
   assert.equal(R.totalShares(), 10, 'the roster still adds tier shares');
-  const after = L.computeRun({ balanceWei: ETH(10), paidToDateWei: 0n });
+  const after = L.computeRun({ escrowWei: 0n, balanceWei: ETH(10), paidToDateWei: 0n });
   assert.equal(after.totalShares, 2);
   assert.deepEqual(after.rows.map((x) => String(x.amountWei)), before.rows.map((x) => String(x.amountWei)));
 
@@ -121,7 +121,7 @@ test('four runs: new income moves the pool, a sweep does not, and nothing is pai
   // Run 1. A wallet holding 10.01 ETH, nothing ever paid, nothing ever swept.
   // Not a round ten: twenty seats divide a tenth of ten exactly, and a pool
   // that divides exactly leaves no dust for the carry below to carry.
-  const one = L.computeRun({ balanceWei: ETH(10.01), paidToDateWei: 0n, sweptToDateWei: 0n });
+  const one = L.computeRun({ escrowWei: 0n, balanceWei: ETH(10.01), paidToDateWei: 0n, sweptToDateWei: 0n });
   assert.equal(L.eth(one.grossIncomeWei), '10.0100');
   assert.equal(L.eth(one.poolTargetWei), '1.0010');
   assert.equal(L.eth(one.poolWei), '1.0010');
@@ -137,7 +137,7 @@ test('four runs: new income moves the pool, a sweep does not, and nothing is pai
 
   // Run 2. No new fees at all. Gross income has not moved, so the room is
   // owed nothing further except the dust run 1 could not divide.
-  const two = L.computeRun({ balanceWei: balTwo, paidToDateWei: paidOne, sweptToDateWei: 0n });
+  const two = L.computeRun({ escrowWei: 0n, balanceWei: balTwo, paidToDateWei: paidOne, sweptToDateWei: 0n });
   assert.equal(L.eth(two.grossIncomeWei), '10.0100', 'gross income moved without any income');
   assert.equal(L.eth(two.poolTargetWei), '1.0010');
   assert.equal(two.poolWei, one.dustWei, 'run 2 pays for income the room was already paid for');
@@ -150,7 +150,7 @@ test('four runs: new income moves the pool, a sweep does not, and nothing is pai
 
   // Run 3. Five ETH of new fees arrive; run 2 sent nothing.
   const balThree = balTwo + ETH(5);
-  const three = L.computeRun({ balanceWei: balThree, paidToDateWei: paidOne, sweptToDateWei: 0n });
+  const three = L.computeRun({ escrowWei: 0n, balanceWei: balThree, paidToDateWei: paidOne, sweptToDateWei: 0n });
   assert.equal(L.eth(three.grossIncomeWei), '15.0100');
   assert.equal(L.eth(three.poolTargetWei), '1.5010');
   // A tenth of the new five, plus the dust the earlier runs could not divide.
@@ -162,7 +162,7 @@ test('four runs: new income moves the pool, a sweep does not, and nothing is pai
   // Run 4. Eight ETH is swept out to the treasury. Run 3 was not paid.
   const swept = ETH(8);
   const balFour = balThree - swept;
-  const four = L.computeRun({ balanceWei: balFour, paidToDateWei: paidOne, sweptToDateWei: swept });
+  const four = L.computeRun({ escrowWei: 0n, balanceWei: balFour, paidToDateWei: paidOne, sweptToDateWei: swept });
   assert.equal(L.eth(four.balanceWei), '6.0100');
   assert.equal(L.eth(four.sweptToDateWei), '8.0000');
   assert.equal(L.eth(four.grossIncomeWei), '15.0100', 'a sweep changed gross income');
@@ -185,7 +185,7 @@ test('a pool larger than the wallet is refused, and says what to do about it', (
   seed(4, 6, 10);
   // Ten ETH came in and nine and a half of it was swept out before the room
   // was paid its tenth. The room is owed 1 ETH and 0.5 is there.
-  const run = L.computeRun({ balanceWei: ETH(0.5), paidToDateWei: 0n, sweptToDateWei: ETH(9.5) });
+  const run = L.computeRun({ escrowWei: 0n, balanceWei: ETH(0.5), paidToDateWei: 0n, sweptToDateWei: ETH(9.5) });
   assert.equal(L.eth(run.grossIncomeWei), '10.0000');
   assert.equal(L.eth(run.poolWei), '1.0000');
   assert.ok(run.refusal, 'a pool bigger than the wallet was not refused');
@@ -205,7 +205,7 @@ test('gas counts on both sides: it left the wallet, and the room bears it', () =
   seed(1, 0, 0);
   const gas = ETH(0.001);
   // A payout of 1 ETH that cost 0.001 to send: 1.001 left the wallet.
-  const run = L.computeRun({ balanceWei: ETH(9), paidToDateWei: ETH(1) + gas, sweptToDateWei: 0n });
+  const run = L.computeRun({ escrowWei: 0n, balanceWei: ETH(9), paidToDateWei: ETH(1) + gas, sweptToDateWei: 0n });
   assert.equal(L.eth(run.grossIncomeWei, 6), '10.001000', 'the gas is missing from gross income');
   assert.equal(L.eth(run.poolTargetWei, 6), '1.000100');
   // The room is owed a tenth of the gas too, and has already had it spent on
@@ -215,7 +215,7 @@ test('gas counts on both sides: it left the wallet, and the room bears it', () =
 
 test('what has been paid is what has a hash, not what was once computed', () => {
   seed(1, 0, 0);
-  const run = L.computeRun({ balanceWei: ETH(10) });
+  const run = L.computeRun({ escrowWei: 0n, balanceWei: ETH(10) });
   const id = L.saveRun(run);
   assert.equal(L.paidOutWei(), 0n, 'a computed run is not money that left');
   assert.equal(L.unrecordedRuns().length, 1);
@@ -226,7 +226,7 @@ test('what has been paid is what has a hash, not what was once computed', () => 
 
 test('a hash is never overwritten, and an unknown seat is reported', () => {
   seed(1, 0, 0);
-  const run = L.computeRun({ balanceWei: ETH(10) });
+  const run = L.computeRun({ escrowWei: 0n, balanceWei: ETH(10) });
   const id = L.saveRun(run);
   const seat = run.rows[0].seat;
   const first = L.recordTxs(id, [{ seat, txHash: '0x' + 'a'.repeat(64) }]);
@@ -240,7 +240,7 @@ test('a hash is never overwritten, and an unknown seat is reported', () => {
 
 test('an empty wallet pays nothing, and a room already paid its share is not owed a negative', () => {
   seed(1, 0, 0);
-  const empty = L.computeRun({ balanceWei: 0n, paidToDateWei: 0n, sweptToDateWei: 0n });
+  const empty = L.computeRun({ escrowWei: 0n, balanceWei: 0n, paidToDateWei: 0n, sweptToDateWei: 0n });
   assert.equal(empty.grossIncomeWei, 0n);
   assert.equal(empty.poolWei, 0n);
   assert.equal(empty.rows[0].amountWei, 0n);
@@ -248,7 +248,7 @@ test('an empty wallet pays nothing, and a room already paid its share is not owe
 
   // Paid far more than a tenth of everything that ever came in. The pool is
   // nothing, not a debt to be collected back out of the room.
-  const overpaid = L.computeRun({ balanceWei: ETH(1), paidToDateWei: ETH(5), sweptToDateWei: 0n });
+  const overpaid = L.computeRun({ escrowWei: 0n, balanceWei: ETH(1), paidToDateWei: ETH(5), sweptToDateWei: 0n });
   assert.equal(L.eth(overpaid.grossIncomeWei), '6.0000');
   assert.equal(L.eth(overpaid.poolTargetWei), '0.6000');
   assert.equal(overpaid.poolWei, 0n, 'a pool went negative');
@@ -257,7 +257,7 @@ test('an empty wallet pays nothing, and a room already paid its share is not owe
 
 test('no seats means no division by zero', () => {
   reset();
-  const run = L.computeRun({ balanceWei: ETH(10) });
+  const run = L.computeRun({ escrowWei: 0n, balanceWei: ETH(10) });
   assert.equal(run.totalShares, 0);
   assert.equal(run.perShareWei, 0n);
   assert.deepEqual(run.rows, []);
@@ -492,12 +492,12 @@ test('the latest real run is the latest run computed from the wallet', () => {
   seed(1, 1, 1);
   assert.equal(L.latestRealRun(), null, 'nothing is real before anything is computed');
 
-  const real = L.saveRun(L.computeRun({ balanceWei: ETH(10), paidToDateWei: 0n, sweptToDateWei: 0n }));
+  const real = L.saveRun(L.computeRun({ escrowWei: 0n, balanceWei: ETH(10), paidToDateWei: 0n, sweptToDateWei: 0n }));
   assert.equal(L.latestRun().id, real);
   assert.equal(L.latestRealRun().id, real);
 
   // Exploring a figure moves the latest run and must not move this one.
-  const guess = L.saveRun(L.computeRun({
+  const guess = L.saveRun(L.computeRun({ escrowWei: 0n,
     balanceWei: ETH(99), paidToDateWei: 0n, sweptToDateWei: 0n, hypothetical: true,
   }));
   assert.equal(L.latestRun().id, guess);
@@ -509,7 +509,7 @@ test('the latest real run is the latest run computed from the wallet', () => {
 test('a csv from a hypothetical says so at the top, and a real one says nothing', () => {
   reset();
   seed(1, 0, 0);
-  const real = L.computeRun({ balanceWei: ETH(10), paidToDateWei: 0n, sweptToDateWei: 0n });
+  const real = L.computeRun({ escrowWei: 0n, balanceWei: ETH(10), paidToDateWei: 0n, sweptToDateWei: 0n });
   real.id = L.saveRun(real);
   // The split line is on every csv, hypothetical or not. The header is the
   // last comment-free line before the rows.
@@ -518,7 +518,7 @@ test('a csv from a hypothetical says so at the top, and a real one says nothing'
   assert.equal(realLines[1], 'wallet,amount');
   assert.ok(!L.csvText(real).includes(L.CSV_HYPOTHETICAL_MARK));
 
-  const guess = L.computeRun({
+  const guess = L.computeRun({ escrowWei: 0n,
     balanceWei: ETH(10), paidToDateWei: 0n, sweptToDateWei: 0n, hypothetical: true,
   });
   guess.id = L.saveRun(guess);
@@ -532,7 +532,7 @@ test('a csv from a hypothetical says so at the top, and a real one says nothing'
 test('the note at the top of a hypothetical csv is read back as a note, not a row', () => {
   reset();
   seed(2, 0, 0);
-  const guess = L.computeRun({
+  const guess = L.computeRun({ escrowWei: 0n,
     balanceWei: ETH(10), paidToDateWei: 0n, sweptToDateWei: 0n, hypothetical: true,
   });
   guess.id = L.saveRun(guess);
@@ -546,4 +546,106 @@ test('the note at the top of a hypothetical csv is read back as a note, not a ro
   const broken = PP.parsePayCsv(`# a note\nwallet,amount\n${W(1)},0.1\nnope,0.2\n`);
   assert.equal(broken.ok, false);
   assert.match(broken.errors[0], /nope is not a wallet address/);
+});
+
+// ------------------------------------------- the escrow, the missing term
+
+/**
+ * The defect: gross was the wallet plus what left it, and v2 revenue does not
+ * arrive in the wallet. Curve and hook fees are credited in PonsV2FeeEscrow per
+ * recipient and the wallet does not move until claim() is called, so
+ * getBalance(feeWallet) is what has been CLAIMED. A gross built from it alone
+ * understates everything derived from it, the room's tenth included.
+ *
+ * Measured on a live launch while writing this: a fee recipient whose wallet the
+ * ledger would have read, with 0.3919 ETH sitting credited to it in the escrow.
+ */
+test('unclaimed escrow credit is inside gross, not outside it', () => {
+  seed(1, 0, 0);
+  const run = L.computeRun({ balanceWei: ETH(1), escrowWei: ETH(3), paidToDateWei: 0n, sweptToDateWei: 0n });
+  assert.equal(run.grossIncomeWei, ETH(4), 'wallet 1 + escrow 3');
+  assert.equal(run.poolTargetWei, ETH(0.4), "a tenth of what was earned, not of what was claimed");
+  assert.equal(run.escrowWei, ETH(3));
+});
+
+test('the old arithmetic underpays the room by a tenth of the unclaimed', () => {
+  seed(1, 0, 0);
+  const withEscrow = L.computeRun({ balanceWei: ETH(1), escrowWei: ETH(3), paidToDateWei: 0n, sweptToDateWei: 0n });
+  const walletOnly = L.computeRun({ balanceWei: ETH(1), escrowWei: 0n, paidToDateWei: 0n, sweptToDateWei: 0n });
+  assert.equal(withEscrow.poolTargetWei - walletOnly.poolTargetWei, ETH(0.3),
+    'exactly a tenth of the 3 ETH that had not been claimed');
+});
+
+test('an unreadable escrow refuses the run rather than counting it as nothing', () => {
+  // Fail closed. Counted as zero it would produce a smaller table with nothing
+  // on screen saying a figure was missing, which is the shape of every defect
+  // this file exists to stop.
+  seed(2, 0, 0);
+  const run = L.computeRun({ balanceWei: ETH(10), escrowWei: null, paidToDateWei: 0n, sweptToDateWei: 0n });
+  assert.match(run.refusal, /could not be read/);
+  assert.match(run.refusal, /gross income is undetermined/);
+  assert.equal(run.perShareWei, 0n, 'and nothing is payable');
+  assert.ok(run.rows.every((r) => r.amountWei === 0n));
+  assert.equal(run.escrowWei, null);
+});
+
+test('omitting the escrow entirely is treated as failing to read it', () => {
+  // The argument is required in TypeScript, and this asserts the runtime does not
+  // quietly fall back to zero for a caller that predates it.
+  seed(1, 0, 0);
+  const run = L.computeRun({ balanceWei: ETH(10), paidToDateWei: 0n, sweptToDateWei: 0n });
+  assert.match(run.refusal, /could not be read/);
+});
+
+test('a pool the wallet cannot cover says to claim when the escrow holds it', () => {
+  // The new shape of an old refusal. Earning 10 ETH of which 9 is unclaimed
+  // means the room is owed 1 and the wallet holds 1, so this is not a shortfall
+  // at all once it is claimed -- and the instruction has to say so rather than
+  // accusing anybody of moving money out.
+  seed(1, 0, 0);
+  const run = L.computeRun({ balanceWei: ETH(0.5), escrowWei: ETH(9.5), paidToDateWei: 0n, sweptToDateWei: 0n });
+  assert.equal(run.grossIncomeWei, ETH(10));
+  assert.equal(run.poolTargetWei, ETH(1));
+  assert.match(run.refusal, /credited to it in the fee escrow and not yet claimed/);
+  assert.match(run.refusal, /enough to cover the difference/);
+  assert.match(run.refusal, /claim it, then run this again/);
+  assert.ok(!/income was moved out/.test(run.refusal), 'nobody moved anything out');
+});
+
+test('a shortfall with an empty escrow still says money left the wallet', () => {
+  seed(1, 0, 0);
+  const run = L.computeRun({ balanceWei: ETH(0.05), escrowWei: 0n, paidToDateWei: 0n, sweptToDateWei: ETH(10) });
+  assert.match(run.refusal, /income was moved out/);
+  assert.ok(!/fee escrow/.test(run.refusal));
+});
+
+test('the preview and the post both state the unclaimed figure', () => {
+  seed(1, 0, 0);
+  const run = L.computeRun({ balanceWei: ETH(1), escrowWei: ETH(3), paidToDateWei: 0n, sweptToDateWei: 0n });
+  const preview = L.previewText(run);
+  assert.match(preview, /unclaimed in escrow \+ 3\.0000 ETH, credited to it and not yet claimed/);
+  assert.match(preview, /gross income       = 4\.0000 ETH/);
+  const post = L.postText(run);
+  assert.match(post, /gross income      4\.0000 ETH, everything the fee wallet has earned/);
+  assert.match(post, /of which 3\.0000 ETH is credited in the fee escrow and not yet claimed/);
+});
+
+test('a zero escrow is not mentioned in the public post, and undetermined is', () => {
+  seed(1, 0, 0);
+  const zero = L.postText(L.computeRun({ balanceWei: ETH(1), escrowWei: 0n, paidToDateWei: 0n, sweptToDateWei: 0n }));
+  assert.ok(!/fee escrow/.test(zero), 'nothing unclaimed is nothing to say');
+  const unread = L.previewText(L.computeRun({ balanceWei: ETH(1), escrowWei: null, paidToDateWei: 0n, sweptToDateWei: 0n }));
+  assert.match(unread, /unclaimed in escrow \+ undetermined, the escrow could not be read/);
+});
+
+test('a stored run keeps the escrow term, and an older row reads as unread', () => {
+  seed(1, 0, 0);
+  const run = L.computeRun({ balanceWei: ETH(1), escrowWei: ETH(3), paidToDateWei: 0n, sweptToDateWei: 0n });
+  const id = L.saveRun(run);
+  assert.equal(L.loadRun(id).escrowWei, ETH(3));
+  assert.equal(L.loadRun(id).grossIncomeWei, ETH(4));
+  // A row from before the column existed. Null, never zero: that run computed a
+  // gross with no escrow term in it at all.
+  db.prepare('UPDATE ledger_runs SET escrow_wei = NULL WHERE id = ?').run(id);
+  assert.equal(L.loadRun(id).escrowWei, null);
 });
