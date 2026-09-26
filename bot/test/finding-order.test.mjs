@@ -150,9 +150,15 @@ test('the exemption line says how much of the token the set took', () => {
   assert.ok(f.plain.length <= 79, `${f.plain.length} chars`);
 });
 
-test('with no measured window the line falls back to the count alone', () => {
+test('with no measured window the line says the share is undetermined', () => {
+  // It used to fall back to the count alone, which reads as a set that took no
+  // supply rather than as a share nobody measured. Silence about a quantity is
+  // indistinguishable from that quantity being zero.
   const f = flagsFor({ exemptPct: null }).flags.find((f) => f.key === 'snipe_exemptions');
-  assert.equal(f.plain, '5 wallets tax-free at launch, 1 of them the deployer');
+  assert.equal(f.plain,
+    '5 wallets tax-free at launch, 1 of them the deployer, share of supply undetermined');
+  assert.match(f.compactDetail, /share of supply undetermined$/);
+  assert.match(f.detail, /the share of supply they took is undetermined: the opening window was not read/);
 });
 
 test('the creator opening buy is its own finding, under the exemption set', () => {

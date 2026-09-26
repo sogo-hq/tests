@@ -290,8 +290,17 @@ export function computeFlags(opts: {
   const exShare = launchRow?.exempt_open_pct ?? null;
   const openShare = launchRow?.creator_open_pct ?? null;
 
-  /** "22.3% of supply", or nothing when the window was never measured. */
-  const shareClause = exShare === null ? '' : `, together ${exShare.toFixed(1)}% of supply`;
+  /**
+   * "together 22.3% of supply", or that it was not measured.
+   *
+   * Never nothing. An unread opening window used to drop the clause entirely,
+   * which reads as a set that took no supply rather than as a share nobody
+   * measured. Same rule as the one-wallet branch, and the same reason: silence
+   * about a quantity is indistinguishable from that quantity being zero.
+   */
+  const shareClause = exShare === null
+    ? ', share of supply undetermined'
+    : `, together ${exShare.toFixed(1)}% of supply`;
 
   /**
    * How many wallets skipped the opening tax, said in one quantity.
@@ -386,11 +395,13 @@ export function computeFlags(opts: {
       state: 'raised',
       detail:
         `${count(exCount, 'wallet')} skipped the opening tax, ${others} of them besides the deployer` +
-        (exShare === null ? '' : `, and took ${exShare.toFixed(1)}% of supply between them in the tax-free window`) +
+        (exShare === null
+          ? ', and the share of supply they took is undetermined: the opening window was not read'
+          : `, and took ${exShare.toFixed(1)}% of supply between them in the tax-free window`) +
         (viaBuy ? ', alongside a creator buy in the same transaction' : ''),
       compactDetail:
         `${exCount} tax-free at launch, ${others} beyond the deployer` +
-        (exShare === null ? '' : `, ${exShare.toFixed(1)}% of supply`) +
+        (exShare === null ? ', share of supply undetermined' : `, ${exShare.toFixed(1)}% of supply`) +
         (viaBuy ? ' + creator buy same tx' : ''),
       // Says which wallets, and how much of the token they were able to take
       // before anyone else could bid. The count alone does not separate five

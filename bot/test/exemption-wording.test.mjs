@@ -60,8 +60,12 @@ test('the deployer alone is named for what it is', () => {
 });
 
 test('more than one says how many, and how many are not the deployer', () => {
-  assert.equal(flagFor(4, 'logs').plain, '4 wallets tax-free at launch, 1 of them the deployer');
-  assert.equal(flagFor(2, 'logs').plain, '2 wallets tax-free at launch, 1 of them the deployer');
+  // No exempt_open_pct in this fixture, so every one of these says the share was
+  // not measured rather than leaving it off.
+  assert.equal(flagFor(4, 'logs').plain,
+    '4 wallets tax-free at launch, 1 of them the deployer, share of supply undetermined');
+  assert.equal(flagFor(2, 'logs').plain,
+    '2 wallets tax-free at launch, 1 of them the deployer, share of supply undetermined');
   assert.equal(flagFor(4, 'logs').state, 'raised');
   assert.match(flagFor(4, 'logs').compactDetail, /3 beyond the deployer/);
 });

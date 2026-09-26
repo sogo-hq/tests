@@ -184,3 +184,25 @@ test('a raised exemptions check is not restated in the measurements', () => {
   assert.ok(!card.split('\n').some((l) => l.startsWith('tax-free at launch:')),
     `stated twice:\n${card}`);
 });
+
+test('clean and raised say the same thing about an unmeasured share', () => {
+  // The asymmetry this closes: the clean branch said "share of supply
+  // undetermined" while the raised branch dropped the clause, so the card was
+  // more forthcoming about one exempt wallet than about five.
+  const one = '0x' + '31'.repeat(20);
+  const many = '0x' + '32'.repeat(20);
+  put(one, 1, 0);
+  put(many, 5, 0);
+  db.prepare('UPDATE launches SET exempt_open_pct = NULL WHERE token IN (?,?)').run(one, many);
+
+  const a = exemptionFlag(one);
+  const b = exemptionFlag(many);
+  assert.equal(a.state, 'clean');
+  assert.equal(b.state, 'raised');
+  for (const f of [a, b]) {
+    assert.match(f.plain, /share of supply undetermined$/, f.plain);
+    assert.match(f.compactDetail, /share of supply undetermined$/, f.compactDetail);
+    assert.match(f.detail, /undetermined/, f.detail);
+    assert.equal(f.value.supply_share, null);
+  }
+});
